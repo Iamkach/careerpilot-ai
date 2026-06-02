@@ -1,0 +1,17 @@
+# Core — AI job search pipeline
+anthropic>=0.40.0          # Claude API (default provider)
+# Pinned <2.16: supabase 2.16+ pins storage3 2.x, which pulls in pyiceberg —
+# pyiceberg has no Python 3.14 / Windows wheel and fails to build from source.
+supabase>=2.13,<2.16      # Primary data store
+requests>=2.31.0           # HTTP client for Apify
+
+# Optional providers (only needed if AI_PROVIDER is changed)
+google-generativeai>=0.8.0 # Gemini provider
+openai>=1.40.0             # Codex/OpenAI provider
+
+# Optional integrations
+notion-client>=2.2.1       # Notion mirror (visual tracker UI)
+
+# Optional — Stage 4 Gmail digest sending
+google-auth>=2.30.0
+google-api-python-client>=2.130.0
