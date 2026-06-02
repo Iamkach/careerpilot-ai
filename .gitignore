@@ -6,7 +6,7 @@ venv/
 *.egg-info/
 
 # Claude / tooling
-.claude/
+#.claude/
 
 # Secrets & credentials
 config/gmail_credentials.json

@@ -1,0 +1,16 @@
+{
+  "model": "claude-opus-4-8",
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python run.py:*)",
+      "Bash(python workflow.py:*)",
+      "Bash(python scripts/*:*)",
+      "Bash(pip install:*)",
+      "Bash(pip list:*)"
+    ]
+  },
+  "env": {
+    "PYTHONPATH": "${workspaceFolder}"
+  }
+}
