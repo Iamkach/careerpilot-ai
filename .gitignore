@@ -14,6 +14,9 @@ config/token.json
 *.env
 .env
 
+# Personal resume template (generate via scripts/make_resume_template.py or drop your own)
+config/resume_template.docx
+
 # Generated output
 output/
 

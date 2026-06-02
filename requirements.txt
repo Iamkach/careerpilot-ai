@@ -11,6 +11,7 @@ openai>=1.40.0             # Codex/OpenAI provider
 
 # Optional integrations
 notion-client>=2.2.1       # Notion mirror (visual tracker UI)
+docxtpl>=0.18.0            # Render tailored resume into a .docx template (stage 2)
 
 # Optional — Stage 4 Gmail digest sending
 google-auth>=2.30.0

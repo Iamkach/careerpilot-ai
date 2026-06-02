@@ -96,6 +96,28 @@ def load_resume() -> str:
         raise FileNotFoundError(f"Resume not found at {RESUME_PATH}. Add it to config/resume.txt")
     return path.read_text()
 
+
+def parse_json_response(text: str) -> dict:
+    """Parse JSON from an LLM response, tolerating ```json fences and prose.
+
+    Raises ValueError if no JSON object can be recovered.
+    """
+    s = text.strip()
+    # Strip ``` / ```json fences if present
+    if s.startswith("```"):
+        s = s.split("```", 2)[1] if s.count("```") >= 2 else s.strip("`")
+        if s.lstrip().lower().startswith("json"):
+            s = s.lstrip()[4:]
+    s = s.strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        # Fall back to the outermost {...} span
+        start, end = s.find("{"), s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(s[start:end + 1])
+        raise ValueError(f"Could not parse JSON from response:\n{text[:500]}")
+
 def ensure_dirs():
     for d in [OUTPUT_DIR, RESUMES_DIR, PREP_GUIDES_DIR]:
         (ROOT / d).mkdir(parents=True, exist_ok=True)
