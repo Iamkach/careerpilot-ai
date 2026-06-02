@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Claude / tooling
+.claude/
+
+# Secrets & credentials
+config/gmail_credentials.json
+config/token.json
+*.env
+.env
+
+# Generated output
+output/
+
+# Brace-expansion artifact dir
+'{scripts,config,output}'/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,53 @@
+# ============================================================
+#  config/settings.py  —  Fill these in before running
+# ============================================================
+
+# --- Your profile -------------------------------------------
+YOUR_NAME        = "Krishna Achyuth"
+YOUR_EMAIL       = "kachyuth06@example.com"
+YOUR_BIO         = "2-line professional bio used in outreach emails" #TODO: write a concise, compelling bio that highlights your experience and value proposition as a Senior Software Engineer.
+
+# --- Job search targets -------------------------------------
+TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
+TARGET_CITY      = "Dallas, TX"          # or "Remote"
+TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
+
+# --- Resume -------------------------------------------------
+# Upload your resume as a .txt or .md file and set path here
+RESUME_PATH      = "config/resume.txt"
+GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
+
+# --- AI Provider --------------------------------------------
+# Choose which LLM powers all pipeline stages
+# Options: "claude" | "gemini" | "codex"
+AI_PROVIDER = "claude"
+
+# Model overrides — leave blank to use the defaults below
+#   claude default : claude-opus-4-6
+#   gemini default : gemini-2.0-flash
+#   codex  default : gpt-4o
+AI_MODEL_OVERRIDE = "claude-sonnet-4-6"
+
+# --- API Keys -----------------------------------------------
+ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com         (provider: claude)
+GEMINI_API_KEY    = ""   # https://aistudio.google.com/apikey    (provider: gemini)
+OPENAI_API_KEY    = "***REMOVED-SECRET***"   # https://platform.openai.com/api-keys  (provider: codex)
+APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com  (free token)
+NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrations  (optional — visual tracker UI)
+
+# --- Notion IDs (already created for you) -------------------
+NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
+
+# --- Supabase (primary data store) --------------------------
+SUPABASE_URL      = ""   # https://your-project.supabase.co
+SUPABASE_KEY      = ""   # service_role key — Project Settings > API
+
+# --- Gmail (optional — for digest emails) -------------------
+# Set up via Google Cloud OAuth credentials
+GMAIL_CREDENTIALS_PATH = "config/gmail_credentials.json"
+DIGEST_RECIPIENT_EMAIL = YOUR_EMAIL
+
+# --- Output dirs --------------------------------------------
+OUTPUT_DIR        = "output"
+RESUMES_DIR       = "output/resumes"
+PREP_GUIDES_DIR   = "output/prep_guides"

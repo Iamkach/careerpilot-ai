@@ -1,0 +1,22 @@
+# Add your full resume here as plain text
+# Save this file as config/resume.txt
+# Example structure:
+
+YOUR NAME
+your.email@example.com | LinkedIn: linkedin.com/in/yourprofile | Location: Dallas, TX
+
+EXPERIENCE
+
+Company Name | Job Title | Jan 2022 – Present
+- Led cross-functional team of 8 to deliver X product, resulting in Y outcome
+- Drove Z% improvement in metric by implementing new process
+
+Company Name | Previous Role | 2019 – 2022
+- Achievement 1
+- Achievement 2
+
+EDUCATION
+University Name | Degree | Year
+
+SKILLS
+Product Management, Data Analysis, SQL, Python, Roadmapping, Stakeholder Management, ...
