@@ -30,14 +30,16 @@ expects `supabase`, `notion_client`, and `requests` in addition to the provider 
 
 ```bash
 # Claude (default)
-pip install anthropic supabase notion-client requests
+pip install anthropic supabase notion-client requests docxtpl
 
 # Gemini
-pip install google-generativeai supabase notion-client requests
+pip install google-generativeai supabase notion-client requests docxtpl
 
 # OpenAI / Codex
-pip install openai supabase notion-client requests
+pip install openai supabase notion-client requests docxtpl
 ```
+
+> `docxtpl` powers the stage-2 `.docx` resume rendering (see step 3b).
 
 > `workflow.py` always imports `anthropic`, so install it if you plan to use the
 > agentic orchestrator regardless of provider.
@@ -52,6 +54,53 @@ This file is required — every stage that touches the resume reads it from here
 ```
 config/resume.txt
 ```
+
+---
+
+## 3b. Add a resume `.docx` template (stage 2 output)
+
+Stage 2 renders each tailored resume into a Word template so every output shares
+the **same layout** — only the content changes per job (no "random" formatting).
+
+You need a template at `config/resume_template.docx` (path set by
+`RESUME_TEMPLATE_PATH` in `config/settings.py`). Two ways to get one:
+
+```bash
+# Option A — generate a clean starter, then restyle it in Word
+python scripts/make_resume_template.py
+
+# Option B — drop your own .docx at config/resume_template.docx
+```
+
+Whichever you use, the template must contain these **docxtpl / Jinja2** tags:
+
+```jinja
+{{ name }}
+{{ contact }}
+{{ summary }}
+
+Skills (inline):  {% for s in skills %}{{ s }}{% if not loop.last %} • {% endif %}{% endfor %}
+
+Experience:
+{% for job in experience %}
+{{ job.company }} | {{ job.title }} | {{ job.dates }}
+{% for b in job.bullets %}
+{{ b }}
+{% endfor %}
+{% endfor %}
+
+Education:
+{% for ed in education %}
+{{ ed.institution }} | {{ ed.degree }} | {{ ed.year }}
+{% endfor %}
+```
+
+Style the fonts/colours/spacing however you like in Word — as long as the tags
+stay intact, tailoring keeps working. If the template is missing, stage 2 falls
+back to writing a `.txt` only.
+
+> The template is git-ignored (it's personal content). Generate or add your own
+> on each checkout.
 
 ---
 
@@ -210,7 +259,7 @@ python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 18500
 
 | Path | Contents |
 |------|----------|
-| `output/resumes/` | Tailored resumes per job (`.txt`) |
+| `output/resumes/` | Tailored resumes per job — `.docx` (from template) + `.txt` mirror |
 | `output/outreach/` | Cold + warm email drafts (`.txt`) — reviewed before sending |
 | `output/prep_guides/` | Interview prep guides (`.html`) |
 | `output/negotiation/` | Negotiation briefs (`.html`) |

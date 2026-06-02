@@ -16,6 +16,9 @@ TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"
 GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
+# Word template used to render tailored resumes (stage 2). Must contain the
+# docxtpl/Jinja2 placeholders documented in scripts/render_docx.py.
+RESUME_TEMPLATE_PATH = "config/resume_template.docx"
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages
@@ -39,8 +42,8 @@ NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrat
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
 
 # --- Supabase (primary data store) --------------------------
-SUPABASE_URL      = ""   # https://your-project.supabase.co
-SUPABASE_KEY      = ""   # service_role key — Project Settings > API
+SUPABASE_URL      = "https://qgluulgbtdzcreehrcqx.supabase.co"   # https://your-project.supabase.co
+SUPABASE_KEY      = "sb_publishable_8PDxHGDrm8gsJqT_5NhUXg_LD0lU1JP"   # service_role key — Project Settings > API
 
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials
