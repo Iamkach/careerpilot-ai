@@ -147,7 +147,7 @@ def run():
 
     for role in TARGET_ROLES:
         try:
-            jobs = scrape_jobs(role, TARGET_CITY, max_results=10)
+            jobs = scrape_jobs(role, TARGET_CITY or "United States", max_results=10)
         except Exception as e:
             log(f"  ✗ Scrape failed for '{role}': {e}")
             continue
