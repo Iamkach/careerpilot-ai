@@ -9,7 +9,7 @@ YOUR_BIO         = "2-line professional bio used in outreach emails" #TODO: writ
 
 # --- Job search targets -------------------------------------
 TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
-TARGET_CITY      = "Dallas, TX"          # or "Remote"
+TARGET_CITY      = "Dallas, TX"          # or "Remote" — leave blank "" for US-wide search
 TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 
 # --- Company denylist (stage 1) -----------------------------
