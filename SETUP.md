@@ -177,6 +177,7 @@ CREATE TABLE jobs (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_title               TEXT NOT NULL,
     company                 TEXT NOT NULL,
+    location                TEXT,
     job_url                 TEXT UNIQUE NOT NULL,
     status                  TEXT NOT NULL DEFAULT 'Scraped'
                             CHECK (status IN (
