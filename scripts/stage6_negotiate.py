@@ -84,7 +84,7 @@ What signals a bad-faith offer vs. genuine budget constraints?
 
 Be specific. Give real numbers. Assume I'm comfortable negotiating but want a script."""
 
-    return claude_chat(prompt, system=SYSTEM_NEGOTIATE, max_tokens=5000)
+    return claude_chat(prompt, system=SYSTEM_NEGOTIATE, max_tokens=5000, quality=True)
 
 
 def render_brief(content: str, company: str, role: str, offer: float) -> str:

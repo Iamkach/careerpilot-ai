@@ -38,6 +38,8 @@ from config.settings import (
     RESUME_PATH, OUTPUT_DIR, RESUMES_DIR, PREP_GUIDES_DIR,
     YOUR_NAME, YOUR_EMAIL, YOUR_BIO,
     GMAIL_CREDENTIALS_PATH, DIGEST_RECIPIENT_EMAIL,
+    AI_MODEL_OVERRIDE,
+    QUALITY_MODEL,
 )
 
 
@@ -701,7 +703,7 @@ def run_workflow(task: str, args):
         iteration += 1
 
         with client.messages.stream(
-            model="claude-opus-4-8",
+            model=QUALITY_MODEL or AI_MODEL_OVERRIDE or "claude-sonnet-4-6",
             max_tokens=16000,
             thinking={"type": "adaptive"},
             system=system_blocks,
