@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat, load_resume, parse_json_response,
+    claude_chat, ai_chat_blocks, load_resume, parse_json_response,
     db_update_status, db_get_jobs,
     log, today, ensure_dirs, ROOT,
 )
@@ -55,13 +55,15 @@ def fetch_jd(url: str) -> str:
 
 def tailor_resume(resume: str, jd: str, job: dict) -> dict:
     """Return tailored resume content as a structured dict (template-ready)."""
-    prompt = f"""Here is my current resume:
-
-<resume>
-{resume}
-</resume>
-
-Here is the job description I am applying to:
+    # Resume block is cached — same across every call in this stage run.
+    resume_block = {
+        "type": "text",
+        "text": f"Here is my current resume:\n\n<resume>\n{resume}\n</resume>",
+        "cache_control": {"type": "ephemeral"},
+    }
+    jd_block = {
+        "type": "text",
+        "text": f"""\nHere is the job description I am applying to:
 
 <job_description>
 Company: {job['company']}
@@ -93,8 +95,9 @@ Return ONLY a JSON object with this exact shape (no markdown, no commentary):
   "education": [
     {{"institution": "University", "degree": "Degree", "year": "Year"}}
   ]
-}}"""
-    raw = claude_chat(prompt, system=SYSTEM_PROMPT, max_tokens=4000)
+}}""",
+    }
+    raw = ai_chat_blocks([resume_block, jd_block], system=SYSTEM_PROMPT, max_tokens=4000, quality=True)
     data = parse_json_response(raw)
     # Authoritative identity from config — never let the model alter the name.
     if YOUR_NAME:
@@ -160,10 +163,12 @@ def run(min_score: int = 0):
         file_path = save_resume(tailored, job)
         log(f"  ✓ Saved: {file_path}")
 
-        # Update Supabase + mirror to Notion
+        # Update Supabase + mirror to Notion.
+        # NOTE: do NOT set date_applied here — tailoring is not applying.
+        # The digest (db_get_ready_to_apply) shows 'Resume Tailored' jobs where
+        # date_applied IS NULL, so setting it here would hide every job.
         db_update_status(job["page_id"], "Resume Tailored", {
             "tailored_resume_link": f"file://{Path(file_path).resolve()}",
-            "date_applied": today(),
         })
         log(f"  ✓ Status updated → Resume Tailored")
 
