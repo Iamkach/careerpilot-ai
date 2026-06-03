@@ -122,7 +122,7 @@ def run(company: str, role: str, offer: float):
     Path(NEGO_DIR).mkdir(parents=True, exist_ok=True)
 
     log(f"Generating negotiation brief for {company} — {role} (offer: ${offer:,.0f})")
-    brief = generate_negotiation_brief(company, role, TARGET_CITY, offer)
+    brief = generate_negotiation_brief(company, role, TARGET_CITY or "United States", offer)
 
     safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").replace(" ", "_")
     filename = f"negotiation_{safe(company)}_{today()}.html"

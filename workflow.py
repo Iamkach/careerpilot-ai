@@ -436,7 +436,7 @@ def _task_morning(args) -> str:
     return f"""Today is {today}. Run the complete morning job search pipeline:
 
 STAGE 1 — SCRAPE
-For each target role ({targets}), scrape LinkedIn in {TARGET_CITY}.
+For each target role ({targets}), scrape LinkedIn in {TARGET_CITY or "United States"}.
 For each result:
   1. Call check_job_in_db — skip if already tracked
   2. Score the job against my resume (ATS keyword match, 0-100) and note missing keywords
@@ -472,7 +472,7 @@ def _task_scrape(args) -> str:
     return f"""Today is {today}. Run Stage 1 — Scrape LinkedIn jobs.
 
 For each target role ({targets}):
-  1. Scrape LinkedIn in {TARGET_CITY}
+  1. Scrape LinkedIn in {TARGET_CITY or "United States"}
   2. For each result, check_job_in_db — skip duplicates
   3. Score each new job against my resume (ATS 0-100, list top 3 missing keywords)
   4. Call add_job_to_db
@@ -581,7 +581,7 @@ Include:
   3. 12-15 likely interview questions (mix of behavioral + technical for this role)
   4. STAR story frameworks drawn from my actual resume for the top 5 questions
   5. 6-8 thoughtful questions to ask the interviewer
-  6. Salary benchmarks for {role} in {TARGET_CITY} (base + total comp ranges)
+  6. Salary benchmarks for {role} in {TARGET_CITY or "United States"} (base + total comp ranges)
 
 Make it scannable: use headers, bullet points, and clear sections. Good HTML styling."""
 
@@ -603,7 +603,7 @@ Build an HTML negotiation brief and save it with save_html_file.
 Filename: {company.replace(' ', '_')}_{today}_negotiation
 
 Include:
-  1. Market salary data for {role} in {TARGET_CITY} (P25 / P50 / P75 / P90 ranges)
+  1. Market salary data for {role} in {TARGET_CITY or "United States"} (P25 / P50 / P75 / P90 ranges)
   2. Total compensation breakdown guide (base, equity, bonus, 401k, benefits)
   3. Negotiation strategy — opening position, BATNA, walk-away point
   4. Word-for-word scripts: email counter-offer and phone call opener
@@ -655,7 +655,7 @@ Rules:
   Email:        {YOUR_EMAIL}
   Bio:          {YOUR_BIO}
   Target roles: {', '.join(TARGET_ROLES)}
-  Target city:  {TARGET_CITY}
+  Target city:  {TARGET_CITY or "United States (nationwide)"}
   Notion DB:    https://www.notion.so/{NOTION_DB_ID.replace('-', '')}"""
 
     resume_block = f"""My base resume — use this as the foundation for all tailoring:
