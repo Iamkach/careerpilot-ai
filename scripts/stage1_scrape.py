@@ -117,41 +117,74 @@ def jd_says_no_sponsorship(description: str) -> bool:
     return bool(_NO_SPONSORSHIP_RE.search(description or ""))
 
 
-# ── 2. Score job against resume using Claude ─────────────────
+# ── 2. Score jobs against resume using Claude (batched) ──────
 
-def score_job(job: dict, resume: str) -> tuple[int, list, str]:
-    """Return (ats_score, missing_keywords, sponsorship) where sponsorship is
-    one of 'yes' | 'no' | 'unknown' based on the job description."""
-    prompt = f"""Score how well this job matches the resume on a scale of 0-100 for ATS keyword alignment.
-Also classify visa sponsorship based ONLY on the job description text:
-  - "no"  : the JD explicitly rules out sponsorship — e.g. "no visa sponsorship",
-            "not able to sponsor", "must be authorized to work without sponsorship",
-            "US citizenship required", "GC/USC only", or an active security
-            clearance requirement (which requires US citizenship).
-  - "yes" : the JD explicitly offers sponsorship — e.g. "visa sponsorship available",
-            "will sponsor", "open to H1B/OPT/CPT/visa candidates".
-  - "unknown" : the JD does not mention work authorization or sponsorship at all.
+def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
+    """Score all jobs in a single API call.
+
+    Returns a list of dicts keyed by url:
+      {url, score, missing_keywords, sponsorship}
+    Falls back to defaults for any entry that can't be parsed.
+    """
+    if not jobs:
+        return []
+
+    job_list = "\n\n".join(
+        f"{i+1}. URL: {j['url']}\n"
+        f"   Title: {j.get('title','')}\n"
+        f"   Company: {j.get('company','')}\n"
+        f"   Description: {j.get('description','')[:1500]}"
+        for i, j in enumerate(jobs)
+    )
+
+    prompt = f"""Score each job below against the resume on a 0-100 ATS keyword alignment scale.
+Also classify visa sponsorship for each:
+  - "no"      : JD explicitly rules out sponsorship (no visa sponsorship, must be authorized
+                without sponsorship, US citizenship required, security clearance required, etc.)
+  - "yes"     : JD explicitly offers sponsorship
+  - "unknown" : JD does not mention work authorization
 
 RESUME:
 {resume[:3000]}
 
-JOB TITLE: {job.get('title', '')}
-COMPANY: {job.get('company', '')}
-JOB DESCRIPTION:
-{job.get('description', '')[:2000]}
+JOBS TO SCORE:
+{job_list}
 
-Reply with ONLY a JSON object:
-{{"score": <number>, "missing_keywords": ["kw1", "kw2"], "sponsorship": "yes|no|unknown"}}
-"""
+Reply with ONLY a JSON array, one entry per job, in the same order:
+[
+  {{"url": "...", "score": <0-100>, "missing_keywords": ["kw1", "kw2"], "sponsorship": "yes|no|unknown"}},
+  ...
+]"""
     try:
-        raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with valid JSON.")
+        raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with a valid JSON array.")
         data = parse_json_response(raw)
-        sponsorship = str(data.get("sponsorship", "unknown")).strip().lower()
-        if sponsorship not in ("yes", "no", "unknown"):
-            sponsorship = "unknown"
-        return int(data.get("score", 50)), data.get("missing_keywords", []), sponsorship
+        # parse_json_response returns a dict for objects; handle array wrapped in object too
+        if isinstance(data, dict):
+            # model may have returned {"results": [...]}
+            for key in ("results", "jobs", "scores"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+        if not isinstance(data, list):
+            raise ValueError("Expected JSON array")
+        # Index by url for fast lookup
+        by_url = {entry.get("url", ""): entry for entry in data if isinstance(entry, dict)}
+        results = []
+        for job in jobs:
+            entry = by_url.get(job["url"], {})
+            sponsorship = str(entry.get("sponsorship", "unknown")).strip().lower()
+            if sponsorship not in ("yes", "no", "unknown"):
+                sponsorship = "unknown"
+            results.append({
+                "url":              job["url"],
+                "score":            int(entry.get("score", 50)),
+                "missing_keywords": entry.get("missing_keywords", []),
+                "sponsorship":      sponsorship,
+            })
+        return results
     except Exception:
-        return 50, [], "unknown"
+        # Full fallback — give every job a neutral score
+        return [{"url": j["url"], "score": 50, "missing_keywords": [], "sponsorship": "unknown"} for j in jobs]
 
 
 # ── 3. Main pipeline ─────────────────────────────────────────
@@ -173,9 +206,9 @@ def run():
 
         log(f"  Found {len(jobs)} listings for '{role}'")
 
+        # Normalise Apify fields and pre-filter before scoring
+        candidates = []
         for job in jobs:
-            # curious_coder actor fields: link / title / companyName / descriptionText.
-            # Keep the legacy fallbacks so older/alternate actors still work.
             url = job.get("link") or job.get("jobUrl") or job.get("url") or job.get("applyUrl") or ""
             title = job.get("title") or job.get("positionName") or role
             company = job.get("companyName") or job.get("company") or ""
@@ -185,49 +218,52 @@ def run():
 
             if not url:
                 continue
-
-            # Skip denylisted companies (services/consulting/staffing) — before
-            # scoring so we don't spend an API call on jobs we'll discard.
             if is_skipped_company(company):
                 skipped_company += 1
                 log(f"  ⊘ Skipped (non-product company): {company} — {title}")
                 continue
-
-            # Skip non-US locations
             if not is_us_location(location):
                 skipped_location += 1
                 log(f"  ⊘ Skipped (non-US location: {location}): {company} — {title}")
                 continue
-
-            # Skip duplicates
-            existing = db_find_job_by_url(url)
-            if existing:
+            if db_find_job_by_url(url):
                 skipped += 1
                 continue
 
-            # Score it (also classifies visa sponsorship from the JD)
-            score, missing, sponsorship = score_job({
-                "title": title,
-                "company": company,
-                "description": description,
-            }, resume)
+            candidates.append({
+                "url": url, "title": title, "company": company,
+                "location": location, "description": description,
+            })
 
-            # Skip jobs that explicitly rule out sponsorship (keep yes + unknown)
+        if not candidates:
+            time.sleep(2)
+            continue
+
+        # Score all candidates in a single API call
+        log(f"  Scoring {len(candidates)} new job(s) in one batch call…")
+        scores = score_jobs_batch(candidates, resume)
+        score_by_url = {s["url"]: s for s in scores}
+
+        for job in candidates:
+            s = score_by_url.get(job["url"], {"score": 50, "missing_keywords": [], "sponsorship": "unknown"})
+            score, sponsorship = s["score"], s["sponsorship"]
+
             if EXCLUDE_NO_SPONSORSHIP and sponsorship == "no":
                 skipped_sponsorship += 1
-                log(f"  ⊘ Skipped (no sponsorship): {company} — {title}")
+                log(f"  ⊘ Skipped (no sponsorship): {job['company']} — {job['title']}")
                 continue
 
-            # Add to Supabase (+ Notion mirror if key set)
+            # Persist description so Stage 2/5 can skip re-fetching it via AI
             db_add_job({
-                "title":     title,
-                "company":   company,
-                "location":  location,
-                "url":       url,
-                "ats_score": score,
+                "title":       job["title"],
+                "company":     job["company"],
+                "location":    job["location"],
+                "url":         job["url"],
+                "ats_score":   score,
+                "description": job["description"],
             })
             added += 1
-            log(f"  ✓ Added: {company} — {title} ({location}) (ATS: {score})")
+            log(f"  ✓ Added: {job['company']} — {job['title']} ({job['location']}) (ATS: {score})")
 
         time.sleep(2)  # polite pause between role queries
 

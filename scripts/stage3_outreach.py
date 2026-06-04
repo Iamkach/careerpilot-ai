@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat, load_resume,
+    claude_chat, load_resume, parse_json_response,
     db_update_status, db_get_ready_to_apply,
     log, today, ensure_dirs,
 )
@@ -50,7 +50,64 @@ Return only the message text."""
 
 # ── Cold email to hiring manager ──────────────────────────────
 
-def draft_cold_email(job: dict, bio: str, hm_name: str = "", hm_context: str = "") -> dict:
+def draft_cold_emails_batch(jobs: list[dict], bio: str) -> list[dict]:
+    """Draft cold emails for all jobs in a single API call.
+
+    Returns a list of dicts [{company, subject, body}, ...] in the same order.
+    Falls back to a placeholder for any job that can't be parsed from the response.
+    """
+    if not jobs:
+        return []
+
+    job_list = "\n\n".join(
+        f"{i+1}. Company: {j['company']}\n   Role: {j['title']}"
+        for i, j in enumerate(jobs)
+    )
+    prompt = f"""Write a short cold email (under 100 words) for EACH job below.
+My background: {bio}
+
+Rules for every email:
+- Open with something specific about the company's work (not generic flattery)
+- One sentence about my relevant background
+- One clear, low-pressure CTA
+- Include a punchy subject line
+
+JOBS:
+{job_list}
+
+Return ONLY a JSON array, one entry per job in the same order:
+[
+  {{"company": "...", "subject": "...", "body": "..."}},
+  ...
+]"""
+    try:
+        raw = claude_chat(prompt, system=SYSTEM_OUTREACH)
+        data = parse_json_response(raw)
+        if isinstance(data, dict):
+            for key in ("emails", "results", "drafts"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+        if not isinstance(data, list):
+            raise ValueError("Expected JSON array")
+        # Align by position; fall back gracefully for missing entries
+        results = []
+        for i, job in enumerate(jobs):
+            entry = data[i] if i < len(data) else {}
+            results.append({
+                "company": job["company"],
+                "subject": entry.get("subject") or f"Interest in {job['title']} at {job['company']}",
+                "body":    entry.get("body") or "",
+            })
+        return results
+    except Exception:
+        # Full fallback — individual calls so nothing is silently dropped
+        log("  ⚠ Batch email draft failed — falling back to per-job calls")
+        return [_draft_cold_email_single(job, bio) for job in jobs]
+
+
+def _draft_cold_email_single(job: dict, bio: str, hm_name: str = "", hm_context: str = "") -> dict:
+    """Single-job fallback, used when batch parse fails."""
     hm_line = f"Hiring manager: {hm_name}. Context: {hm_context}" if hm_name else ""
     prompt = f"""Write a short cold email (under 100 words) for this situation:
 - I am applying for {job['title']} at {job['company']}
@@ -67,11 +124,10 @@ Return JSON: {{"subject": "...", "body": "..."}}"""
     raw = claude_chat(prompt, system=SYSTEM_OUTREACH)
     try:
         import json
-        # Strip markdown fences if present
         clean = raw.strip().strip("```json").strip("```").strip()
-        return json.loads(clean)
+        return {"company": job["company"], **json.loads(clean)}
     except Exception:
-        return {"subject": f"Interest in {job['title']} at {job['company']}", "body": raw}
+        return {"company": job["company"], "subject": f"Interest in {job['title']} at {job['company']}", "body": raw}
 
 
 # ── Save outreach draft ───────────────────────────────────────
@@ -104,11 +160,10 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "")
 
     log(f"Drafting outreach for {len(jobs)} job(s)")
 
-    for job in jobs:
-        log(f"\n→ {job['company']} — {job['title']}")
-
-        if contact:
-            # Warm referral
+    if contact:
+        # Warm referral — per-contact by nature, keep individual calls
+        for job in jobs:
+            log(f"\n→ {job['company']} — {job['title']}")
             draft = draft_warm_referral(job, contact, contact_role, YOUR_BIO)
             file_path = save_draft(
                 f"WARM REFERRAL — {job['company']} — {job['title']}\n"
@@ -116,21 +171,31 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "")
                 job, "warm_referral"
             )
             log(f"  ✓ Warm referral drafted → {file_path}")
-        else:
-            # Cold email
-            email = draft_cold_email(job, YOUR_BIO)
+            confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
+            if confirm == "y":
+                db_update_status(job["page_id"], "Outreach Sent")
+                log("  ✓ Status updated → Outreach Sent")
+    else:
+        # Cold emails — draft all in a single batched API call
+        log(f"  Drafting {len(jobs)} cold email(s) in one batch call…")
+        emails = draft_cold_emails_batch(jobs, YOUR_BIO)
+        email_by_company = {e["company"]: e for e in emails}
+
+        for job in jobs:
+            log(f"\n→ {job['company']} — {job['title']}")
+            email = email_by_company.get(job["company"]) or {
+                "subject": f"Interest in {job['title']} at {job['company']}", "body": ""
+            }
             file_path = save_draft(
                 f"COLD EMAIL — {job['company']} — {job['title']}\n"
                 f"Subject: {email['subject']}\n\n{email['body']}",
                 job, "cold_email"
             )
             log(f"  ✓ Cold email drafted → {file_path}")
-
-        # Ask before marking as sent
-        confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent' in Notion? (y/n): ").strip().lower()
-        if confirm == "y":
-            db_update_status(job["page_id"], "Outreach Sent")
-            log("  ✓ Status updated → Outreach Sent")
+            confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
+            if confirm == "y":
+                db_update_status(job["page_id"], "Outreach Sent")
+                log("  ✓ Status updated → Outreach Sent")
 
     log(f"\nAll drafts saved to ./{OUTREACH_DIR}/")
     log("Review, personalise, and send them yourself.")
