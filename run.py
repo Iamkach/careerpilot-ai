@@ -2,17 +2,23 @@
 """
 run.py — Master pipeline runner
 ────────────────────────────────
-Runs all stages in sequence or individually.
+Two-step daily flow:
 
-Usage:
-  python run.py                          # Run full morning pipeline (stages 1–4)
-  python run.py --stage 1               # Scrape new jobs only
-  python run.py --stage 2 --min-score 65
-  python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
-  python run.py --stage 4 --send
-  python run.py --stage 5 --company "Google" --role "Senior PM"
-  python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
-  python run.py --setup                  # Check config & install deps
+  Step 1 — Scrape & review (run each morning):
+    python run.py                          # Scrape + score → review digest email → STOP
+                                           # Open Notion, set Status=Disregard on bad jobs
+
+  Step 2 — Tailor reviewed jobs:
+    python run.py --evaluate               # Sync Disregard → tailor + outreach + ready digest
+
+  Individual stages:
+    python run.py --stage 1               # Scrape only
+    python run.py --stage 2 --min-score 65
+    python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
+    python run.py --stage 4 --send
+    python run.py --stage 5 --company "Google" --role "Senior PM"
+    python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
+    python run.py --setup                  # Check config & install deps
 """
 
 import sys, argparse, subprocess
@@ -119,11 +125,11 @@ def stage3(args):
     from scripts.stage3_outreach import run
     run(target_company=args.company, contact=args.contact, contact_role=args.contact_role)
 
-def stage4(args):
+def stage4(args, mode: str = "ready"):
     print("\n📋 STAGE 4 — Morning digest")
     print("─" * 45)
     from scripts.stage4_digest import run
-    run(send=args.send)
+    run(send=args.send, mode=mode)
 
 def stage5(args):
     print("\n🎯 STAGE 5 — Interview prep guide")
@@ -141,15 +147,34 @@ def stage6(args):
 # ── Full morning routine ──────────────────────────────────────
 
 def morning_routine(args):
+    """Scrape + score only. Sends a review digest so you can Disregard bad jobs before tailoring."""
     print("\n☀️  MORNING JOB SEARCH PIPELINE")
     print("=" * 45)
     stage1(args)
+    stage4(args, mode="scraped")
+    print("\n✅ Scrape complete.")
+    print("   → Review the digest email / output/review_digest_*.html")
+    print("   → Open Notion and set Status = Disregard on jobs to skip")
+    print("   → Then run: python run.py --evaluate")
+
+
+def evaluate_routine(args):
+    """Sync Disregard from Notion → Supabase, then tailor + outreach + ready digest."""
+    print("\n🔄 EVALUATE — Tailor reviewed jobs")
+    print("=" * 45)
+
+    from scripts.utils import sync_notion_to_supabase
+    print("\n  Syncing Disregard status from Notion → Supabase...")
+    n = sync_notion_to_supabase()
+    print(f"  ✓ {n} job(s) marked Disregard in Supabase")
+
     stage2(args)
-    stage4(args)
-    print("\n✅ Morning pipeline complete.")
-    print("   → Check your Notion tracker for new jobs")
-    print("   → Review tailored resumes in output/resumes/")
-    print("   → Run stage 3 when ready to do outreach")
+    stage3(args)
+    stage4(args, mode="ready")
+    print("\n✅ Evaluate pipeline complete.")
+    print("   → Tailored resumes in output/resumes/")
+    print("   → Outreach drafts in output/outreach/")
+    print("   → Ready digest in output/digest_*.html")
 
 
 # ── CLI ───────────────────────────────────────────────────────
@@ -171,6 +196,7 @@ def main():
     parser.add_argument("--hm-linkedin",  type=str, default="",     dest="hm_linkedin")
     parser.add_argument("--offer",        type=float, default=0)
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
+    parser.add_argument("--evaluate",     action="store_true",       help="Sync Disregard from Notion then tailor + outreach + digest")
     args = parser.parse_args()
 
     sys.path.insert(0, str(ROOT))
@@ -181,7 +207,9 @@ def main():
 
     stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6}
 
-    if args.stage:
+    if args.evaluate:
+        evaluate_routine(args)
+    elif args.stage:
         fn = stages.get(args.stage)
         if not fn:
             print(f"Unknown stage: {args.stage}. Choose 1–6.")
