@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import *
 from scripts.utils import (
     claude_chat, load_resume,
-    db_update_status, db_get_job_by_company,
+    db_update_status, db_get_job_by_company, db_get_job_description,
     log, today, ensure_dirs,
 )
 
@@ -131,13 +131,19 @@ def run(company: str, role: str = "", jd_file: str = "", hm_linkedin: str = ""):
     if role:
         job["title"] = role
 
-    # Get JD
+    # Get JD — prefer cached DB value to avoid an extra AI call
     if jd_file:
         jd = Path(jd_file).read_text()
+    elif job.get("page_id"):
+        jd = db_get_job_description(job["page_id"])
+        if not jd and job.get("url"):
+            log("No cached JD — fetching from URL (one-time AI call)…")
+            jd = claude_chat(f"Fetch and return only the job description text from: {job['url']}")
+        if not jd:
+            jd = input("Paste the job description (press Enter twice when done):\n")
     elif job.get("url"):
         log("Fetching job description from URL...")
-        from scripts.utils import claude_chat as cc
-        jd = cc(f"Fetch and return only the job description text from: {job['url']}")
+        jd = claude_chat(f"Fetch and return only the job description text from: {job['url']}")
     else:
         jd = input("Paste the job description (press Enter twice when done):\n")
 
