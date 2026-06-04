@@ -1,22 +1,41 @@
-# Add your full resume here as plain text
-# Save this file as config/resume.txt
-# Example structure:
+ACHYUTH YALLAMBHOTLA
+Plano, TX | kachyuth06@gmail.com | (361) 228-1825 | linkedin.com/in/krishna-achyuth
+Senior Software Engineer
 
-YOUR NAME
-your.email@example.com | LinkedIn: linkedin.com/in/yourprofile | Location: Dallas, TX
+PROFESSIONAL SUMMARY
+Software Development Engineer with 8+ years of experience building scalable, high-performance backend services, APIs, and automation tools using Java, Python, and cloud-native AWS infrastructure. Proven track record at Capital One and Dell Technologies delivering microservices, CI/CD pipelines, Docker/Kubernetes containerization, and Gen AI / LLM integrations that reduced operational overhead by up to 50%. Experienced collaborator and team lead with a strong AI-first mindset, excellent communication skills, and a dedication to knowledge sharing and mentoring in Agile/Scrum environments.
 
-EXPERIENCE
+WORK EXPERIENCE
 
-Company Name | Job Title | Jan 2022 – Present
-- Led cross-functional team of 8 to deliver X product, resulting in Y outcome
-- Drove Z% improvement in metric by implementing new process
+Capital One, Plano, TX | Senior Software Engineer | 09/2023 – Present
+- Improved credit collections architecture using Gen AI and LLM decision models to predict and resolve delinquent accounts, supporting 10M+ DFS customer accounts through a zero-downtime migration that preserved existing offers and financial health metrics.
+- Led Application Support Utility Service—a strategic SRE automation initiative leveraging Java and AWS SDK—reducing manual operational tasks by 50% and cutting mean-time-to-resolution across runbook-driven incidents; documented technical solutions and runbooks in internal knowledge bases.
+- Designed Python-based Workflow Services for contract creation and payment enrollments, enabling automated processing for large customer cohorts; implemented secure coding practices including OAuth2/JWT authentication.
+- Boosted async processing throughput by 30% by implementing multi-threading, concurrency controls, and application-level caching for bulk request handling.
+- Led a team of 6 engineers in low-level design (LLD) sessions and delivery of Domain-Driven Design (DDD) microservices; facilitated build discussions, code reviews, and team knowledge-sharing sessions aligned to business domains.
+- Developed and maintained infrastructure as code (IaC) for AWS services (Lambda, S3, SQS, EC2, DynamoDB), ensuring code quality, security, and performance through automated testing and monitoring.
 
-Company Name | Previous Role | 2019 – 2022
-- Achievement 1
-- Achievement 2
+Dell Technologies, Austin, TX | Software Engineer | 10/2021 – 09/2023
+- Architected event-driven microservices using RabbitMQ, Kafka, and multi-threaded Java, improving data flow efficiency and response times by 25% across enterprise clients; participated in code reviews and build discussions to maintain code quality and security standards.
+- Boosted global operational efficiency by 50% through re-architecture of legacy workflows and introduction of asynchronous processing pipelines; recorded technical solutions and contributed to internal knowledge bases.
+- Built seamless RESTful API integrations between business-critical enterprise systems via SAP middleware, improving cross-system data consistency and resilience by 25%.
+- Optimized PostgreSQL and Oracle database schemas supporting real-time data sync with SAP, reducing data inconsistencies by 15% during high-volume operations.
+- Elevated cloud infrastructure on PCF/CloudFoundry with Docker and Kubernetes containerization, strengthening distributed architecture reliability and enabling global-scale deployment.
+- Mentored 3+ junior engineers on microservices best practices and secure coding standards, accelerating team onboarding and improving delivery quality.
+
+Softqlud Infotech Solutions, Hyderabad, India | Associate Software Engineer | 05/2017 – 10/2020
+- Led legacy-to-microservices migration for a banking client using Java and Spring Boot, improving system performance by 25% and reducing critical downtime below 2%; documented all technical processes and added to team knowledge bases.
+- Developed and maintained CI/CD pipelines with Jenkins and GitHub, cutting deployment times by 30% and improving cross-team release collaboration by 15%.
+- Applied Test-Driven Development (TDD) and established code quality guidelines across migration workstreams, significantly reducing post-release defects and accelerating QA cycles.
+- Designed and tuned database schemas for core banking systems, improving data retrieval performance by 20% and eliminating high-volume bottlenecks; collaborated closely with architects and leads to resolve complex technical challenges.
 
 EDUCATION
-University Name | Degree | Year
+Texas A&M University – Kingsville, Kingsville, TX | Master of Science, Computer Science | 2021 – 2022
 
-SKILLS
-Product Management, Data Analysis, SQL, Python, Roadmapping, Stakeholder Management, ...
+TECHNICAL SKILLS
+Languages & Frameworks: Java, Python, JavaScript, TypeScript, Node.js, PHP, Spring Boot, Angular, React.js, Microservices
+Cloud & DevOps / IaC: AWS (Lambda, S3, SQS, EC2, DynamoDB), PCF/CloudFoundry, Docker, Kubernetes, Jenkins, Azure DevOps, Infrastructure as Code (IaC)
+Messaging & Integration: Apache Kafka, RabbitMQ, RESTful API, SOAP, SAP Middleware, API Gateway, OAuth2, JWT, Secure Coding Practices
+Databases: PostgreSQL, MySQL, MongoDB, Oracle DB, NoSQL
+Tools & Practices: Git, GitHub, GitLab, Confluence, CI/CD, Test-Driven Development (TDD), Agile/Scrum, Domain-Driven Design (DDD), Code Reviews, Monitoring
+AI/ML: Generative AI, LLM Integration, Decision Models, AI-first Development
