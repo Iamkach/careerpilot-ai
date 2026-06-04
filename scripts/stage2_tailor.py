@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import *
 from scripts.utils import (
     claude_chat, ai_chat_blocks, load_resume, parse_json_response,
-    db_update_status, db_get_jobs,
+    db_update_status, db_get_jobs, db_get_job_description,
     log, today, ensure_dirs, ROOT,
 )
 from scripts.render_docx import render_resume_docx, resume_data_to_text
@@ -150,8 +150,11 @@ def run(min_score: int = 0):
     for job in jobs:
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
 
-        # Fetch JD
-        jd = fetch_jd(job["url"])
+        # Use cached JD from Supabase if available; fall back to fetching via AI
+        jd = job.get("job_description") or db_get_job_description(job["page_id"])
+        if not jd:
+            log("  ↳ No cached JD — fetching from URL (one-time AI call)…")
+            jd = fetch_jd(job["url"])
         if not jd:
             log("  ⚠ Could not fetch job description. Skipping.")
             continue
