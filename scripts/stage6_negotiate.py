@@ -84,7 +84,7 @@ What signals a bad-faith offer vs. genuine budget constraints?
 
 Be specific. Give real numbers. Assume I'm comfortable negotiating but want a script."""
 
-    return claude_chat(prompt, system=SYSTEM_NEGOTIATE, max_tokens=5000)
+    return claude_chat(prompt, system=SYSTEM_NEGOTIATE, max_tokens=5000, quality=True)
 
 
 def render_brief(content: str, company: str, role: str, offer: float) -> str:
@@ -122,7 +122,8 @@ def run(company: str, role: str, offer: float):
     Path(NEGO_DIR).mkdir(parents=True, exist_ok=True)
 
     log(f"Generating negotiation brief for {company} — {role} (offer: ${offer:,.0f})")
-    brief = generate_negotiation_brief(company, role, TARGET_CITY, offer)
+    city = (job.get("location") if job else None) or "United States"
+    brief = generate_negotiation_brief(company, role, city, offer)
 
     safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").replace(" ", "_")
     filename = f"negotiation_{safe(company)}_{today()}.html"

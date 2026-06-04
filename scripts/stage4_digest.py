@@ -45,6 +45,7 @@ def build_html_digest(jobs: list) -> str:
         <tr>
           <td>{job['company']}</td>
           <td>{job['title']}</td>
+          <td>{job.get('location') or '—'}</td>
           <td style="text-align:center"><strong>{int(job.get('ats', 0))}</strong></td>
           <td>{resume_cell}</td>
           <td style="font-size:12px;color:#555">{action}</td>
@@ -71,6 +72,7 @@ def build_html_digest(jobs: list) -> str:
       <tr>
         <th>Company</th>
         <th>Role</th>
+        <th>Location</th>
         <th style="text-align:center">ATS</th>
         <th>Resume</th>
         <th>Action</th>
@@ -91,6 +93,7 @@ def build_plain_digest(jobs: list) -> str:
     lines = [f"JOB APPLICATIONS READY — {date_str}", "=" * 50, ""]
     for job in jobs:
         lines.append(f"  {job['company']} — {job['title']}")
+        lines.append(f"    Location:     {job.get('location') or '—'}")
         lines.append(f"    ATS Score:    {int(job.get('ats', 0))}")
         lines.append(f"    Resume:       {job.get('resume_link', '—')}")
         lines.append(f"    Job URL:      {job.get('url', '—')}")
@@ -150,7 +153,7 @@ def run(send: bool = False):
     # Save HTML to file
     out = Path(OUTPUT_DIR) / f"digest_{today()}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html)
+    out.write_text(html, encoding="utf-8")
     log(f"\nHTML digest saved: {out}")
 
     if send:

@@ -118,7 +118,7 @@ YOUR_BIO   = "Two-line professional bio used in outreach emails"
 ### Job search targets
 ```python
 TARGET_ROLES     = ["Product Manager", "Senior Product Manager", "Group PM"]
-TARGET_CITY      = "Dallas, TX"     # or "Remote"
+# Search is always US-wide. Jobs are filtered to US locations post-scrape.
 TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 ```
 
@@ -177,6 +177,7 @@ CREATE TABLE jobs (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_title               TEXT NOT NULL,
     company                 TEXT NOT NULL,
+    location                TEXT,
     job_url                 TEXT UNIQUE NOT NULL,
     status                  TEXT NOT NULL DEFAULT 'Scraped'
                             CHECK (status IN (

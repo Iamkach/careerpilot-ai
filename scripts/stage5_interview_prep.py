@@ -80,7 +80,7 @@ Questions that show strategic thinking and genuine curiosity — not generic one
 3 bullet points: what to emphasize, what to avoid, one memorable hook.
 
 Format cleanly with clear headers. Be specific — no generic advice."""
-    return claude_chat(prompt, system=SYSTEM_PREP, max_tokens=6000)
+    return claude_chat(prompt, system=SYSTEM_PREP, max_tokens=6000, quality=True)
 
 
 # ── Render HTML prep guide ────────────────────────────────────
