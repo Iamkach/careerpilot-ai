@@ -307,7 +307,7 @@ def db_get_job_by_company(company: str) -> dict | None:
     """Return full job dict for first match on company name (case-insensitive), or None."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,job_url,hiring_manager,hiring_manager_linkedin")
+        .select("id,job_title,company,job_url,location,hiring_manager,hiring_manager_linkedin")
         .ilike("company", f"%{company}%")
         .limit(1)
         .execute()

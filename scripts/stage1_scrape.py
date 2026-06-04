@@ -61,6 +61,24 @@ def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
     return items_r.json()
 
 
+# ── US location filter ───────────────────────────────────────
+
+_US_LOCATION_RE = re.compile(
+    r'\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|'
+    r'MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|'
+    r'UT|VT|VA|WA|WV|WI|WY|DC)\b'
+    r'|United States|Remote',
+    re.IGNORECASE,
+)
+
+
+def is_us_location(location: str) -> bool:
+    """True if location is blank (unknown) or clearly in the US."""
+    if not location:
+        return True  # keep unknowns — LinkedIn often omits location for remote roles
+    return bool(_US_LOCATION_RE.search(location))
+
+
 # ── Company denylist ─────────────────────────────────────────
 
 def is_skipped_company(company: str) -> bool:
@@ -144,10 +162,11 @@ def run():
     skipped = 0
     skipped_sponsorship = 0
     skipped_company = 0
+    skipped_location = 0
 
     for role in TARGET_ROLES:
         try:
-            jobs = scrape_jobs(role, TARGET_CITY or "United States", max_results=10)
+            jobs = scrape_jobs(role, "United States", max_results=10)
         except Exception as e:
             log(f"  ✗ Scrape failed for '{role}': {e}")
             continue
@@ -172,6 +191,12 @@ def run():
             if is_skipped_company(company):
                 skipped_company += 1
                 log(f"  ⊘ Skipped (non-product company): {company} — {title}")
+                continue
+
+            # Skip non-US locations
+            if not is_us_location(location):
+                skipped_location += 1
+                log(f"  ⊘ Skipped (non-US location: {location}): {company} — {title}")
                 continue
 
             # Skip duplicates
@@ -207,7 +232,8 @@ def run():
         time.sleep(2)  # polite pause between role queries
 
     log(f"\nDone. Added {added} new jobs. Skipped {skipped} duplicates, "
-        f"{skipped_company} non-product companies, {skipped_sponsorship} for no sponsorship.")
+        f"{skipped_company} non-product companies, {skipped_location} non-US locations, "
+        f"{skipped_sponsorship} for no sponsorship.")
     log(f"View your tracker: https://www.notion.so/{NOTION_DB_ID.replace('-', '')}")
 
 
