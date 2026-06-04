@@ -21,11 +21,17 @@ def _active_model() -> str:
 
 # ── Provider backends ────────────────────────────────────────
 
-def _chat_claude(prompt: str, system: str, max_tokens: int) -> str:
+def _resolve_model(quality: bool) -> str:
+    if quality:
+        return QUALITY_MODEL or _active_model()
+    return _active_model()
+
+
+def _chat_claude(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     kwargs = {
-        "model":      _active_model(),
+        "model":      _resolve_model(quality),
         "max_tokens": max_tokens,
         "messages":   [{"role": "user", "content": prompt}],
     }
@@ -38,7 +44,7 @@ def _chat_claude(prompt: str, system: str, max_tokens: int) -> str:
     return resp.content[0].text
 
 
-def _chat_gemini(prompt: str, system: str, max_tokens: int) -> str:
+def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     config = genai.types.GenerationConfig(max_output_tokens=max_tokens)
@@ -48,7 +54,7 @@ def _chat_gemini(prompt: str, system: str, max_tokens: int) -> str:
     return resp.text
 
 
-def _chat_codex(prompt: str, system: str, max_tokens: int) -> str:
+def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
     messages = []
@@ -71,14 +77,35 @@ _BACKENDS = {
     "codex":  _chat_codex,
 }
 
-def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
+def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
     backend = _BACKENDS.get(AI_PROVIDER)
     if not backend:
         raise ValueError(f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Choose: claude, gemini, codex")
-    return backend(prompt, system, max_tokens)
+    return backend(prompt, system, max_tokens, quality)
 
 # Alias so all existing stage scripts continue to work without changes
 claude_chat = ai_chat
+
+
+def ai_chat_blocks(blocks: list, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
+    """Claude-only: send structured content blocks supporting per-block cache_control.
+    Falls back to plain ai_chat for non-Claude providers (cache_control is ignored)."""
+    if AI_PROVIDER != "claude":
+        text = "\n\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        return ai_chat(text, system=system, max_tokens=max_tokens, quality=quality)
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    kwargs = {
+        "model":      _resolve_model(quality),
+        "max_tokens": max_tokens,
+        "messages":   [{"role": "user", "content": blocks}],
+    }
+    if system:
+        kwargs["system"] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+    resp = client.messages.create(**kwargs)
+    return resp.content[0].text
 
 
 # ── Legacy helper (kept for backward compat) ─────────────────
@@ -146,6 +173,7 @@ def _notion_write_job(job: dict) -> str | None:
         props = {
             "Job Title":    {"title": [{"text": {"content": job.get("title", "")}}]},
             "Company":      {"rich_text": [{"text": {"content": job.get("company", "")}}]},
+            "Location":     {"rich_text": [{"text": {"content": job.get("location", "")}}]},
             "Job URL":      {"url": job.get("url") or None},
             "Status":       {"select": {"name": "Scraped"}},
             "Date Scraped": {"date": {"start": today()}},
@@ -197,6 +225,7 @@ def db_add_job(job: dict) -> str:
     row = {
         "job_title":       job.get("title", ""),
         "company":         job.get("company", ""),
+        "location":        job.get("location", ""),
         "job_url":         job["url"],
         "status":          "Scraped",
         "date_scraped":    today(),
@@ -230,7 +259,7 @@ def db_get_ready_to_apply() -> list:
     """Jobs with Status='Resume Tailored' and no date_applied, sorted by score desc."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,job_url,ats_match_score,tailored_resume_link")
+        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
         .eq("status", "Resume Tailored")
         .is_("date_applied", "null")
         .order("ats_match_score", desc=True)
@@ -241,6 +270,7 @@ def db_get_ready_to_apply() -> list:
             "page_id":     r["id"],
             "title":       r["job_title"],
             "company":     r["company"],
+            "location":    r.get("location") or "",
             "url":         r["job_url"],
             "ats":         r["ats_match_score"] or 0,
             "resume_link": r["tailored_resume_link"] or "",
@@ -253,7 +283,7 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
     """Jobs filtered by status and min ATS score, sorted by score desc."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,job_url,ats_match_score,tailored_resume_link")
+        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
         .eq("status", status)
         .gte("ats_match_score", min_score)
         .order("ats_match_score", desc=True)
@@ -264,6 +294,7 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
             "page_id":     r["id"],
             "title":       r["job_title"],
             "company":     r["company"],
+            "location":    r.get("location") or "",
             "url":         r["job_url"],
             "ats_score":   r["ats_match_score"] or 0,
             "resume_link": r["tailored_resume_link"] or "",
@@ -276,7 +307,7 @@ def db_get_job_by_company(company: str) -> dict | None:
     """Return full job dict for first match on company name (case-insensitive), or None."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,job_url,hiring_manager,hiring_manager_linkedin")
+        .select("id,job_title,company,job_url,location,hiring_manager,hiring_manager_linkedin")
         .ilike("company", f"%{company}%")
         .limit(1)
         .execute()

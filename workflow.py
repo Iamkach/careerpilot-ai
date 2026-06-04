@@ -34,10 +34,12 @@ from config.settings import (
     APIFY_API_TOKEN,
     NOTION_API_KEY, NOTION_DB_ID,
     SUPABASE_URL, SUPABASE_KEY,
-    TARGET_ROLES, TARGET_CITY,
+    TARGET_ROLES,
     RESUME_PATH, OUTPUT_DIR, RESUMES_DIR, PREP_GUIDES_DIR,
     YOUR_NAME, YOUR_EMAIL, YOUR_BIO,
     GMAIL_CREDENTIALS_PATH, DIGEST_RECIPIENT_EMAIL,
+    AI_MODEL_OVERRIDE,
+    QUALITY_MODEL,
 )
 
 
@@ -48,18 +50,20 @@ from config.settings import (
 def _impl_scrape_linkedin_jobs(role: str, city: str, max_results: int = 10) -> dict:
     import requests, time
     APIFY_BASE = "https://api.apify.com/v2"
-    APIFY_ACTOR = "curious_coder/linkedin-jobs-scraper"
+    APIFY_ACTOR = "curious_coder~linkedin-jobs-scraper"
 
     run_url = f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs"
+    # Actor schema: `urls` (array of LinkedIn search/job URLs) + `count` (min 10).
+    search_url = (
+        f"https://www.linkedin.com/jobs/search/"
+        f"?keywords={requests.utils.quote(role)}"
+        f"&location={requests.utils.quote(city)}"
+        f"&f_TPR=r86400"
+    )
     payload = {
-        "searchUrl": (
-            f"https://www.linkedin.com/jobs/search/"
-            f"?keywords={requests.utils.quote(role)}"
-            f"&location={requests.utils.quote(city)}"
-            f"&f_TPR=r86400"
-        ),
-        "maxItems": max_results,
-        "proxy": {"useApifyProxy": True},
+        "urls": [search_url],
+        "count": max(max_results, 10),
+        "scrapeCompany": False,
     }
     r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN})
     r.raise_for_status()
@@ -82,15 +86,19 @@ def _impl_scrape_linkedin_jobs(role: str, city: str, max_results: int = 10) -> d
     )
     items = items_r.json()
 
+    # curious_coder actor fields: link / title / companyName / descriptionText.
+    # Keep legacy fallbacks so older/alternate actors still work.
     jobs = [
         {
             "title":       item.get("title") or item.get("positionName") or role,
-            "company":     item.get("company") or item.get("companyName") or "",
-            "url":         item.get("jobUrl") or item.get("url") or "",
-            "description": (item.get("description") or item.get("jobDescription") or "")[:3000],
+            "company":     item.get("companyName") or item.get("company") or "",
+            "url":         item.get("link") or item.get("jobUrl") or item.get("url") or "",
+            "location":    item.get("location") or item.get("formattedLocation") or "",
+            "description": (item.get("descriptionText") or item.get("descriptionHtml")
+                            or item.get("description") or item.get("jobDescription") or "")[:3000],
         }
         for item in items
-        if item.get("jobUrl") or item.get("url")
+        if item.get("link") or item.get("jobUrl") or item.get("url")
     ]
     return {"jobs": jobs, "count": len(jobs)}
 
@@ -102,10 +110,14 @@ def _impl_check_job_in_db(url: str) -> dict:
 
 
 def _impl_add_job_to_db(
-    title: str, company: str, url: str, ats_score: float, missing_keywords: list = None
+    title: str, company: str, url: str, ats_score: float,
+    location: str = "", missing_keywords: list = None
 ) -> dict:
     from scripts.utils import db_add_job
-    job_id = db_add_job({"title": title, "company": company, "url": url, "ats_score": ats_score})
+    job_id = db_add_job({
+        "title": title, "company": company, "url": url,
+        "location": location, "ats_score": ats_score,
+    })
     return {"page_id": job_id, "success": True}
 
 
@@ -296,6 +308,7 @@ TOOLS = [
                 "title":            {"type": "string"},
                 "company":          {"type": "string"},
                 "url":              {"type": "string"},
+                "location":         {"type": "string", "description": "Job location (city/state or Remote)"},
                 "ats_score":        {"type": "number", "description": "ATS keyword match score 0-100"},
                 "missing_keywords": {"type": "array", "items": {"type": "string"}},
             },
@@ -434,7 +447,7 @@ def _task_morning(args) -> str:
     return f"""Today is {today}. Run the complete morning job search pipeline:
 
 STAGE 1 — SCRAPE
-For each target role ({targets}), scrape LinkedIn in {TARGET_CITY}.
+For each target role ({targets}), scrape LinkedIn across United States.
 For each result:
   1. Call check_job_in_db — skip if already tracked
   2. Score the job against my resume (ATS keyword match, 0-100) and note missing keywords
@@ -442,7 +455,10 @@ For each result:
 After all roles: summarize total added / skipped.
 
 STAGE 2 — TAILOR
-Get all "Scraped" jobs from the database. For each:
+Get all "Scraped" jobs from the database. Process jobs ONE AT A TIME — fully
+tailor and save a single resume before starting the next. Do NOT emit multiple
+save_tailored_resume calls in one response (a full resume per call overflows the
+output budget). For each job:
   1. Call fetch_job_description to get the job posting text
   2. Extract the actual job description from that text
   3. Rewrite my resume to target this JD:
@@ -470,7 +486,7 @@ def _task_scrape(args) -> str:
     return f"""Today is {today}. Run Stage 1 — Scrape LinkedIn jobs.
 
 For each target role ({targets}):
-  1. Scrape LinkedIn in {TARGET_CITY}
+  1. Scrape LinkedIn across United States
   2. For each result, check_job_in_db — skip duplicates
   3. Score each new job against my resume (ATS 0-100, list top 3 missing keywords)
   4. Call add_job_to_db
@@ -484,6 +500,9 @@ def _task_tailor(args) -> str:
     return f"""Today is {today}. Run Stage 2 — Tailor resumes.
 
 Get all "Scraped" jobs from the database with min_score={min_score}.
+Process jobs ONE AT A TIME — fully tailor and save a single resume before
+starting the next. Do NOT emit multiple save_tailored_resume calls in one
+response (a full resume per call overflows the output budget).
 For each job:
   1. fetch_job_description from the job URL
   2. Extract the job description text from the fetched HTML
@@ -555,6 +574,7 @@ def _task_interview(args) -> str:
     today = date.today().isoformat()
     company = getattr(args, "company", "the company")
     role = getattr(args, "role", "the role")
+    location = getattr(args, "location", None) or "United States"
     jd_file = getattr(args, "jd_file", "")
     hm_linkedin = getattr(args, "hm_linkedin", "")
     extras = []
@@ -579,7 +599,7 @@ Include:
   3. 12-15 likely interview questions (mix of behavioral + technical for this role)
   4. STAR story frameworks drawn from my actual resume for the top 5 questions
   5. 6-8 thoughtful questions to ask the interviewer
-  6. Salary benchmarks for {role} in {TARGET_CITY} (base + total comp ranges)
+  6. Salary benchmarks for {role} in {location} (base + total comp ranges)
 
 Make it scannable: use headers, bullet points, and clear sections. Good HTML styling."""
 
@@ -589,6 +609,7 @@ def _task_negotiate(args) -> str:
     company = getattr(args, "company", "the company")
     role = getattr(args, "role", "the role")
     offer = getattr(args, "offer", 0)
+    location = getattr(args, "location", None) or "United States"
     offer_str = f"${offer:,.0f}" if offer else "not yet disclosed"
 
     return f"""Today is {today}. Generate a salary negotiation brief.
@@ -601,7 +622,7 @@ Build an HTML negotiation brief and save it with save_html_file.
 Filename: {company.replace(' ', '_')}_{today}_negotiation
 
 Include:
-  1. Market salary data for {role} in {TARGET_CITY} (P25 / P50 / P75 / P90 ranges)
+  1. Market salary data for {role} in {location} (P25 / P50 / P75 / P90 ranges)
   2. Total compensation breakdown guide (base, equity, bonus, 401k, benefits)
   3. Negotiation strategy — opening position, BATNA, walk-away point
   4. Word-for-word scripts: email counter-offer and phone call opener
@@ -653,7 +674,7 @@ Rules:
   Email:        {YOUR_EMAIL}
   Bio:          {YOUR_BIO}
   Target roles: {', '.join(TARGET_ROLES)}
-  Target city:  {TARGET_CITY}
+  Target location: United States (nationwide)
   Notion DB:    https://www.notion.so/{NOTION_DB_ID.replace('-', '')}"""
 
     resume_block = f"""My base resume — use this as the foundation for all tailoring:
@@ -701,8 +722,8 @@ def run_workflow(task: str, args):
         iteration += 1
 
         with client.messages.stream(
-            model="claude-opus-4-8",
-            max_tokens=16000,
+            model=QUALITY_MODEL or AI_MODEL_OVERRIDE or "claude-sonnet-4-6",
+            max_tokens=24000,
             thinking={"type": "adaptive"},
             system=system_blocks,
             tools=TOOLS,
