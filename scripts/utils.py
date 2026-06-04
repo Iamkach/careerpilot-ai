@@ -211,6 +211,38 @@ def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
         pass
 
 
+# ── Notion → Supabase sync (used before --evaluate run) ──────
+
+def sync_notion_to_supabase() -> int:
+    """Pull 'Disregard' status changes made in Notion back into Supabase.
+
+    Notion is normally a write-only mirror, but users mark jobs as Disregard
+    there. This syncs those changes back so Stage 2 skips them correctly.
+    Returns the number of rows updated.
+    """
+    if not NOTION_API_KEY:
+        return 0
+    updated = 0
+    try:
+        from notion_client import Client as NotionClient
+        notion = NotionClient(auth=NOTION_API_KEY)
+        db = _get_db()
+
+        results = notion.databases.query(
+            database_id=NOTION_DB_ID,
+            filter={"property": "Status", "select": {"equals": "Disregard"}},
+        )
+        for page in results.get("results", []):
+            notion_page_id = page["id"]
+            res = db.table("jobs").select("id,status").eq("notion_page_id", notion_page_id).execute()
+            if res.data and res.data[0]["status"] != "Disregard":
+                db.table("jobs").update({"status": "Disregard"}).eq("id", res.data[0]["id"]).execute()
+                updated += 1
+    except Exception as e:
+        log(f"[sync_notion_to_supabase] warning: {e}")
+    return updated
+
+
 # ── Public DB interface ───────────────────────────────────────
 
 def db_find_job_by_url(url: str) -> str | None:
@@ -220,16 +252,21 @@ def db_find_job_by_url(url: str) -> str | None:
 
 
 def db_add_job(job: dict) -> str:
-    """Insert job into Supabase, mirror to Notion if key set. Returns Supabase id."""
+    """Insert job into Supabase, mirror to Notion if key set. Returns Supabase id.
+
+    Prerequisite: run once in Supabase SQL editor if upgrading from an older schema:
+      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_description text;
+    """
     db = _get_db()
     row = {
-        "job_title":       job.get("title", ""),
-        "company":         job.get("company", ""),
-        "location":        job.get("location", ""),
-        "job_url":         job["url"],
-        "status":          "Scraped",
-        "date_scraped":    today(),
-        "ats_match_score": float(job.get("ats_score") or 0),
+        "job_title":        job.get("title", ""),
+        "company":          job.get("company", ""),
+        "location":         job.get("location", ""),
+        "job_url":          job["url"],
+        "status":           "Scraped",
+        "date_scraped":     today(),
+        "ats_match_score":  float(job.get("ats_score") or 0),
+        "job_description":  job.get("description", "") or "",
     }
     res = db.table("jobs").insert(row).execute()
     supabase_id = res.data[0]["id"]
@@ -279,11 +316,17 @@ def db_get_ready_to_apply() -> list:
     ]
 
 
+def db_get_job_description(job_id: str) -> str:
+    """Return the cached job_description for a Supabase job id, or '' if absent."""
+    res = _get_db().table("jobs").select("job_description").eq("id", job_id).execute()
+    return (res.data[0].get("job_description") or "") if res.data else ""
+
+
 def db_get_jobs(status: str, min_score: float = 0) -> list:
     """Jobs filtered by status and min ATS score, sorted by score desc."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
+        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link,job_description")
         .eq("status", status)
         .gte("ats_match_score", min_score)
         .order("ats_match_score", desc=True)
@@ -291,13 +334,14 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
     )
     return [
         {
-            "page_id":     r["id"],
-            "title":       r["job_title"],
-            "company":     r["company"],
-            "location":    r.get("location") or "",
-            "url":         r["job_url"],
-            "ats_score":   r["ats_match_score"] or 0,
-            "resume_link": r["tailored_resume_link"] or "",
+            "page_id":         r["id"],
+            "title":           r["job_title"],
+            "company":         r["company"],
+            "location":        r.get("location") or "",
+            "url":             r["job_url"],
+            "ats_score":       r["ats_match_score"] or 0,
+            "resume_link":     r["tailored_resume_link"] or "",
+            "job_description": r.get("job_description") or "",
         }
         for r in res.data
     ]

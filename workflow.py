@@ -198,6 +198,13 @@ def _impl_save_html_file(content: str, filename: str, subdirectory: str = "") ->
     return {"file_path": str(path), "success": True}
 
 
+def _impl_sync_disregard() -> dict:
+    """Sync Disregard status from Notion → Supabase before the evaluate run."""
+    from scripts.utils import sync_notion_to_supabase
+    updated = sync_notion_to_supabase()
+    return {"synced": updated, "success": True}
+
+
 def _impl_update_status(
     page_id: str, status: str, tailored_resume_link: str = ""
 ) -> dict:
@@ -250,6 +257,7 @@ _TOOL_IMPL = {
     "save_html_file":        _impl_save_html_file,
     "update_status":         _impl_update_status,
     "send_digest_email":     _impl_send_digest_email,
+    "sync_disregard":        _impl_sync_disregard,
 }
 
 
@@ -327,7 +335,7 @@ TOOLS = [
                 "status": {
                     "type": "string",
                     "enum": [
-                        "Scraped", "Resume Tailored", "Applied",
+                        "Scraped", "Disregard", "Resume Tailored", "Applied",
                         "Outreach Sent", "Interview Scheduled", "Offer Received",
                     ],
                 },
@@ -436,6 +444,18 @@ TOOLS = [
             "required": ["html_content"],
         },
     },
+    {
+        "name": "sync_disregard",
+        "description": (
+            "Sync 'Disregard' status changes made in Notion back into Supabase. "
+            "Always call this first at the start of the evaluate task, before fetching jobs to tailor."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -444,7 +464,8 @@ TOOLS = [
 def _task_morning(args) -> str:
     today = date.today().isoformat()
     targets = ", ".join(f'"{r}"' for r in TARGET_ROLES)
-    return f"""Today is {today}. Run the complete morning job search pipeline:
+    notion_url = f"https://www.notion.so/{NOTION_DB_ID.replace('-', '')}"
+    return f"""Today is {today}. Run the morning scrape and send a review digest.
 
 STAGE 1 — SCRAPE
 For each target role ({targets}), scrape LinkedIn across United States.
@@ -454,28 +475,19 @@ For each result:
   3. Call add_job_to_db with the score
 After all roles: summarize total added / skipped.
 
-STAGE 2 — TAILOR
-Get all "Scraped" jobs from the database. Process jobs ONE AT A TIME — fully
-tailor and save a single resume before starting the next. Do NOT emit multiple
-save_tailored_resume calls in one response (a full resume per call overflows the
-output budget). For each job:
-  1. Call fetch_job_description to get the job posting text
-  2. Extract the actual job description from that text
-  3. Rewrite my resume to target this JD:
-     — Surface existing skills matching the JD keywords
-     — Incorporate missing keywords naturally where truthful
-     — Keep the same structure and length, do NOT invent experience
-  4. Call save_tailored_resume (updates Notion automatically)
-After all jobs: summarize how many resumes tailored.
-
-STAGE 3 — DIGEST
-  1. Call get_ready_to_apply to get all tailored jobs
-  2. Build a clean HTML page showing: company, role, ATS score, LinkedIn URL, resume file path
-     — Sort by ATS score descending
-     — Add color-coded action labels (🔥 ≥80, ✅ ≥60, 🟡 ≥40, ⚪ below)
-     — Include a link to the Notion tracker at the bottom
-  3. Save as digest_{today} (no subdirectory)
+STAGE 2 — REVIEW DIGEST
+  1. Call get_jobs(status="Scraped") to get all newly scraped jobs
+  2. Build a clean HTML review digest:
+     — Header: "New Jobs Scraped — {today} — Review Required"
+     — Yellow notice box: "Open Notion and set Status = Disregard on any jobs to skip, then run: python run.py --evaluate"
+     — Table sorted by ATS score descending: Company | Role | Location | ATS (with 🔥✅🟡⚪ badge) | Job URL
+     — Notion tracker link at the bottom: {notion_url}
+     — Clean sans-serif CSS, max-width 720px
+  3. Save as review_digest_{today} (no subdirectory) using save_html_file
   4. Print a plain-text summary too
+
+This is SCRAPE ONLY — do NOT tailor any resumes. The user will review the digest,
+mark bad jobs as Disregard in Notion, then run --evaluate to trigger tailoring.
 
 Give a brief status update between each stage."""
 
@@ -513,6 +525,43 @@ For each job:
   4. save_tailored_resume (this also updates Notion status to "Resume Tailored")
 
 Summarize: how many resumes tailored, which companies."""
+
+
+def _task_evaluate(args) -> str:
+    today = date.today().isoformat()
+    min_score = getattr(args, "min_score", 0)
+    return f"""Today is {today}. The user has reviewed the scraped jobs in Notion and marked bad ones as Disregard.
+Now run the evaluate pipeline: sync → tailor → outreach → ready digest.
+
+STEP 1 — SYNC DISREGARD
+  Call sync_disregard() to pull any Notion "Disregard" status changes back into Supabase.
+  Report how many jobs were marked Disregard.
+
+STEP 2 — TAILOR
+Get all "Scraped" jobs (min_score={min_score}). Jobs with status "Disregard" are already excluded.
+Process jobs ONE AT A TIME — fully tailor and save a single resume before starting the next.
+For each job:
+  1. fetch_job_description from the job URL
+  2. Extract the job description text
+  3. Rewrite my resume for this specific JD:
+     — Identify top ATS keywords the JD uses that my resume is missing
+     — Rewrite bullet points to naturally incorporate them
+     — Preserve structure, length, and factual accuracy — do NOT invent experience
+  4. save_tailored_resume (updates status to "Resume Tailored" automatically)
+
+STEP 3 — OUTREACH
+For each job just tailored, draft a cold outreach email and save with save_outreach_email.
+
+STEP 4 — READY DIGEST
+  1. Call get_ready_to_apply to get all tailored jobs
+  2. Build a clean HTML digest:
+     — Header: "Job Applications Ready — {today}"
+     — Table sorted by ATS score: Company | Role | ATS | Resume | Action label
+     — Action labels: 🔥 ≥80 apply today, ✅ ≥60 apply + outreach, 🟡 ≥40 apply, ⚪ lower priority
+  3. Save as digest_{today} using save_html_file
+  4. Print plain-text summary
+
+Summarize: how many tailored, how many Disregarded, how many in ready digest."""
 
 
 def _task_outreach(args) -> str:
@@ -636,6 +685,7 @@ _TASK_BUILDERS = {
     "morning":   _task_morning,
     "scrape":    _task_scrape,
     "tailor":    _task_tailor,
+    "evaluate":  _task_evaluate,
     "outreach":  _task_outreach,
     "digest":    _task_digest,
     "interview": _task_interview,
@@ -810,8 +860,8 @@ def main():
     )
     parser.add_argument(
         "--task", default="morning",
-        choices=["morning", "scrape", "tailor", "outreach", "digest", "interview", "negotiate"],
-        help="Which task to run (default: morning = stages 1-4)",
+        choices=["morning", "scrape", "tailor", "evaluate", "outreach", "digest", "interview", "negotiate"],
+        help="Which task to run (default: morning = scrape + review digest; evaluate = tailor + outreach + ready digest)",
     )
     parser.add_argument("--min-score",    type=int,   default=0,  dest="min_score",
                         help="Minimum ATS score for tailor stage")
