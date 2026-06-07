@@ -143,7 +143,7 @@ def save_draft(content: str, job: dict, kind: str) -> str:
 
 # ── Main pipeline ─────────────────────────────────────────────
 
-def run(target_company: str = None, contact: str = None, contact_role: str = ""):
+def run(target_company: str = None, contact: str = None, contact_role: str = "", no_confirm: bool = False):
     jobs = db_get_ready_to_apply()
 
     if not jobs:
@@ -171,10 +171,13 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "")
                 job, "warm_referral"
             )
             log(f"  ✓ Warm referral drafted → {file_path}")
-            confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
-            if confirm == "y":
-                db_update_status(job["page_id"], "Outreach Sent")
-                log("  ✓ Status updated → Outreach Sent")
+            if no_confirm:
+                log("  → Skipping confirm (non-interactive mode). Mark as 'Outreach Sent' manually.")
+            else:
+                confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
+                if confirm == "y":
+                    db_update_status(job["page_id"], "Outreach Sent")
+                    log("  ✓ Status updated → Outreach Sent")
     else:
         # Cold emails — draft all in a single batched API call
         log(f"  Drafting {len(jobs)} cold email(s) in one batch call…")
@@ -192,10 +195,13 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "")
                 job, "cold_email"
             )
             log(f"  ✓ Cold email drafted → {file_path}")
-            confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
-            if confirm == "y":
-                db_update_status(job["page_id"], "Outreach Sent")
-                log("  ✓ Status updated → Outreach Sent")
+            if no_confirm:
+                log("  → Skipping confirm (non-interactive mode). Mark as 'Outreach Sent' manually.")
+            else:
+                confirm = input(f"\n  Mark '{job['company']}' as 'Outreach Sent'? (y/n): ").strip().lower()
+                if confirm == "y":
+                    db_update_status(job["page_id"], "Outreach Sent")
+                    log("  ✓ Status updated → Outreach Sent")
 
     log(f"\nAll drafts saved to ./{OUTREACH_DIR}/")
     log("Review, personalise, and send them yourself.")
