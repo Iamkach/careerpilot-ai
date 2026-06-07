@@ -90,7 +90,7 @@ def build_html_digest(jobs: list) -> str:
 
 
 def build_html_review_digest(jobs: list) -> str:
-    """Review digest — all freshly scraped jobs, before tailoring. User marks Disregard here."""
+    """Review digest — all freshly scraped jobs, before tailoring. User marks Reviewed here."""
     date_str = datetime.date.today().strftime("%B %d, %Y")
     rows = ""
     for job in jobs:
@@ -132,8 +132,8 @@ def build_html_review_digest(jobs: list) -> str:
   <h2>🔍 New Jobs Scraped — {date_str}</h2>
   <div class="notice">
     <strong>Action required:</strong> Review these {len(jobs)} jobs below.<br>
-    Open <a href="{notion_url}">Notion</a> and set <strong>Status = Disregard</strong> on any you want to skip.<br>
-    Then run <code>python run.py --evaluate</code> to tailor resumes for the rest.
+    Open <a href="{notion_url}">Notion</a> and set <strong>Status = Reviewed</strong> on jobs you want to apply to.<br>
+    Then run <code>python run.py --evaluate</code> to tailor resumes for those jobs.
   </div>
   <table>
     <thead>
@@ -173,7 +173,7 @@ def build_plain_digest(jobs: list) -> str:
 def build_plain_review_digest(jobs: list) -> str:
     date_str = datetime.date.today().strftime("%B %d, %Y")
     lines = [f"NEW JOBS SCRAPED — REVIEW REQUIRED — {date_str}", "=" * 50, ""]
-    lines.append("  Open Notion and set Status = Disregard on any jobs to skip.")
+    lines.append("  Open Notion and set Status = Reviewed on jobs you want to apply to.")
     lines.append("  Then run: python run.py --evaluate")
     lines.append("")
     for job in jobs:
