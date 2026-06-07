@@ -4,11 +4,11 @@ stage2_tailor.py — AI resume tailoring per job
 ────────────────────────────────────────────────
 What it does:
   1. Fetches all "Reviewed" jobs from Supabase (jobs marked for application)
-  2. For each job, uses Claude to rewrite your resume targeting that JD,
-     returning structured JSON (name, summary, skills, experience, education)
-  3. Renders that JSON into config/resume_template.docx → output/resumes/*.docx
-     (plus a .txt mirror for quick review)
-  4. Updates Supabase: Status → "Resume Tailored", Tailored Resume Link
+  2. Extracts text from config/Achyuth_Resume.docx as the base resume content
+  3. For each job, asks Claude for targeted ATS keyword edits ({old, new} pairs)
+  4. Copies Achyuth_Resume.docx, applies edits in-place → output/resumes/*.docx
+     (preserves all original formatting; also writes a .txt mirror for quick review)
+  5. Updates Supabase: Status → "Resume Tailored", Tailored Resume Link
 
 Run:  python run.py --evaluate
   or: python run.py --stage 2 --min-score 60   (only score ≥ 60 from Reviewed status)
@@ -20,16 +20,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat, ai_chat_blocks, load_resume, parse_json_response,
+    ai_chat_blocks, parse_json_response,
     db_update_status, db_get_jobs, db_get_job_description,
     log, today, ensure_dirs, ROOT,
 )
-from scripts.render_docx import render_resume_docx, resume_data_to_text
+from scripts.render_docx import extract_docx_text, apply_docx_edits
 
 SYSTEM_PROMPT = """You are an expert resume writer and ATS optimization specialist.
-Your task: rewrite a resume to match a job description without inventing experience.
-Surface existing skills with the right keywords. Be truthful. Be concise.
+Your task: suggest targeted edits to an existing resume to incorporate missing ATS keywords.
+The "old" text must be verbatim from the resume — never invent experience, titles, or dates.
 You always respond with valid JSON only — no prose, no markdown fences."""
+
+
+# ── Load base resume text from the .docx ──────────────────────
+
+def load_base_resume_text() -> str:
+    """Extract plain text from the base resume .docx for use in Claude prompts."""
+    docx_path = str(ROOT / RESUME_TEMPLATE_PATH)
+    try:
+        return extract_docx_text(docx_path)
+    except FileNotFoundError:
+        # Fall back to resume.txt if the docx isn't present yet
+        from scripts.utils import load_resume
+        return load_resume()
 
 
 # ── Fetch "Reviewed" jobs from Supabase ───────────────────────
@@ -63,17 +76,20 @@ def fetch_jd(url: str) -> str:
 
 # ── Tailor resume using Claude ───────────────────────────────
 
-def tailor_resume(resume: str, jd: str, job: dict) -> dict:
-    """Return tailored resume content as a structured dict (template-ready)."""
-    # Resume block is cached — same across every call in this stage run.
+def tailor_resume(resume_text: str, jd: str, job: dict) -> list:
+    """Return a list of {old, new} text edits to apply to the base resume .docx.
+
+    The resume_text is extracted verbatim from Achyuth_Resume.docx so Claude
+    can quote exact strings for the "old" fields.
+    """
     resume_block = {
         "type": "text",
-        "text": f"Here is my current resume:\n\n<resume>\n{resume}\n</resume>",
+        "text": f"Here is my current resume:\n\n<resume>\n{resume_text}\n</resume>",
         "cache_control": {"type": "ephemeral"},
     }
     jd_block = {
         "type": "text",
-        "text": f"""\nHere is the job description I am applying to:
+        "text": f"""Here is the job description I am applying to:
 
 <job_description>
 Company: {job['company']}
@@ -82,73 +98,58 @@ Role: {job['title']}
 {jd}
 </job_description>
 
-Tailor my resume to this job:
-1. Identify the top ATS keywords in the JD missing from my resume
-2. Naturally incorporate them — do NOT invent experience, employers, dates, or degrees
-3. Prioritise bullets that directly match the JD's requirements
-4. Keep my real name, contact details, employers, titles, dates, and education exactly as in my resume
+Identify the minimal, highest-impact changes to incorporate missing ATS keywords into my resume.
 
-Return ONLY a JSON object with this exact shape (no markdown, no commentary):
+Rules:
+1. The "old" field must be the EXACT verbatim text from my resume — copy it character-for-character
+2. Do NOT invent experience, employers, job titles, dates, degrees, or metrics
+3. Only update existing bullet points / the summary to naturally include missing keywords
+4. Keep my name, contact details, company names, titles, and dates unchanged
+5. Prefer updating the summary and a few high-signal bullets over many shallow changes
+
+Return ONLY a JSON object (no markdown, no commentary):
 {{
-  "name": "Full Name",
-  "contact": "email | linkedin | location",
-  "summary": "2-3 sentence professional summary tailored to this role",
-  "skills": ["skill 1", "skill 2", "..."],
-  "experience": [
-    {{
-      "company": "Company Name",
-      "title": "Job Title",
-      "dates": "Jan 2022 – Present",
-      "bullets": ["achievement bullet 1", "achievement bullet 2"]
-    }}
-  ],
-  "education": [
-    {{"institution": "University", "degree": "Degree", "year": "Year"}}
+  "edits": [
+    {{"old": "exact existing text from resume", "new": "updated text with ATS keywords"}}
   ]
 }}""",
     }
     raw = ai_chat_blocks([resume_block, jd_block], system=SYSTEM_PROMPT, max_tokens=4000, quality=True)
     data = parse_json_response(raw)
-    # Authoritative identity from config — never let the model alter the name.
-    if YOUR_NAME:
-        data["name"] = YOUR_NAME
-    return data
+    if isinstance(data, dict):
+        return data.get("edits", [])
+    return []
 
 
 # ── Save tailored resume to file ─────────────────────────────
 
-def save_resume(data: dict, job: dict) -> str:
-    """Render the tailored resume to .docx (via template) and a .txt mirror.
+def save_resume(edits: list, job: dict) -> str:
+    """Apply edits to the base .docx and save to output/resumes/.
 
-    Returns the path to the .docx (falls back to .txt if the template is
-    missing so the stage still produces output).
+    Copies Achyuth_Resume.docx, patches each edited paragraph in-place, and
+    writes a plain-text mirror alongside the .docx for quick review.
+    Returns the path to the saved .docx.
     """
     ensure_dirs()
     safe_company = "".join(c for c in job["company"] if c.isalnum() or c in " _-").strip()
     safe_role    = "".join(c for c in job["title"]   if c.isalnum() or c in " _-").strip()
     stem = f"{today()}_{safe_company}_{safe_role}".replace(" ", "_")
-    base = Path(RESUMES_DIR) / stem
+    docx_path = str(Path(RESUMES_DIR) / f"{stem}.docx")
+    base = str(ROOT / RESUME_TEMPLATE_PATH)
 
-    # Always write a plain-text mirror for quick review.
-    txt_path = base.with_suffix(".txt")
-    txt_path.write_text(resume_data_to_text(data), encoding="utf-8")
+    apply_docx_edits(base, edits, docx_path)
 
-    # Render the formatted .docx from the user's template.
-    docx_path = base.with_suffix(".docx")
-    template = str(ROOT / RESUME_TEMPLATE_PATH)
-    try:
-        render_resume_docx(data, template, str(docx_path))
-        return str(docx_path)
-    except FileNotFoundError as e:
-        log(f"  ⚠ {e}")
-        log(f"  ↳ Saved .txt only: {txt_path}")
-        return str(txt_path)
+    # Plain-text mirror: re-extract from the saved docx for quick review.
+    txt_path = docx_path.replace(".docx", ".txt")
+    Path(txt_path).write_text(extract_docx_text(docx_path), encoding="utf-8")
+
+    return docx_path
 
 
 # ── Main pipeline ─────────────────────────────────────────────
 
 def run(min_score: int = 0):
-    resume = load_resume()
+    resume_text = load_base_resume_text()
     jobs = get_reviewed_jobs(min_score=min_score)
 
     if not jobs:
@@ -169,17 +170,16 @@ def run(min_score: int = 0):
             log("  ⚠ Could not fetch job description. Skipping.")
             continue
 
-        # Tailor
-        tailored = tailor_resume(resume, jd, job)
+        # Ask Claude for targeted keyword edits
+        edits = tailor_resume(resume_text, jd, job)
+        log(f"  ↳ {len(edits)} edit(s) suggested")
 
-        # Save locally
-        file_path = save_resume(tailored, job)
+        # Apply edits to a copy of Achyuth_Resume.docx
+        file_path = save_resume(edits, job)
         log(f"  ✓ Saved: {file_path}")
 
         # Update Supabase + mirror to Notion.
         # NOTE: do NOT set date_applied here — tailoring is not applying.
-        # The digest (db_get_ready_to_apply) shows 'Resume Tailored' jobs where
-        # date_applied IS NULL, so setting it here would hide every job.
         db_update_status(job["page_id"], "Resume Tailored", {
             "tailored_resume_link": f"file://{Path(file_path).resolve()}",
         })
