@@ -6,10 +6,10 @@ Two-step daily flow:
 
   Step 1 — Scrape & review (run each morning):
     python run.py                          # Scrape + score → review digest email → STOP
-                                           # Open Notion, set Status=Disregard on bad jobs
+                                           # Open Notion, set Status=Reviewed on jobs to apply
 
   Step 2 — Tailor reviewed jobs:
-    python run.py --evaluate               # Sync Disregard → tailor + outreach + ready digest
+    python run.py --evaluate               # Sync Reviewed from Notion → tailor + outreach + digest
 
   Individual stages:
     python run.py --stage 1               # Scrape only
@@ -147,29 +147,31 @@ def stage6(args):
 # ── Full morning routine ──────────────────────────────────────
 
 def morning_routine(args):
-    """Scrape + score only. Sends a review digest so you can Disregard bad jobs before tailoring."""
+    """Scrape + score only. Sends a review digest so you can mark good jobs as Reviewed before tailoring."""
     print("\n☀️  MORNING JOB SEARCH PIPELINE")
     print("=" * 45)
     stage1(args)
     stage4(args, mode="scraped")
     print("\n✅ Scrape complete.")
     print("   → Review the digest email / output/review_digest_*.html")
-    print("   → Open Notion and set Status = Disregard on jobs to skip")
+    print("   → Open Notion and set Status = Reviewed on jobs to apply")
     print("   → Then run: python run.py --evaluate")
 
 
 def evaluate_routine(args):
-    """Sync Disregard from Notion → Supabase, then tailor + outreach + ready digest."""
+    """Sync Reviewed jobs from Notion → Supabase, then tailor + outreach + ready digest."""
     print("\n🔄 EVALUATE — Tailor reviewed jobs")
     print("=" * 45)
 
     from scripts.utils import sync_notion_to_supabase
-    print("\n  Syncing Disregard status from Notion → Supabase...")
+    print("\n  Syncing Reviewed status from Notion → Supabase...")
     n = sync_notion_to_supabase()
-    print(f"  ✓ {n} job(s) marked Disregard in Supabase")
+    print(f"  ✓ {n} job(s) synced as Reviewed in Supabase")
 
     stage2(args)
-    stage3(args)
+    # Pass no_confirm so --evaluate runs non-interactively; drafts saved, user marks manually
+    from scripts.stage3_outreach import run as _stage3_run
+    _stage3_run(target_company=args.company, contact=args.contact, contact_role=args.contact_role, no_confirm=True)
     stage4(args, mode="ready")
     print("\n✅ Evaluate pipeline complete.")
     print("   → Tailored resumes in output/resumes/")
@@ -196,7 +198,7 @@ def main():
     parser.add_argument("--hm-linkedin",  type=str, default="",     dest="hm_linkedin")
     parser.add_argument("--offer",        type=float, default=0)
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
-    parser.add_argument("--evaluate",     action="store_true",       help="Sync Disregard from Notion then tailor + outreach + digest")
+    parser.add_argument("--evaluate",     action="store_true",       help="Sync Reviewed jobs from Notion then tailor + outreach + digest")
     args = parser.parse_args()
 
     sys.path.insert(0, str(ROOT))

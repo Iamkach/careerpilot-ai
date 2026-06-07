@@ -214,29 +214,37 @@ def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
 # ── Notion → Supabase sync (used before --evaluate run) ──────
 
 def sync_notion_to_supabase() -> int:
-    """Pull 'Disregard' status changes made in Notion back into Supabase.
+    """Sync jobs marked 'Reviewed' in Notion to Supabase.
 
-    Notion is normally a write-only mirror, but users mark jobs as Disregard
-    there. This syncs those changes back so Stage 2 skips them correctly.
+    User marks jobs as 'Reviewed' in Notion to indicate they want to apply.
+    This syncs only jobs that have 'Reviewed' in Notion but NOT in Supabase.
     Returns the number of rows updated.
     """
     if not NOTION_API_KEY:
         return 0
     updated = 0
     try:
-        from notion_client import Client as NotionClient
-        notion = NotionClient(auth=NOTION_API_KEY)
+        import requests
         db = _get_db()
 
-        results = notion.databases.query(
-            database_id=NOTION_DB_ID,
-            filter={"property": "Status", "select": {"equals": "Disregard"}},
+        # Query Notion API directly for jobs with "Reviewed" status
+        headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
+        body = {
+            "filter": {"property": "Status", "select": {"equals": "Reviewed"}},
+        }
+        resp = requests.post(
+            f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+            json=body,
+            headers=headers,
         )
+        results = resp.json() if resp.ok else {}
+
         for page in results.get("results", []):
             notion_page_id = page["id"]
             res = db.table("jobs").select("id,status").eq("notion_page_id", notion_page_id).execute()
-            if res.data and res.data[0]["status"] != "Disregard":
-                db.table("jobs").update({"status": "Disregard"}).eq("id", res.data[0]["id"]).execute()
+            # Only update if Supabase status is NOT yet "Reviewed"
+            if res.data and res.data[0]["status"] != "Reviewed":
+                db.table("jobs").update({"status": "Reviewed"}).eq("id", res.data[0]["id"]).execute()
                 updated += 1
     except Exception as e:
         log(f"[sync_notion_to_supabase] warning: {e}")
@@ -326,7 +334,7 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
     """Jobs filtered by status and min ATS score, sorted by score desc."""
     res = (
         _get_db().table("jobs")
-        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link,job_description")
+        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
         .eq("status", status)
         .gte("ats_match_score", min_score)
         .order("ats_match_score", desc=True)
@@ -334,14 +342,14 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
     )
     return [
         {
-            "page_id":         r["id"],
-            "title":           r["job_title"],
-            "company":         r["company"],
-            "location":        r.get("location") or "",
-            "url":             r["job_url"],
-            "ats_score":       r["ats_match_score"] or 0,
-            "resume_link":     r["tailored_resume_link"] or "",
-            "job_description": r.get("job_description") or "",
+            "page_id":     r["id"],
+            "id":          r["id"],
+            "title":       r["job_title"],
+            "company":     r["company"],
+            "location":    r.get("location") or "",
+            "url":         r["job_url"],
+            "ats_score":   r["ats_match_score"] or 0,
+            "resume_link": r["tailored_resume_link"] or "",
         }
         for r in res.data
     ]
