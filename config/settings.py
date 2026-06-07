@@ -53,8 +53,8 @@ AI_PROVIDER = "claude"
 #   claude default : claude-opus-4-6
 #   gemini default : gemini-2.0-flash
 #   codex  default : gpt-4o
-AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3
-QUALITY_MODEL     = "claude-sonnet-4-6"            # strong — stages 2, 5, 6, workflow
+AI_MODEL_OVERRIDE = "gpt-4o"   # fast/cheap — stages 1, 3 claude-haiku-4-5-20251001
+QUALITY_MODEL     = "gpt-5-mini"            # strong — stages 2, 5, 6, workflow claude-sonnet-4-6
 
 # --- API Keys -----------------------------------------------
 ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com         (provider: claude)
