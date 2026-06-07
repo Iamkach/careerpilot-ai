@@ -53,13 +53,13 @@ AI_PROVIDER = "claude"
 #   claude default : claude-opus-4-6
 #   gemini default : gemini-2.0-flash
 #   codex  default : gpt-4o
-AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3
-QUALITY_MODEL     = "claude-sonnet-4-6"            # strong — stages 2, 5, 6, workflow
+AI_MODEL_OVERRIDE = "gpt-4o"   # fast/cheap — stages 1, 3 claude-haiku-4-5-20251001
+QUALITY_MODEL     = "gpt-5-mini"            # strong — stages 2, 5, 6, workflow claude-sonnet-4-6
 
 # --- API Keys -----------------------------------------------
 ANTHROPIC_API_KEY = "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"   # https://console.anthropic.com         (provider: claude)
 GEMINI_API_KEY    = ""   # https://aistudio.google.com/apikey    (provider: gemini)
-OPENAI_API_KEY    = ""   # https://platform.openai.com/api-keys  (provider: codex)
+OPENAI_API_KEY    = "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"   # https://platform.openai.com/api-keys  (provider: codex)
 APIFY_API_TOKEN   = "apify_api_DcVU8FOcBhj2P95Aaw2HNh2UeWFDhB3C7Ryr"   # https://apify.com  (free token)
 NOTION_API_KEY    = "ntn_w28125366012r0VqDA4LehcDJ8OxaJAfiFg8UXjh5iqcF8"   # TEMP-DISABLED (was ntn_w28125366012r0VqDA4LehcDJ8OxaJAfiFg8UXjh5iqcF8) — DB not shared with integration; re-enable after sharing
 
