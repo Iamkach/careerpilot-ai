@@ -47,10 +47,11 @@ RESUME_TEMPLATE_PATH = "config/resume_template.docx"
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages
 # Options: "claude" | "gemini" | "codex"
-AI_PROVIDER = "claude"
+AI_PROVIDER = "codex"
 
 # Model overrides — leave blank to use the defaults below
 #   claude default : claude-opus-4-6
+
 #   gemini default : gemini-2.0-flash
 #   codex  default : gpt-4o
 AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3
