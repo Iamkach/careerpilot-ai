@@ -199,7 +199,7 @@ def _impl_save_html_file(content: str, filename: str, subdirectory: str = "") ->
 
 
 def _impl_sync_disregard() -> dict:
-    """Sync Disregard status from Notion → Supabase before the evaluate run."""
+    """Sync Reviewed status from Notion → Supabase before the evaluate run."""
     from scripts.utils import sync_notion_to_supabase
     updated = sync_notion_to_supabase()
     return {"synced": updated, "success": True}
@@ -447,7 +447,7 @@ TOOLS = [
     {
         "name": "sync_disregard",
         "description": (
-            "Sync 'Disregard' status changes made in Notion back into Supabase. "
+            "Sync 'Reviewed' status changes made in Notion back into Supabase. "
             "Always call this first at the start of the evaluate task, before fetching jobs to tailor."
         ),
         "input_schema": {
@@ -479,7 +479,7 @@ STAGE 2 — REVIEW DIGEST
   1. Call get_jobs(status="Scraped") to get all newly scraped jobs
   2. Build a clean HTML review digest:
      — Header: "New Jobs Scraped — {today} — Review Required"
-     — Yellow notice box: "Open Notion and set Status = Disregard on any jobs to skip, then run: python run.py --evaluate"
+     — Yellow notice box: "Open Notion and set Status = Reviewed on jobs to apply, then run: python run.py --evaluate"
      — Table sorted by ATS score descending: Company | Role | Location | ATS (with 🔥✅🟡⚪ badge) | Job URL
      — Notion tracker link at the bottom: {notion_url}
      — Clean sans-serif CSS, max-width 720px
@@ -487,7 +487,7 @@ STAGE 2 — REVIEW DIGEST
   4. Print a plain-text summary too
 
 This is SCRAPE ONLY — do NOT tailor any resumes. The user will review the digest,
-mark bad jobs as Disregard in Notion, then run --evaluate to trigger tailoring.
+mark good jobs as Reviewed in Notion, then run --evaluate to trigger tailoring.
 
 Give a brief status update between each stage."""
 
@@ -530,15 +530,15 @@ Summarize: how many resumes tailored, which companies."""
 def _task_evaluate(args) -> str:
     today = date.today().isoformat()
     min_score = getattr(args, "min_score", 0)
-    return f"""Today is {today}. The user has reviewed the scraped jobs in Notion and marked bad ones as Disregard.
+    return f"""Today is {today}. The user has reviewed the scraped jobs in Notion and marked good ones as Reviewed.
 Now run the evaluate pipeline: sync → tailor → outreach → ready digest.
 
-STEP 1 — SYNC DISREGARD
-  Call sync_disregard() to pull any Notion "Disregard" status changes back into Supabase.
-  Report how many jobs were marked Disregard.
+STEP 1 — SYNC REVIEWED
+  Call sync_disregard() to pull any Notion "Reviewed" status changes back into Supabase.
+  Report how many jobs were marked Reviewed.
 
 STEP 2 — TAILOR
-Get all "Scraped" jobs (min_score={min_score}). Jobs with status "Disregard" are already excluded.
+Get all "Reviewed" jobs (min_score={min_score}).
 Process jobs ONE AT A TIME — fully tailor and save a single resume before starting the next.
 For each job:
   1. fetch_job_description from the job URL
@@ -561,7 +561,7 @@ STEP 4 — READY DIGEST
   3. Save as digest_{today} using save_html_file
   4. Print plain-text summary
 
-Summarize: how many tailored, how many Disregarded, how many in ready digest."""
+Summarize: how many tailored, how many reviewed, how many in ready digest."""
 
 
 def _task_outreach(args) -> str:

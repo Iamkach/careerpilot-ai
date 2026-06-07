@@ -3,15 +3,15 @@
 stage2_tailor.py — AI resume tailoring per job
 ────────────────────────────────────────────────
 What it does:
-  1. Fetches all "Scraped" jobs from Notion tracker
+  1. Fetches all "Reviewed" jobs from Supabase (jobs marked for application)
   2. For each job, uses Claude to rewrite your resume targeting that JD,
      returning structured JSON (name, summary, skills, experience, education)
   3. Renders that JSON into config/resume_template.docx → output/resumes/*.docx
      (plus a .txt mirror for quick review)
-  4. Updates Notion: Status → "Resume Tailored", Tailored Resume Link
+  4. Updates Supabase: Status → "Resume Tailored", Tailored Resume Link
 
-Run:  python scripts/stage2_tailor.py
-  or: python scripts/stage2_tailor.py --min-score 60   (only score ≥ 60)
+Run:  python run.py --evaluate
+  or: python run.py --stage 2 --min-score 60   (only score ≥ 60 from Reviewed status)
 """
 
 import sys, argparse
@@ -32,21 +32,31 @@ Surface existing skills with the right keywords. Be truthful. Be concise.
 You always respond with valid JSON only — no prose, no markdown fences."""
 
 
-# ── Fetch "Scraped" jobs from Supabase ───────────────────────
+# ── Fetch "Reviewed" jobs from Supabase ───────────────────────
 
-def get_scraped_jobs(min_score: int = 0) -> list:
-    return db_get_jobs(status="Scraped", min_score=min_score)
+def get_reviewed_jobs(min_score: int = 0) -> list:
+    return db_get_jobs(status="Reviewed", min_score=min_score)
 
 
 # ── Fetch job description from URL ───────────────────────────
 
 def fetch_jd(url: str) -> str:
-    """Use Claude to read the job description from the URL."""
+    """Fetch job description text from URL via HTTP."""
     if not url:
         return ""
-    prompt = f"Fetch this job posting URL and return only the full job description text, nothing else:\n{url}"
+    import requests, re
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     try:
-        return claude_chat(prompt)
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return ""
+        # Strip HTML tags and collapse whitespace
+        text = re.sub(r"<[^>]+>", " ", r.text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:8000]
     except Exception:
         return ""
 
@@ -139,10 +149,10 @@ def save_resume(data: dict, job: dict) -> str:
 
 def run(min_score: int = 0):
     resume = load_resume()
-    jobs = get_scraped_jobs(min_score=min_score)
+    jobs = get_reviewed_jobs(min_score=min_score)
 
     if not jobs:
-        log("No 'Scraped' jobs found in Notion. Run stage1_scrape.py first.")
+        log("No 'Reviewed' jobs found. Mark jobs as Reviewed in Notion, then run: python run.py --evaluate")
         return
 
     log(f"Tailoring resumes for {len(jobs)} jobs (min ATS score: {min_score})")
@@ -150,10 +160,10 @@ def run(min_score: int = 0):
     for job in jobs:
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
 
-        # Use cached JD from Supabase if available; fall back to fetching via AI
-        jd = job.get("job_description") or db_get_job_description(job["page_id"])
+        # Use cached JD from Supabase; fall back to URL fetch
+        jd = db_get_job_description(job["id"])
         if not jd:
-            log("  ↳ No cached JD — fetching from URL (one-time AI call)…")
+            log("  ↳ No cached JD — fetching from URL…")
             jd = fetch_jd(job["url"])
         if not jd:
             log("  ⚠ Could not fetch job description. Skipping.")
