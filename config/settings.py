@@ -40,9 +40,10 @@ EXCLUDE_NO_SPONSORSHIP = True
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"
 GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
-# Word template used to render tailored resumes (stage 2). Must contain the
-# docxtpl/Jinja2 placeholders documented in scripts/render_docx.py.
-RESUME_TEMPLATE_PATH = "config/resume_template.docx"
+# Base resume .docx used as the source for tailoring (stage 2). The pipeline
+# copies this file and applies targeted ATS keyword edits in-place, preserving
+# all formatting. Must be a plain Word document (no Jinja2 placeholders needed).
+RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages
