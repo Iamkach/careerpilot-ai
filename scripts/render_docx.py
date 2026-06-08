@@ -31,6 +31,7 @@ Template placeholders (Jinja2 syntax inside the .docx):
     Education:  {% for ed in education %}{{ ed.institution }} | {{ ed.degree }} | {{ ed.year }}{% endfor %}
 """
 
+import shutil
 from pathlib import Path
 
 # Human-readable reference of the placeholders a template must use.
@@ -112,6 +113,66 @@ def render_resume_docx(data: dict, template_path: str, out_path: str) -> str:
     doc = DocxTemplate(str(tpl_path))
     doc.render(context)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    doc.save(out_path)
+    return out_path
+
+
+def extract_docx_text(docx_path: str) -> str:
+    """Return all non-empty paragraph text from a .docx, one line per paragraph."""
+    try:
+        from docx import Document
+    except ImportError as e:
+        raise ImportError("python-docx is required. Install with: pip install python-docx") from e
+    doc = Document(docx_path)
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _replace_para_text(para, old: str, new: str) -> None:
+    """Replace old with new inside a paragraph, collapsing runs into the first one.
+
+    Paragraph-level formatting (indent, bullet style, spacing) is preserved.
+    Run-level formatting within the paragraph is collapsed to the first run's style —
+    acceptable for resume bullets where a whole bullet shares the same style.
+    """
+    full = para.text.replace(old, new, 1)
+    if para.runs:
+        para.runs[0].text = full
+        for run in para.runs[1:]:
+            run.text = ""
+    else:
+        para.add_run(full)
+
+
+def apply_docx_edits(base_path: str, edits: list, out_path: str) -> str:
+    """Copy base_path to out_path and apply targeted text replacements.
+
+    edits: list of {"old": <exact existing text>, "new": <replacement text>}
+    Each edit matches the first paragraph whose text contains the "old" string.
+    """
+    try:
+        from docx import Document
+    except ImportError as e:
+        raise ImportError("python-docx is required. Install with: pip install python-docx") from e
+
+    if not Path(base_path).exists():
+        raise FileNotFoundError(
+            f"Base resume not found at {base_path}. "
+            "Set RESUME_TEMPLATE_PATH to an existing .docx file in config/settings.py."
+        )
+
+    shutil.copy2(base_path, out_path)
+    doc = Document(out_path)
+
+    for edit in edits:
+        old = (edit.get("old") or "").strip()
+        new = (edit.get("new") or "").strip()
+        if not old or not new or old == new:
+            continue
+        for para in doc.paragraphs:
+            if old in para.text:
+                _replace_para_text(para, old, new)
+                break
+
     doc.save(out_path)
     return out_path
 
