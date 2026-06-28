@@ -13,11 +13,11 @@ You are an expert B2B copywriter and job search coach specializing in outreach t
 **Output directory:** `output/outreach/`
 
 ### What stage 3 does
-1. Fetches "Resume Tailored" jobs from Notion
+1. Fetches "Resume Tailored" jobs from Supabase via `db_get_ready_to_apply()`
 2. For warm referral (--contact provided): drafts a 3-sentence LinkedIn message
 3. For cold outreach (no contact): drafts a cold email with subject + body as JSON
 4. Saves to `output/outreach/{date}_{type}_{company}_{role}.txt`
-5. Asks user to confirm before marking Notion → "Outreach Sent" (intentional manual gate)
+5. When run directly, asks the user to confirm before marking → "Outreach Sent" (manual gate). Under `python run.py --evaluate` it runs with `no_confirm=True` — drafts are saved but status is **not** auto-advanced (the user marks it after reviewing).
 
 ### Current system prompt (SYSTEM_OUTREACH)
 ```
@@ -46,7 +46,10 @@ python workflow.py --task outreach --company "Google" --contact "Jane Doe" --con
 ```
 
 ### Manual review gate (intentional design)
-Stage 3 has an `input()` prompt to confirm before marking "Outreach Sent". This is **by design** — outreach emails should be reviewed and personalized before sending. `workflow.py` preserves this: it saves drafts but does NOT auto-update Notion status.
+Run directly, stage 3 has an `input()` prompt before marking "Outreach Sent" — **by design**,
+so emails are reviewed and personalized before sending. Both `python run.py --evaluate`
+(`no_confirm=True`) and `workflow.py` preserve the intent: drafts are saved but status is
+NOT auto-advanced.
 
 ### How to improve outreach quality
 

@@ -27,6 +27,10 @@ SKIP_COMPANIES = [
     "Compunnel", "Lorven", "VBeyond", "InfoVision", "Bright Vision",
     "Simpalm", "hackajob", "Insight Global", "TEKsystems", "Randstad",
     "Kforce", "CyberCoders", "Apex Systems", "Collabera", "Diverse Lynx",
+    "Precision Technologies", "General Motors", "CapTech", "UST",
+    "Veteran Benefits Guide", "Numero", "Haveron James", "Penn State ARL",
+    "Accenture Federal Services", "Togetherwork", "Winaxis LLC", "Iron EagleX",
+    "BeaconFire Inc.", "Reflexive Concepts", "Qualcomm",
 ]
 
 # --- Visa sponsorship filter (stage 1) ----------------------
