@@ -73,15 +73,20 @@ def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
 
 # ── LinkedIn job-id helpers (match Apify items back to requested URLs) ──
 
-_JOB_ID_RE = re.compile(r"(?:jobs/view/|currentJobId=|/view/)(\d+)|(\d{8,})")
+# Prefer an explicit job-id marker; only fall back to a standalone long number
+# that is its own path segment (delimited), never digits buried in query params.
+_JOB_ID_RE = re.compile(r"(?:jobs/view/|currentJobId=|/view/)(\d+)")
+_JOB_ID_FALLBACK_RE = re.compile(r"/(\d{8,})(?:[/?#]|$)")
 
 
 def _linkedin_job_id(url: str) -> str:
     """Extract the numeric LinkedIn job id from a job URL, or '' if none."""
-    m = _JOB_ID_RE.search(url or "")
-    if not m:
-        return ""
-    return m.group(1) or m.group(2) or ""
+    url = url or ""
+    m = _JOB_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    m = _JOB_ID_FALLBACK_RE.search(url)
+    return m.group(1) if m else ""
 
 
 def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
