@@ -12,44 +12,45 @@ You are an expert resume writer and ATS optimization specialist working on an au
 **Workflow tool:** `save_tailored_resume` in `workflow.py`
 
 ### What stage 2 does
-1. Queries Notion for jobs with Status="Scraped"
-2. For each job: fetches job description (via URL), runs Claude to rewrite the resume for that JD
-3. Saves tailored resume as `.txt` to `output/resumes/`
-4. Updates Notion: Status → "Resume Tailored", sets Tailored Resume Link
+1. Fetches jobs with **Status="Reviewed"** from Supabase (`db_get_jobs("Reviewed", min_score)`) — the user approves jobs in Notion, then `python run.py --evaluate` syncs + runs this
+2. Loads the **base resume `.docx`** (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) as text via `extract_docx_text()`
+3. For each job: reads the cached JD (`db_get_job_description(job_id)`) and asks the AI for **targeted `{old, new}` ATS keyword edits** (JSON, not a full rewrite)
+4. Copies the base `.docx` and applies the edits **in-place** via `apply_docx_edits()` (preserves formatting) → `output/resumes/*.docx` + a `.txt` mirror
+5. Updates Supabase: Status → "Resume Tailored", sets `tailored_resume_link`
 
 ### ATS scoring (Stage 1 output, feeds Stage 2)
-Stage 1 scores each job during scraping with this prompt pattern:
+Stage 1 scores all new jobs in a single batched call — `score_jobs_batch()` in
+`stage1_scrape.py` — returning per job:
 ```
-Rate how well this resume matches the job description on a scale of 0-100.
-Return JSON: {"score": N, "missing_keywords": [...]}
+{"url": "...", "score": 0-100, "missing_keywords": [...], "sponsorship": "yes|no|unknown"}
 ```
-The ATS score is stored in Notion as `ATS Match Score` (number).
-Stage 2 can filter by `--min-score` (default 0, no filter).
+The score is stored as `ats_match_score` (Supabase) / `ATS Match Score` (Notion).
+Stage 2 filters by `--min-score` (default 0).
 
-### Resume file location
-- Source: `config/resume.txt` (plain text, user must populate)
-- Output: `output/resumes/{date}_{company}_{role}.txt`
+### Resume file locations
+- Base source: `config/Achyuth_Resume.docx` (`RESUME_TEMPLATE_PATH`) — falls back to `config/resume.txt` if absent
+- Output: `output/resumes/{date}_{company}_{role}.docx` (+ `.txt` mirror)
 
-### Tailoring system prompt (in stage2_tailor.py)
-The SYSTEM_PROMPT instructs Claude to:
-- Mirror JD language and keywords without fabricating experience
-- Reorder bullets to front-load most relevant experience
-- Keep original truthfulness; only reframe, never invent
+### Tailoring system prompt (SYSTEM_PROMPT in stage2_tailor.py)
+Instructs the model to:
+- Return **valid JSON only** — a list of `{old, new}` edit pairs
+- Make the `old` text **verbatim** from the resume (so `apply_docx_edits` can find it)
+- Never invent experience, titles, or dates — only weave in missing ATS keywords
 
 ### Common issues and fixes
-- **JD fetch broken**: Stage 2 originally called `claude_chat` to "fetch" a URL — Claude can't browse. `workflow.py` fixes this with `requests.get()` in `_impl_fetch_job_description`.
-- **ATS score mismatch**: If scores seem too high/low, tune the scoring prompt in `stage1_scrape.py`
-- **Tailored resume too generic**: Strengthen the system prompt to be more specific about keyword density
-- **Missing keywords still absent**: Add a second pass: "List any keywords from the JD not in this draft"
+- **Edit not applied**: `apply_docx_edits()` matches `old` verbatim. If the model paraphrases `old`, the replacement silently no-ops — tighten the prompt to copy exact substrings.
+- **No JD available**: JD is cached in Supabase at scrape time. Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `workflow.py`'s `_impl_fetch_job_description` (`requests.get()`) is the fallback fetch path.
+- **ATS score mismatch**: tune `score_jobs_batch()` in `stage1_scrape.py`.
+- **Tailored resume too generic**: strengthen SYSTEM_PROMPT on keyword density / which sections to target.
 
 ### How to improve tailoring quality
-1. Read `config/resume.txt` to understand the current resume structure
-2. Read the SYSTEM_PROMPT in `scripts/stage2_tailor.py`
-3. Run a test: `python run.py --stage 2 --company "Google"` (requires Notion jobs + API keys)
-4. Check output in `output/resumes/` — human-readable for review
+1. Read the base resume (`config/Achyuth_Resume.docx` via `extract_docx_text`) to understand its structure
+2. Read the SYSTEM_PROMPT and the edit-application logic (`apply_docx_edits` in `scripts/render_docx.py`)
+3. Run a test: mark a job `Reviewed` in Notion, then `python run.py --evaluate` (or `python run.py --stage 2 --min-score 0`)
+4. Check `output/resumes/` — open the `.docx`, skim the `.txt` mirror
 
-When writing new prompts for resume tailoring, follow these rules:
-- Be explicit about what Claude should NOT change (contact info, dates, company names)
-- Always instruct Claude to return the complete rewritten resume, not a diff
-- Include the original resume in the prompt (not just the JD)
-- Ask for ATS keyword density in the output
+When writing new tailoring prompts, follow these rules:
+- Be explicit about what must NOT change (contact info, dates, company names)
+- Return **edit pairs as JSON** (`{old, new}`), with `old` copied verbatim — not a full rewrite
+- Provide the base resume text + the JD in the prompt
+- Bias edits toward the job's `missing_keywords`

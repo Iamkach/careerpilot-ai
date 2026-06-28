@@ -2,7 +2,7 @@
 
 Automated job search system using Claude API — no N8N, no VPS required.
 Scrapes LinkedIn, tailors resumes, drafts outreach, preps interviews, and negotiates offers.
-All tracked in your Notion database.
+Data lives in Supabase (primary), mirrored to a Notion database you use as the visual tracker.
 
 ---
 
@@ -13,17 +13,18 @@ flowchart TD
     A([Your Resume\nconfig/resume.txt]) --> S1
     CFG([config/settings.py\nAI_PROVIDER + API keys]) --> S1
 
-    subgraph S1["Stage 1 — Scrape"]
-        L1[Apify LinkedIn Scraper] --> L2[Claude: ATS score vs resume]
-        L2 --> L3[Notion: Status = Scraped]
+    subgraph S1["Stage 1 — Scrape (+ ingest Notion 'Interested')"]
+        L1[Apify LinkedIn Scraper] --> L2[AI: ATS score vs resume]
+        L2 --> L3[Supabase/Notion: Status = Scraped]
     end
 
-    S1 --> S2
+    S1 --> RG{Review in Notion\nStatus = Reviewed}
+    RG --> S2
 
-    subgraph S2["Stage 2 — Tailor  --min-score N"]
-        T1[Fetch Scraped jobs from Notion] --> T2[Claude: rewrite resume per JD]
-        T2 --> T3[output/resumes/*.txt]
-        T3 --> T4[Notion: Status = Resume Tailored]
+    subgraph S2["Stage 2 — Tailor  --evaluate / --min-score N"]
+        T1[Fetch Reviewed jobs] --> T2[AI: targeted ATS edits to base .docx]
+        T2 --> T3[output/resumes/*.docx + .txt]
+        T3 --> T4[Supabase/Notion: Status = Resume Tailored]
     end
 
     S2 --> S3 & S4
@@ -65,6 +66,46 @@ flowchart TD
 
 ---
 
+## File structure
+
+```
+local-n8n-engine/
+├── workflow.py                  # Claude-native agentic orchestrator (preferred)
+├── run.py                       # Legacy stage runner
+├── requirements.txt
+│
+├── config/
+│   ├── settings.py              # API keys, user profile, target roles, AI models
+│   ├── resume.txt               # Your resume (plain text, required)
+│   ├── Achyuth_Resume.docx      # Master resume template (edited in-place by stage 2)
+│   └── resume_template.docx     # DOCX scaffold for render_docx.py
+│
+├── scripts/
+│   ├── utils.py                 # Shared helpers: ai_chat(), Supabase CRUD, Notion mirror
+│   ├── stage1_scrape.py         # Scrape LinkedIn via Apify, ATS score, save to Supabase
+│   ├── stage2_tailor.py         # Rewrite resume per JD, save to output/resumes/
+│   ├── stage3_outreach.py       # Draft cold/warm outreach emails
+│   ├── stage4_digest.py         # Generate HTML morning digest
+│   ├── stage5_interview_prep.py # Generate HTML interview prep guide
+│   ├── stage6_negotiate.py      # Research salary benchmarks + negotiation script
+│   ├── render_docx.py           # Render tailored resume as .docx
+│   └── make_resume_template.py  # Scaffold a new DOCX template
+│
+├── output/
+│   ├── resumes/                 # Tailored resumes (.docx + .txt) per job
+│   ├── outreach/                # Cold/warm email drafts (.txt) — review before sending
+│   ├── prep_guides/             # Interview prep guides (.html)
+│   ├── negotiation/             # Negotiation briefs (.html)
+│   └── digest_YYYY-MM-DD.html   # Daily digest
+│
+└── .claude/
+    ├── agents/                  # Specialized sub-agents (notion-tracker, resume-tailor, …)
+    ├── commands/                # Slash commands (/scrape, /tailor, /outreach, …)
+    └── skills/                  # run-local-n8n-engine smoke test skill
+```
+
+---
+
 ## Setup (5 minutes)
 
 ### 1. Install dependencies
@@ -73,14 +114,17 @@ Install the SDK for your chosen AI provider plus the shared dependencies:
 
 ```bash
 # Claude (default)
-pip install anthropic notion-client requests
+pip install anthropic supabase notion-client requests docxtpl
 
 # Gemini
-pip install google-generativeai notion-client requests
+pip install google-generativeai supabase notion-client requests docxtpl
 
 # OpenAI / Codex
-pip install openai notion-client requests
+pip install openai supabase notion-client requests docxtpl
 ```
+
+> `supabase` is the primary data store (required); `docxtpl` backs the stage-2 `.docx`
+> resumes. Or just `pip install -r requirements.txt`.
 
 ### 2. Add your resume
 Create `config/resume.txt` and paste your full resume as plain text.
@@ -103,18 +147,37 @@ python run.py --setup
 
 ## Daily usage
 
-### Morning routine (run all at once)
+The pipeline is a **two-step flow** with a human review gate in the middle.
+
+### Step 1 — Scrape & review (each morning)
 ```bash
 python run.py
 ```
-This runs: Scrape → Tailor resumes → Send digest
+Runs stages 1 + 4: scrape LinkedIn, ATS-score, and produce a review digest of new
+"Scraped" jobs. **Then open Notion and set `Status = Reviewed`** on the jobs you want
+to apply to.
+
+### Step 2 — Evaluate the reviewed jobs
+```bash
+python run.py --evaluate
+```
+Syncs your "Reviewed" jobs from Notion, then tailors resumes (stage 2) → drafts
+outreach (stage 3) → builds the ready-to-apply digest (stage 4).
+
+### Manually add a job (no codebase access needed)
+Found a great role in your LinkedIn connections/suggestions? Add it straight in
+**Notion**: create a row with **Job Title, Company, Job URL** and set
+`Status = Interested`. The next `python run.py` (or `python run.py --ingest`)
+enriches it via Apify, scores it, and folds it into the "Scraped" queue alongside
+the auto-scraped jobs.
 
 ### Or run individual stages
 
 | Stage | Command | What it does |
 |-------|---------|--------------|
-| 1 | `python run.py --stage 1` | Scrape fresh LinkedIn jobs → Notion |
-| 2 | `python run.py --stage 2 --min-score 60` | AI-tailor resume per job |
+| 1 | `python run.py --stage 1` | Scrape fresh LinkedIn jobs (+ ingest "Interested") → Supabase/Notion |
+| — | `python run.py --ingest` | Ingest only Notion "Interested" jobs → "Scraped" |
+| 2 | `python run.py --stage 2 --min-score 60` | AI-tailor resume per Reviewed job |
 | 3 | `python run.py --stage 3 --company "Stripe"` | Draft cold outreach email |
 | 3 | `python run.py --stage 3 --company "Google" --contact "Jane Doe"` | Draft warm referral |
 | 4 | `python run.py --stage 4` | Print morning digest to terminal |
@@ -127,17 +190,21 @@ This runs: Scrape → Tailor resumes → Send digest
 ## Pipeline flow
 
 ```
-Stage 1: Scrape
-  LinkedIn (via Apify) → Claude scores ATS match → Notion "Scraped"
+Intake (manual): Notion row Status="Interested" → ingested on next scrape → "Scraped"
 
-Stage 2: Tailor
-  Notion "Scraped" → Claude rewrites resume → saved to output/resumes/ → Notion "Resume Tailored"
+Stage 1: Scrape
+  LinkedIn (via Apify) → AI scores ATS match → Supabase/Notion "Scraped"
+                                    ↓
+                  Review gate: set Status="Reviewed" in Notion
+
+Stage 2: Tailor (--evaluate)
+  "Reviewed" → AI applies ATS edits to base .docx → output/resumes/ → "Resume Tailored"
 
 Stage 3: Outreach
-  Notion "Resume Tailored" → Claude drafts email → saved to output/outreach/ → Notion "Outreach Sent"
+  "Resume Tailored" → AI drafts email → saved to output/outreach/ → "Outreach Sent"
 
 Stage 4: Digest
-  Notion "Resume Tailored" + not applied → HTML email digest → your inbox
+  "Resume Tailored" + not applied → HTML email digest → your inbox
 
 Stage 5: Interview Prep
   Company + JD → Claude generates full prep guide → output/prep_guides/ → Notion "Interview Scheduled"
@@ -152,7 +219,7 @@ Stage 6: Negotiate
 
 | Folder | Contents |
 |--------|----------|
-| `output/resumes/` | Tailored resumes per job as `.txt` |
+| `output/resumes/` | Tailored resumes per job as `.docx` (in-place edits of the base resume) + `.txt` mirror |
 | `output/outreach/` | Cold + warm email drafts as `.txt` |
 | `output/prep_guides/` | Interview prep as `.html` (open in browser) |
 | `output/negotiation/` | Negotiation briefs as `.html` |
@@ -166,9 +233,11 @@ Your tracker is already live:
 https://www.notion.so/2ac0907e693744698a1c748d37774a07
 
 Status pipeline:
-`Scraped → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
+`Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
-Scripts update status automatically at each stage.
+Scripts update status automatically at each stage. **You** set two of them by hand in
+Notion: `Interested` (to queue a job you found) and `Reviewed` (to approve a scraped
+job for tailoring).
 
 ---
 

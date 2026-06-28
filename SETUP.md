@@ -57,50 +57,27 @@ config/resume.txt
 
 ---
 
-## 3b. Add a resume `.docx` template (stage 2 output)
+## 3b. Add your base resume `.docx` (stage 2 source)
 
-Stage 2 renders each tailored resume into a Word template so every output shares
-the **same layout** — only the content changes per job (no "random" formatting).
+Stage 2 does **not** render from a Jinja2 template. It takes your real, already-formatted
+resume `.docx`, copies it per job, and applies targeted `{old → new}` ATS keyword edits
+**in-place** — so every tailored resume keeps your exact original formatting and only the
+wording changes.
 
-You need a template at `config/resume_template.docx` (path set by
-`RESUME_TEMPLATE_PATH` in `config/settings.py`). Two ways to get one:
+Put your resume at `config/Achyuth_Resume.docx` (path set by `RESUME_TEMPLATE_PATH` in
+`config/settings.py`). It's a plain Word document — **no placeholder tags required**.
 
-```bash
-# Option A — generate a clean starter, then restyle it in Word
-python scripts/make_resume_template.py
-
-# Option B — drop your own .docx at config/resume_template.docx
+```python
+RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"   # your base resume .docx
 ```
 
-Whichever you use, the template must contain these **docxtpl / Jinja2** tags:
+Stage 2 reads it via `extract_docx_text()` and edits it via `apply_docx_edits()` (both in
+`scripts/render_docx.py`), then writes `output/resumes/*.docx` plus a `.txt` mirror. If the
+`.docx` is missing, stage 2 falls back to `config/resume.txt` and writes a `.txt` only.
 
-```jinja
-{{ name }}
-{{ contact }}
-{{ summary }}
-
-Skills (inline):  {% for s in skills %}{{ s }}{% if not loop.last %} • {% endif %}{% endfor %}
-
-Experience:
-{% for job in experience %}
-{{ job.company }} | {{ job.title }} | {{ job.dates }}
-{% for b in job.bullets %}
-{{ b }}
-{% endfor %}
-{% endfor %}
-
-Education:
-{% for ed in education %}
-{{ ed.institution }} | {{ ed.degree }} | {{ ed.year }}
-{% endfor %}
-```
-
-Style the fonts/colours/spacing however you like in Word — as long as the tags
-stay intact, tailoring keeps working. If the template is missing, stage 2 falls
-back to writing a `.txt` only.
-
-> The template is git-ignored (it's personal content). Generate or add your own
-> on each checkout.
+> The base resume is git-ignored (personal content) — add your own on each checkout.
+> (`scripts/make_resume_template.py` + the legacy `docxtpl` render path still exist but are
+> not used by the default tailoring flow.)
 
 ---
 
@@ -181,11 +158,12 @@ CREATE TABLE jobs (
     job_url                 TEXT UNIQUE NOT NULL,
     status                  TEXT NOT NULL DEFAULT 'Scraped'
                             CHECK (status IN (
-                                'Scraped','Resume Tailored','Applied',
+                                'Interested','Scraped','Reviewed','Resume Tailored','Applied',
                                 'Outreach Sent','Interview Scheduled','Offer Received'
                             )),
     date_scraped            DATE NOT NULL DEFAULT CURRENT_DATE,
     ats_match_score         NUMERIC(5,2),
+    job_description         TEXT,
     tailored_resume_link    TEXT,
     date_applied            DATE,
     hiring_manager          TEXT,
@@ -205,6 +183,23 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER jobs_updated_at
 BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 ```
+
+> **Upgrading an existing table?** Add the JD cache column and widen the status check:
+> ```sql
+> ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_description text;
+> -- and ensure 'Interested' and 'Reviewed' are allowed by your status CHECK
+> ```
+
+### Notion intake & review statuses
+
+Two statuses are set by you in Notion, not by the scripts:
+- **`Interested`** — add a job by hand (Job Title + Company + Job URL); the next scrape
+  ingests, enriches, and scores it (`python run.py --ingest` runs only this).
+- **`Reviewed`** — approve a scraped job for tailoring; `python run.py --evaluate` syncs
+  these back to Supabase and runs stages 2–4.
+
+In the Notion DB's **Status** select, add `Interested` and `Reviewed` as options (type them
+once into the select to create them).
 
 ---
 
@@ -233,9 +228,11 @@ key, Notion key (optional), Notion DB ID, resume file, and installed packages. F
 
 ### Legacy stage runner — `run.py`
 ```bash
-python run.py                                   # morning pipeline (stages 1, 2, 4)
+python run.py                                   # Step 1: scrape + review digest (stages 1, 4) — then review in Notion
+python run.py --ingest                          # ingest only Notion "Interested" jobs → "Scraped"
+python run.py --evaluate                        # Step 2: sync "Reviewed", then tailor + outreach + digest
 python run.py --stage 1                          # scrape LinkedIn → store
-python run.py --stage 2 --min-score 65           # tailor resumes (≥65 ATS only)
+python run.py --stage 2 --min-score 65           # tailor Reviewed resumes (≥65 ATS only)
 python run.py --stage 3 --company "Stripe"       # cold outreach
 python run.py --stage 3 --company "Google" --contact "Jane Doe"   # warm referral
 python run.py --stage 4 --send                   # digest, emailed via Gmail
@@ -260,14 +257,14 @@ python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 18500
 
 | Path | Contents |
 |------|----------|
-| `output/resumes/` | Tailored resumes per job — `.docx` (from template) + `.txt` mirror |
+| `output/resumes/` | Tailored resumes per job — `.docx` (in-place edits of your base resume) + `.txt` mirror |
 | `output/outreach/` | Cold + warm email drafts (`.txt`) — reviewed before sending |
 | `output/prep_guides/` | Interview prep guides (`.html`) |
 | `output/negotiation/` | Negotiation briefs (`.html`) |
 | `output/digest_YYYY-MM-DD.html` | Daily digest |
 
 Status pipeline (tracked in Supabase, mirrored to Notion):
-`Scraped → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
+`Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
 ---
 
