@@ -251,6 +251,76 @@ def sync_notion_to_supabase() -> int:
     return updated
 
 
+# ── Notion intake (manually-added "Interested" jobs) ─────────
+
+def _notion_plain_text(prop: dict) -> str:
+    """Extract plain text from a Notion title or rich_text property dict."""
+    if not prop:
+        return ""
+    parts = prop.get("title") or prop.get("rich_text") or []
+    return "".join(p.get("plain_text", "") for p in parts).strip()
+
+
+def get_notion_jobs_by_status(status: str) -> list[dict]:
+    """Return Notion pages with the given Status (e.g. 'Interested') that the
+    user added by hand. Each dict: {notion_page_id, url, title, company, location}.
+    Skips rows without a Job URL. Returns [] if Notion isn't configured."""
+    if not NOTION_API_KEY:
+        return []
+    jobs = []
+    try:
+        import requests
+        headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
+        body = {"filter": {"property": "Status", "select": {"equals": status}}}
+        resp = requests.post(
+            f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+            json=body,
+            headers=headers,
+        )
+        results = resp.json().get("results", []) if resp.ok else []
+        for page in results:
+            props = page.get("properties", {})
+            url = (props.get("Job URL") or {}).get("url")
+            if not url:
+                continue
+            jobs.append({
+                "notion_page_id": page["id"],
+                "url":            url,
+                "title":          _notion_plain_text(props.get("Job Title")),
+                "company":        _notion_plain_text(props.get("Company")),
+                "location":       _notion_plain_text(props.get("Location")),
+            })
+    except Exception as e:
+        log(f"[get_notion_jobs_by_status] warning: {e}")
+    return jobs
+
+
+def _notion_promote_to_scraped(notion_page_id: str, job: dict):
+    """Update an EXISTING manually-added Notion page to Status='Scraped',
+    set ATS score + Date Scraped, and backfill Title/Company/Location if blank."""
+    if not NOTION_API_KEY or not notion_page_id:
+        return
+    try:
+        from notion_client import Client as NotionClient
+        notion = NotionClient(auth=NOTION_API_KEY)
+        props = {
+            "Status":       {"select": {"name": "Scraped"}},
+            "Date Scraped": {"date": {"start": today()}},
+        }
+        if job.get("ats_score"):
+            props["ATS Match Score"] = {"number": float(job["ats_score"])}
+        # Backfill text fields only when the user left them blank
+        if job.get("title"):
+            props["Job Title"] = {"title": [{"text": {"content": job["title"]}}]}
+        if job.get("company"):
+            props["Company"] = {"rich_text": [{"text": {"content": job["company"]}}]}
+        if job.get("location"):
+            props["Location"] = {"rich_text": [{"text": {"content": job["location"]}}]}
+        notion.pages.update(page_id=notion_page_id, properties=props)
+    except Exception:
+        pass
+
+
 # ── Public DB interface ───────────────────────────────────────
 
 def db_find_job_by_url(url: str) -> str | None:
@@ -283,6 +353,29 @@ def db_add_job(job: dict) -> str:
     if notion_page_id:
         db.table("jobs").update({"notion_page_id": notion_page_id}).eq("id", supabase_id).execute()
 
+    return supabase_id
+
+
+def db_add_job_linked(job: dict, notion_page_id: str) -> str:
+    """Insert a Supabase row for a job whose Notion page ALREADY exists (a
+    manually-added 'Interested' row). Unlike db_add_job, this does not create a
+    new Notion page — it links to the existing one and promotes it to 'Scraped'.
+    Returns the Supabase id."""
+    db = _get_db()
+    row = {
+        "job_title":        job.get("title", ""),
+        "company":          job.get("company", ""),
+        "location":         job.get("location", ""),
+        "job_url":          job["url"],
+        "status":           "Scraped",
+        "date_scraped":     today(),
+        "ats_match_score":  float(job.get("ats_score") or 0),
+        "job_description":  job.get("description", "") or "",
+        "notion_page_id":   notion_page_id,
+    }
+    res = db.table("jobs").insert(row).execute()
+    supabase_id = res.data[0]["id"]
+    _notion_promote_to_scraped(notion_page_id, job)
     return supabase_id
 
 

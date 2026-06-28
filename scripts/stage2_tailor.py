@@ -26,9 +26,12 @@ from scripts.utils import (
 )
 from scripts.render_docx import extract_docx_text, apply_docx_edits
 
-SYSTEM_PROMPT = """You are an expert resume writer and ATS optimization specialist.
-Your task: suggest targeted edits to an existing resume to incorporate missing ATS keywords.
-The "old" text must be verbatim from the resume — never invent experience, titles, or dates.
+SYSTEM_PROMPT = """You are a senior technical recruiter and ATS optimization expert.
+Your task: maximize the ATS match score between a candidate's resume and a target job description.
+Rules you must never break:
+  - The "old" field must be EXACT verbatim text copied from the resume — character for character
+  - Never invent experience, employers, degrees, dates, or metrics
+  - Never change the candidate's name, contact info, company names, or employment dates
 You always respond with valid JSON only — no prose, no markdown fences."""
 
 
@@ -89,7 +92,7 @@ def tailor_resume(resume_text: str, jd: str, job: dict) -> list:
     }
     jd_block = {
         "type": "text",
-        "text": f"""Here is the job description I am applying to:
+        "text": f"""Target job:
 
 <job_description>
 Company: {job['company']}
@@ -98,27 +101,41 @@ Role: {job['title']}
 {jd}
 </job_description>
 
-Identify the minimal, highest-impact changes to incorporate missing ATS keywords into my resume.
+STEP 1 — Silently extract from the JD:
+  a) The EXACT job title as written in the JD (e.g. "Staff Software Engineer", "Senior Backend Engineer")
+  b) Must-have tech keywords present in the JD but MISSING from my resume (focus on: languages, frameworks, tools, patterns, methodologies, cloud services, ML/AI terms)
+  c) The top 3 high-signal bullets in my resume that are closest to the JD's core requirements
 
-Rules:
-1. The "old" field must be the EXACT verbatim text from my resume — copy it character-for-character
-2. Do NOT invent experience, employers, job titles, dates, degrees, or metrics
-3. Only update existing bullet points / the summary to naturally include missing keywords
-4. Keep my name, contact details, company names, titles, and dates unchanged
-5. Prefer updating the summary and a few high-signal bullets over many shallow changes
+STEP 2 — Produce targeted edits using only what you extracted:
 
-Return ONLY a JSON object (no markdown, no commentary):
+Edit priority order (highest impact first):
+  1. TITLE LINE: Replace the header title "Senior Software Engineer" with the exact role title from the JD if it differs. This edit is REQUIRED unless the title is identical.
+  2. PROFESSIONAL SUMMARY: Rewrite to front-load the top 3–5 missing keywords from the JD while keeping all real metrics and facts from the original. Match the seniority and domain framing of the JD.
+  3. TECHNICAL SKILLS: Add missing JD keywords into the most relevant skill category. Do not add a category; append to existing lines only.
+  4. TOP BULLETS (2–4 max): Inject 1–2 missing keywords per bullet into the highest-signal bullets. Rewrite minimally — change only what's needed to include the keyword naturally.
+
+Hard constraints:
+  - "old" must be copied verbatim from my resume, character-for-character including punctuation
+  - Do not invent tools, technologies, companies, metrics, or dates
+  - Do not change bullet meaning — only add missing terminology where it genuinely fits
+  - If a keyword cannot be added truthfully to any existing content, skip it
+  - Prefer depth over breadth: 5 strong edits beats 15 shallow ones
+
+Return ONLY this JSON (no markdown fences, no commentary):
 {{
+  "keywords_injected": ["keyword1", "keyword2"],
   "edits": [
-    {{"old": "exact existing text from resume", "new": "updated text with ATS keywords"}}
+    {{"old": "exact verbatim text from resume", "new": "updated text with ATS keywords", "reason": "one-line rationale"}}
   ]
 }}""",
     }
     raw = ai_chat_blocks([resume_block, jd_block], system=SYSTEM_PROMPT, max_tokens=4000, quality=True)
     data = parse_json_response(raw)
     if isinstance(data, dict):
-        return data.get("edits", [])
-    return []
+        keywords = data.get("keywords_injected", [])
+        edits = data.get("edits", [])
+        return edits, keywords
+    return [], []
 
 
 # ── Save tailored resume to file ─────────────────────────────
@@ -171,8 +188,10 @@ def run(min_score: int = 0):
             continue
 
         # Ask Claude for targeted keyword edits
-        edits = tailor_resume(resume_text, jd, job)
+        edits, keywords = tailor_resume(resume_text, jd, job)
         log(f"  ↳ {len(edits)} edit(s) suggested")
+        if keywords:
+            log(f"  ↳ Keywords injected: {', '.join(keywords)}")
 
         # Apply edits to a copy of Achyuth_Resume.docx
         file_path = save_resume(edits, job)
