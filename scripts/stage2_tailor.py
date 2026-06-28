@@ -79,7 +79,7 @@ def fetch_jd(url: str) -> str:
 
 # ── Tailor resume using Claude ───────────────────────────────
 
-def tailor_resume(resume_text: str, jd: str, job: dict) -> list:
+def tailor_resume(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
     """Return a list of {old, new} text edits to apply to the base resume .docx.
 
     The resume_text is extracted verbatim from Achyuth_Resume.docx so Claude
