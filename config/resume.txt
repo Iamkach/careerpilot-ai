@@ -1,5 +1,5 @@
 ACHYUTH YALLAMBHOTLA
-Plano, TX | kachyuth06@gmail.com | (361) 228-1825 | linkedin.com/in/krishna-achyuth
+kachyuth06@gmail.com | (361) 228-1825 | linkedin.com/in/krishna-achyuth | github.com/Iamkach
 Senior Software Engineer
 
 PROFESSIONAL SUMMARY
@@ -31,6 +31,16 @@ Softqlud Infotech Solutions, Hyderabad, India | Associate Software Engineer | 05
 
 EDUCATION
 Texas A&M University – Kingsville, Kingsville, TX | Master of Science, Computer Science | 2021 – 2022
+
+PROJECTS
+Enhanced FC BERT — Greenfield Desktop Application | github.com/exfo-invas
+- Architected and delivered a greenfield cross-platform desktop application for Fiber Channel Bit Error Rate Testing, bundling Angular 19, Electron 22, and a Java Spring Boot 3.5 backend into a single installable executable shipped to customers.
+- Designed a real-time metrics pipeline polling SCPI-protocol network hardware via Telnet at 1-second intervals for traffic disruption, frame loss, latency, and throughput; implemented hourly CSV aggregation and auto-generated PDF test reports.
+- Built a secure IPC bridge between Electron's main process and the Angular renderer, enforcing least-privilege access to Node.js/filesystem APIs; packaged and validated cross-platform builds for Windows, Linux, and macOS.
+
+Fitnex — AI Fitness Coaching App | github.com/Iamkach
+- Built an agentic AI fitness coaching app using Claude API with multi-turn conversation, personalized workout plan generation, and adaptive goal tracking; deployed on AWS with a React frontend and Python/FastAPI backend.
+- Implemented prompt caching and streaming to reduce latency by 40% and cut API costs; designed the tool-use loop enabling Claude to query user history, adjust plans, and explain reasoning in real time.
 
 TECHNICAL SKILLS
 Languages & Frameworks: Java, Python, JavaScript, TypeScript, Node.js, PHP, Spring Boot, Angular, React.js, Microservices
