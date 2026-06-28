@@ -146,6 +146,18 @@ def stage6(args):
 
 # ── Full morning routine ──────────────────────────────────────
 
+def ingest_routine(args):
+    """Pull only the jobs hand-picked in Notion (Status=Interested), score them,
+    and promote them to Scraped — without a full LinkedIn scrape."""
+    print("\n📥 INGEST — Notion 'Interested' jobs")
+    print("=" * 45)
+    from scripts.utils import load_resume
+    from scripts.stage1_scrape import ingest_interested_from_notion
+    n = ingest_interested_from_notion(load_resume())
+    print(f"\n✅ Ingested {n} 'Interested' job(s) → Scraped.")
+    print("   → Review them in Notion, set Status=Reviewed, then run: python run.py --evaluate")
+
+
 def morning_routine(args):
     """Scrape + score only. Sends a review digest so you can mark good jobs as Reviewed before tailoring."""
     print("\n☀️  MORNING JOB SEARCH PIPELINE")
@@ -199,6 +211,7 @@ def main():
     parser.add_argument("--offer",        type=float, default=0)
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
     parser.add_argument("--evaluate",     action="store_true",       help="Sync Reviewed jobs from Notion then tailor + outreach + digest")
+    parser.add_argument("--ingest",       action="store_true",       help="Ingest only Notion 'Interested' jobs (score + promote to Scraped)")
     args = parser.parse_args()
 
     sys.path.insert(0, str(ROOT))
@@ -209,7 +222,9 @@ def main():
 
     stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6}
 
-    if args.evaluate:
+    if args.ingest:
+        ingest_routine(args)
+    elif args.evaluate:
         evaluate_routine(args)
     elif args.stage:
         fn = stages.get(args.stage)
