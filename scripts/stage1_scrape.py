@@ -17,7 +17,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
-from scripts.utils import claude_chat, parse_json_response, load_resume, db_add_job, db_find_job_by_url, log, today
+from scripts.utils import (
+    claude_chat, parse_json_response, load_resume, db_add_job, db_add_job_linked,
+    db_find_job_by_url, get_notion_jobs_by_status, _notion_promote_to_scraped,
+    log, today,
+)
 
 # Apify REST API addresses actors as username~actorname (NOT username/actorname,
 # which 404s). curious_coder~linkedin-jobs-scraper is the LinkedIn jobs scraper.
@@ -27,18 +31,14 @@ APIFY_BASE  = "https://api.apify.com/v2"
 
 # ── 1. Scrape LinkedIn via Apify ─────────────────────────────
 
-def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
-    log(f"Scraping LinkedIn for: '{role}' in '{city}'")
+def _apify_run(urls: list[str], count: int) -> list[dict]:
+    """Run the Apify LinkedIn scraper for the given search/job URLs and return
+    the dataset items. Polls up to 30×10s until the run finishes."""
     run_url = f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs"
-    search_url = (
-        f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={requests.utils.quote(role)}"
-        f"&location={requests.utils.quote(city)}&f_TPR=r86400"
-    )
     payload = {
         # Actor schema: `urls` (array of LinkedIn search/job URLs) + `count` (min 10).
-        "urls": [search_url],
-        "count": max(max_results, 10),
+        "urls": urls,
+        "count": max(count, 10),
         "scrapeCompany": False,
     }
     r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN})
@@ -59,6 +59,64 @@ def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
     dataset_id = status_r.json()["data"]["defaultDatasetId"]
     items_r = requests.get(f"{APIFY_BASE}/datasets/{dataset_id}/items", params={"token": APIFY_API_TOKEN})
     return items_r.json()
+
+
+def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
+    log(f"Scraping LinkedIn for: '{role}' in '{city}'")
+    search_url = (
+        f"https://www.linkedin.com/jobs/search/"
+        f"?keywords={requests.utils.quote(role)}"
+        f"&location={requests.utils.quote(city)}&f_TPR=r86400"
+    )
+    return _apify_run([search_url], max_results)
+
+
+# ── LinkedIn job-id helpers (match Apify items back to requested URLs) ──
+
+_JOB_ID_RE = re.compile(r"(?:jobs/view/|currentJobId=|/view/)(\d+)|(\d{8,})")
+
+
+def _linkedin_job_id(url: str) -> str:
+    """Extract the numeric LinkedIn job id from a job URL, or '' if none."""
+    m = _JOB_ID_RE.search(url or "")
+    if not m:
+        return ""
+    return m.group(1) or m.group(2) or ""
+
+
+def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
+    """Enrich individual job-view URLs via one Apify run. Returns a map keyed by
+    the original requested URL → {title, company, location, description}. URLs
+    that Apify can't resolve are simply absent from the map."""
+    if not urls:
+        return {}
+    try:
+        items = _apify_run(urls, len(urls))
+    except Exception as e:
+        log(f"  ✗ Apify enrichment failed: {e}")
+        return {}
+
+    # Index returned items by LinkedIn job id
+    by_id = {}
+    for job in items:
+        item_url = job.get("link") or job.get("jobUrl") or job.get("url") or ""
+        jid = _linkedin_job_id(item_url)
+        if jid:
+            by_id[jid] = job
+
+    enriched = {}
+    for url in urls:
+        job = by_id.get(_linkedin_job_id(url))
+        if not job:
+            continue
+        enriched[url] = {
+            "title":       job.get("title") or job.get("positionName") or "",
+            "company":     job.get("companyName") or job.get("company") or "",
+            "location":    job.get("location") or job.get("formattedLocation") or job.get("jobLocation") or "",
+            "description": (job.get("descriptionText") or job.get("descriptionHtml")
+                           or job.get("description") or job.get("jobDescription") or ""),
+        }
+    return enriched
 
 
 # ── US location filter ───────────────────────────────────────
@@ -187,6 +245,66 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
         return [{"url": j["url"], "score": 50, "missing_keywords": [], "sponsorship": "unknown"} for j in jobs]
 
 
+# ── 2b. Ingest manually-added "Interested" jobs from Notion ──
+
+def ingest_interested_from_notion(resume: str) -> int:
+    """Pull jobs the user marked 'Interested' in Notion, enrich their JD via
+    Apify, score them, and promote them to 'Scraped' (linked to the existing
+    Notion page). Hand-picked jobs bypass the company/location/sponsorship
+    filters. Returns the number of jobs ingested."""
+    pages = get_notion_jobs_by_status("Interested")
+    if not pages:
+        return 0
+
+    log(f"  Found {len(pages)} 'Interested' job(s) in Notion")
+
+    # Split out URLs already in the DB — just retire their Notion page.
+    fresh = []
+    for page in pages:
+        if db_find_job_by_url(page["url"]):
+            log(f"  ⊘ Already in DB, retiring Notion row: {page['url']}")
+            _notion_promote_to_scraped(page["notion_page_id"], page)
+            continue
+        fresh.append(page)
+
+    if not fresh:
+        return 0
+
+    # One Apify run to enrich all fresh URLs with real title/company/JD.
+    enriched = scrape_job_urls([p["url"] for p in fresh])
+
+    candidates = []
+    for page in fresh:
+        e = enriched.get(page["url"], {})
+        candidates.append({
+            "url":            page["url"],
+            "notion_page_id": page["notion_page_id"],
+            "title":          e.get("title") or page["title"],
+            "company":        e.get("company") or page["company"],
+            "location":       e.get("location") or page["location"],
+            "description":    e.get("description", ""),
+        })
+
+    log(f"  Scoring {len(candidates)} Interested job(s) in one batch call…")
+    score_by_url = {s["url"]: s for s in score_jobs_batch(candidates, resume)}
+
+    ingested = 0
+    for job in candidates:
+        s = score_by_url.get(job["url"], {"score": 50})
+        db_add_job_linked({
+            "title":       job["title"],
+            "company":     job["company"],
+            "location":    job["location"],
+            "url":         job["url"],
+            "ats_score":   s["score"],
+            "description": job["description"],
+        }, job["notion_page_id"])
+        ingested += 1
+        log(f"  ✓ Ingested: {job['company']} — {job['title']} (ATS: {s['score']})")
+
+    return ingested
+
+
 # ── 3. Main pipeline ─────────────────────────────────────────
 
 def run():
@@ -196,6 +314,13 @@ def run():
     skipped_sponsorship = 0
     skipped_company = 0
     skipped_location = 0
+
+    # First, fold in any jobs the user hand-picked in Notion (Status=Interested)
+    try:
+        ingested = ingest_interested_from_notion(resume)
+    except Exception as e:
+        log(f"  ✗ Notion ingestion failed: {e}")
+        ingested = 0
 
     for role in TARGET_ROLES:
         try:
@@ -267,9 +392,9 @@ def run():
 
         time.sleep(2)  # polite pause between role queries
 
-    log(f"\nDone. Added {added} new jobs. Skipped {skipped} duplicates, "
-        f"{skipped_company} non-product companies, {skipped_location} non-US locations, "
-        f"{skipped_sponsorship} for no sponsorship.")
+    log(f"\nDone. Added {added} new jobs ({ingested} ingested from Notion 'Interested'). "
+        f"Skipped {skipped} duplicates, {skipped_company} non-product companies, "
+        f"{skipped_location} non-US locations, {skipped_sponsorship} for no sponsorship.")
     log(f"View your tracker: https://www.notion.so/{NOTION_DB_ID.replace('-', '')}")
 
 
