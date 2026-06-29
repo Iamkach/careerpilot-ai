@@ -27,6 +27,13 @@ def _resolve_model(quality: bool) -> str:
     return _active_model()
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """OpenAI gpt-5 / o-series models use `max_completion_tokens` and reject
+    the legacy `max_tokens` param."""
+    m = (model or "").lower()
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def _chat_claude(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -49,7 +56,7 @@ def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = Fals
     genai.configure(api_key=GEMINI_API_KEY)
     config = genai.types.GenerationConfig(max_output_tokens=max_tokens)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
-    model = genai.GenerativeModel(_active_model())
+    model = genai.GenerativeModel(_resolve_model(quality))
     resp = model.generate_content(full_prompt, generation_config=config)
     return resp.text
 
@@ -57,14 +64,17 @@ def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = Fals
 def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
+    model = _resolve_model(quality)
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
+    # gpt-5 / reasoning models reject `max_tokens` and require `max_completion_tokens`.
+    token_key = "max_completion_tokens" if _is_reasoning_model(model) else "max_tokens"
     resp = client.chat.completions.create(
-        model=_active_model(),
+        model=model,
         messages=messages,
-        max_tokens=max_tokens,
+        **{token_key: max_tokens},
     )
     return resp.choices[0].message.content
 
