@@ -10,9 +10,10 @@ from config.settings import *
 
 # ── Default models per provider ─────────────────────────────
 _DEFAULTS = {
-    "claude": "claude-opus-4-6",
-    "gemini": "gemini-2.0-flash",
-    "codex":  "gpt-4o",
+    "claude":      "claude-opus-4-6",
+    "claude_code": "sonnet",
+    "gemini":      "gemini-2.0-flash",
+    "codex":       "gpt-4o",
 }
 
 def _active_model() -> str:
@@ -51,6 +52,68 @@ def _chat_claude(prompt: str, system: str, max_tokens: int, quality: bool = Fals
     return resp.content[0].text
 
 
+def _find_claude_cli() -> str:
+    """Locate the Claude Code CLI executable, robust to Windows .cmd/.exe shims."""
+    import shutil
+    for name in ("claude", "claude.cmd", "claude.exe"):
+        path = shutil.which(name)
+        if path:
+            return path
+    raise RuntimeError(
+        "Claude Code CLI not found on PATH. Install it and run `claude /login` so the "
+        "`claude_code` provider can use your subscription. (Looked for: claude, claude.cmd, claude.exe)"
+    )
+
+
+def _chat_claude_code(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
+    """Route a single prompt->text call through the `claude -p` CLI, which uses the
+    logged-in Claude Code subscription (no metered API key). The user `prompt` is passed
+    via stdin to avoid the Windows command-line length limit; the system prompt (which can
+    be large for stages 2/5) is written to a temp file and passed via --system-prompt-file.
+    Note: prompt caching is not available over this path; `max_tokens` has no CLI knob."""
+    import subprocess, tempfile
+
+    cli = _find_claude_cli()
+    cmd = [
+        cli, "-p",
+        "--output-format", "json",
+        "--model", _resolve_model(quality),
+        "--max-turns", "1",
+        "--tools", "",
+    ]
+
+    sys_file = None
+    try:
+        if system:
+            sys_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", encoding="utf-8", delete=False
+            )
+            sys_file.write(system)
+            sys_file.close()
+            cmd += ["--system-prompt-file", sys_file.name]
+
+        proc = subprocess.run(
+            cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude CLI failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+            )
+
+        out = proc.stdout.strip()
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            return out  # not the expected envelope — hand back raw text
+        return data.get("result", out) if isinstance(data, dict) else out
+    finally:
+        if sys_file is not None:
+            try:
+                os.unlink(sys_file.name)
+            except OSError:
+                pass
+
+
 def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
@@ -82,15 +145,16 @@ def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False
 # ── Public chat interface ────────────────────────────────────
 
 _BACKENDS = {
-    "claude": _chat_claude,
-    "gemini": _chat_gemini,
-    "codex":  _chat_codex,
+    "claude":      _chat_claude,
+    "claude_code": _chat_claude_code,
+    "gemini":      _chat_gemini,
+    "codex":       _chat_codex,
 }
 
 def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
     backend = _BACKENDS.get(AI_PROVIDER)
     if not backend:
-        raise ValueError(f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Choose: claude, gemini, codex")
+        raise ValueError(f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Choose: claude, claude_code, gemini, codex")
     return backend(prompt, system, max_tokens, quality)
 
 # Alias so all existing stage scripts continue to work without changes
@@ -99,7 +163,9 @@ claude_chat = ai_chat
 
 def ai_chat_blocks(blocks: list, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
     """Claude-only: send structured content blocks supporting per-block cache_control.
-    Falls back to plain ai_chat for non-Claude providers (cache_control is ignored)."""
+    Falls back to plain ai_chat for non-Claude providers (cache_control is ignored).
+    Only the metered "claude" API provider uses the structured/cached path; "claude_code"
+    (subscription CLI) joins blocks like gemini/codex since per-block caching is unsupported."""
     if AI_PROVIDER != "claude":
         text = "\n\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         return ai_chat(text, system=system, max_tokens=max_tokens, quality=quality)
