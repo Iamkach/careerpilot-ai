@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-stage1_scrape.py — Scrape fresh LinkedIn jobs & log to Notion
-─────────────────────────────────────────────────────────────
+stage1_scrape.py — Scrape fresh LinkedIn + Indeed jobs & log to Notion
+───────────────────────────────────────────────────────────────────────
 What it does:
-  1. Runs Apify LinkedIn scraper for each target role
-  2. Filters to jobs posted in last 24–48h
-  3. Scores each job against your resume using Claude
-  4. Skips duplicates already in Notion
-  5. Adds new jobs to Notion tracker with Status = "Scraped"
+  1. Runs Apify LinkedIn scraper (bebity~linkedin-jobs-scraper, 25/role)
+     + Indeed scraper (bebity~indeed-scraper, 25/role) for each target role
+  2. Applies a 3-layer pre-filter BEFORE scoring (saves API cost):
+       a. Company name exact denylist  (SKIP_COMPANIES)
+       b. Company name keyword filter  (SKIP_COMPANY_KEYWORDS)
+       c. Job title keyword filter     (SKIP_TITLE_KEYWORDS)
+       d. US-location check
+       e. Deterministic no-sponsorship regex on the full JD
+  3. Scores surviving candidates in one batched AI call (ATS + sponsorship)
+  4. Skips duplicates already in Supabase
+  5. Adds new jobs to Supabase + Notion tracker with Status = "Scraped"
 
 Run:  python scripts/stage1_scrape.py
 """
 
-import sys, time, re, requests
+import sys, time, re, requests, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -23,64 +29,136 @@ from scripts.utils import (
     log, today,
 )
 
-# Apify REST API addresses actors as username~actorname (NOT username/actorname,
-# which 404s). curious_coder~linkedin-jobs-scraper is the LinkedIn jobs scraper.
-APIFY_ACTOR = "curious_coder~linkedin-jobs-scraper"
-APIFY_BASE  = "https://api.apify.com/v2"
+APIFY_BASE = "https://api.apify.com/v2"
+
+# ── Apify actors ─────────────────────────────────────────────
+# bebity~linkedin-jobs-scraper: well-maintained, supports maxItems up to 100+
+LINKEDIN_ACTOR = "bebity~linkedin-jobs-scraper"
+# bebity~indeed-scraper: free Indeed actor; good field coverage
+INDEED_ACTOR   = "bebity~indeed-scraper"
+
+# Per-role result caps (free Apify tier: ~5 CU/month, each run ~0.05–0.10 CU)
+LINKEDIN_MAX = 25
+INDEED_MAX   = 25
 
 
-# ── 1. Scrape LinkedIn via Apify ─────────────────────────────
+# ── Generic Apify runner ─────────────────────────────────────
 
-def _apify_run(urls: list[str], count: int) -> list[dict]:
-    """Run the Apify LinkedIn scraper for the given search/job URLs and return
-    the dataset items. Polls up to 30×10s until the run finishes."""
-    run_url = f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs"
-    payload = {
-        # Actor schema: `urls` (array of LinkedIn search/job URLs) + `count` (min 10).
-        "urls": urls,
-        "count": max(count, 10),
-        "scrapeCompany": False,
-    }
+def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
+    """Start an Apify actor run, poll until done, return dataset items."""
+    run_url = f"{APIFY_BASE}/acts/{actor}/runs"
     r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN})
     r.raise_for_status()
     run_id = r.json()["data"]["id"]
 
-    # Poll until finished
-    for _ in range(30):
+    for _ in range(poll):
         time.sleep(10)
-        status_r = requests.get(f"{APIFY_BASE}/actor-runs/{run_id}", params={"token": APIFY_API_TOKEN})
+        status_r = requests.get(
+            f"{APIFY_BASE}/actor-runs/{run_id}",
+            params={"token": APIFY_API_TOKEN},
+        )
         status = status_r.json()["data"]["status"]
-        log(f"  Apify run status: {status}")
+        log(f"  Apify [{actor}] status: {status}")
         if status == "SUCCEEDED":
             break
         if status in ("FAILED", "ABORTED"):
             raise RuntimeError(f"Apify run {status}")
 
     dataset_id = status_r.json()["data"]["defaultDatasetId"]
-    items_r = requests.get(f"{APIFY_BASE}/datasets/{dataset_id}/items", params={"token": APIFY_API_TOKEN})
-    return items_r.json()
-
-
-def scrape_jobs(role: str, city: str, max_results: int = 10) -> list[dict]:
-    log(f"Scraping LinkedIn for: '{role}' in '{city}'")
-    search_url = (
-        f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={requests.utils.quote(role)}"
-        f"&location={requests.utils.quote(city)}&f_TPR=r86400"
+    items_r = requests.get(
+        f"{APIFY_BASE}/datasets/{dataset_id}/items",
+        params={"token": APIFY_API_TOKEN},
     )
-    return _apify_run([search_url], max_results)
+    return items_r.json() or []
 
 
-# ── LinkedIn job-id helpers (match Apify items back to requested URLs) ──
+# ── 1a. LinkedIn scraper (bebity~linkedin-jobs-scraper) ──────
 
-# Prefer an explicit job-id marker; only fall back to a standalone long number
-# that is its own path segment (delimited), never digits buried in query params.
-_JOB_ID_RE = re.compile(r"(?:jobs/view/|currentJobId=|/view/)(\d+)")
+def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
+    """Scrape LinkedIn for `role` posted in the last 24 h."""
+    log(f"  [LinkedIn] Scraping: '{role}'")
+    payload = {
+        "queries":    [role],
+        "location":   "United States",
+        "timePosted": "past24Hours",
+        "maxItems":   max_results,
+        "scrapeCompany": False,
+    }
+    try:
+        items = _apify_run(LINKEDIN_ACTOR, payload)
+    except Exception as e:
+        log(f"  ✗ LinkedIn scrape failed for '{role}': {e}")
+        return []
+
+    results = []
+    for job in items:
+        url = (
+            job.get("jobUrl") or job.get("link") or
+            job.get("url")    or job.get("applyUrl") or ""
+        )
+        if not url:
+            continue
+        results.append({
+            "url":         url,
+            "title":       job.get("title") or job.get("positionName") or role,
+            "company":     job.get("companyName") or job.get("company") or "",
+            "location":    (job.get("location") or job.get("formattedLocation")
+                            or job.get("jobLocation") or ""),
+            "description": (job.get("descriptionText") or job.get("descriptionHtml")
+                            or job.get("description")  or job.get("jobDescription") or ""),
+            "source":      "linkedin",
+        })
+    log(f"  [LinkedIn] Got {len(results)} listings for '{role}'")
+    return results
+
+
+# ── 1b. Indeed scraper (bebity~indeed-scraper) ───────────────
+
+def scrape_indeed(role: str, max_results: int = INDEED_MAX) -> list[dict]:
+    """Scrape Indeed for `role` in the US posted in the last day."""
+    log(f"  [Indeed] Scraping: '{role}'")
+    payload = {
+        "position":            role,
+        "country":             "us",
+        "location":            "",          # blank = nationwide
+        "maxItems":            max_results,
+        "parseCompanyDetails": False,
+        "saveOnlyUniqueItems": True,
+        "followApplyRedirects": False,
+    }
+    try:
+        items = _apify_run(INDEED_ACTOR, payload)
+    except Exception as e:
+        log(f"  ✗ Indeed scrape failed for '{role}': {e}")
+        return []
+
+    results = []
+    for job in items:
+        url = (
+            job.get("url") or job.get("jobUrl") or
+            job.get("externalApplyLink") or ""
+        )
+        if not url:
+            continue
+        results.append({
+            "url":         url,
+            "title":       job.get("positionName") or job.get("title") or role,
+            "company":     job.get("company") or "",
+            "location":    job.get("location") or "",
+            "description": job.get("description") or "",
+            "source":      "indeed",
+        })
+    log(f"  [Indeed] Got {len(results)} listings for '{role}'")
+    return results
+
+
+# ── 1c. Enrich individual LinkedIn job URLs (for Notion intake) ──
+
+_JOB_ID_RE          = re.compile(r"(?:jobs/view/|currentJobId=|/view/)(\d+)")
 _JOB_ID_FALLBACK_RE = re.compile(r"/(\d{8,})(?:[/?#]|$)")
 
 
 def _linkedin_job_id(url: str) -> str:
-    """Extract the numeric LinkedIn job id from a job URL, or '' if none."""
     url = url or ""
     m = _JOB_ID_RE.search(url)
     if m:
@@ -90,18 +168,22 @@ def _linkedin_job_id(url: str) -> str:
 
 
 def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
-    """Enrich individual job-view URLs via one Apify run. Returns a map keyed by
-    the original requested URL → {title, company, location, description}. URLs
-    that Apify can't resolve are simply absent from the map."""
+    """Enrich individual LinkedIn job-view URLs via one Apify run.
+    Returns a map: original URL → {title, company, location, description}."""
     if not urls:
         return {}
+    payload = {
+        "urls":          urls,
+        "count":         max(len(urls), 10),
+        "scrapeCompany": False,
+    }
     try:
-        items = _apify_run(urls, len(urls))
+        # Fall back to the reliable url-based actor for enrichment
+        items = _apify_run("curious_coder~linkedin-jobs-scraper", payload)
     except Exception as e:
         log(f"  ✗ Apify enrichment failed: {e}")
         return {}
 
-    # Index returned items by LinkedIn job id
     by_id = {}
     for job in items:
         item_url = job.get("link") or job.get("jobUrl") or job.get("url") or ""
@@ -117,14 +199,15 @@ def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
         enriched[url] = {
             "title":       job.get("title") or job.get("positionName") or "",
             "company":     job.get("companyName") or job.get("company") or "",
-            "location":    job.get("location") or job.get("formattedLocation") or job.get("jobLocation") or "",
+            "location":    (job.get("location") or job.get("formattedLocation")
+                            or job.get("jobLocation") or ""),
             "description": (job.get("descriptionText") or job.get("descriptionHtml")
-                           or job.get("description") or job.get("jobDescription") or ""),
+                            or job.get("description") or job.get("jobDescription") or ""),
         }
     return enriched
 
 
-# ── US location filter ───────────────────────────────────────
+# ── 2. Filters ────────────────────────────────────────────────
 
 _US_LOCATION_RE = re.compile(
     r'\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|'
@@ -138,57 +221,71 @@ _US_LOCATION_RE = re.compile(
 def is_us_location(location: str) -> bool:
     """True if location is blank (unknown) or clearly in the US."""
     if not location:
-        return True  # keep unknowns — LinkedIn often omits location for remote roles
+        return True  # keep unknowns — boards often omit location for remote roles
     return bool(_US_LOCATION_RE.search(location))
 
 
-# ── Company denylist ─────────────────────────────────────────
-
 def is_skipped_company(company: str) -> bool:
-    """True if the company matches any entry in SKIP_COMPANIES (case-insensitive
-    substring), i.e. an IT-services / consulting / staffing firm to exclude."""
-    name = (company or "").lower()
-    return any(bad.lower() in name for bad in SKIP_COMPANIES)
+    """Two-layer check:
+    1. Exact-name match against SKIP_COMPANIES
+    2. Keyword match against SKIP_COMPANY_KEYWORDS (catches unnamed firms)
+    """
+    name = (company or "").lower().strip()
+    if not name:
+        return False
+    # Layer 1 — named denylist
+    if any(bad.lower() in name for bad in SKIP_COMPANIES):
+        return True
+    # Layer 2 — keyword patterns
+    if any(kw.lower() in name for kw in SKIP_COMPANY_KEYWORDS):
+        return True
+    return False
 
 
-# ── Deterministic no-sponsorship detection (full JD text) ────
-# Scans the ENTIRE job description, not a truncated slice — the visa/EEO
-# boilerplate (e.g. Capital One's "will not sponsor …") usually sits at the end
-# of the posting, past where the LLM scoring prompt truncates the text.
+def is_skipped_title(title: str) -> bool:
+    """True if the job title contains a keyword that signals a
+    consulting/staffing/non-product role."""
+    t = (title or "").lower()
+    return any(kw.lower() in t for kw in SKIP_TITLE_KEYWORDS)
+
+
+# ── 3. Deterministic no-sponsorship check (scans full JD) ────
 _NO_SPONSORSHIP_PATTERNS = [
     r"will not sponsor",
-    r"\bnot sponsor\b",
-    r"do(?:es)? not (?:provide|offer|support).{0,40}sponsor",
-    r"(?:un)?able to sponsor",                       # "not able to sponsor" / "unable to sponsor"
-    r"not (?:be )?(?:able|eligible|in a position) to sponsor",
-    r"no(?:t)?\s+(?:visa\s+)?sponsorship",           # "no sponsorship", "not ... sponsorship"
-    r"sponsorship (?:is )?not (?:available|offered|provided|possible)",
-    r"without (?:the need for )?(?:visa |employer )?sponsorship",
-    r"authoriz(?:ed|ation) to work .{0,50}without (?:visa )?sponsorship",
-    r"do(?:es)? not (?:provide|offer).{0,40}immigration",
-    r"\b(?:u\.?s\.?|united states) citizenship (?:is )?required",
-    r"must be (?:a )?(?:u\.?s\.?|united states) citizen",
-    r"(?:active|current).{0,20}security clearance",
-    r"requires? .{0,20}security clearance",
+    r"\bnot\s+sponsor(?:ing)?\b",
+    r"do(?:es)?\s+not\s+(?:provide|offer|support|consider).{0,50}sponsor",
+    r"(?:un)?able\s+to\s+sponsor",
+    r"not\s+(?:be\s+)?(?:able|eligible|in\s+a\s+position)\s+to\s+sponsor",
+    r"no\s+(?:visa\s+)?sponsorship(?:\s+available| provided| offered)?",
+    r"sponsorship\s+(?:is\s+)?not\s+(?:available|offered|provided|possible)",
+    r"without\s+(?:the\s+need\s+for\s+)?(?:visa\s+|employer\s+)?sponsorship",
+    r"authoriz(?:ed|ation)\s+to\s+work.{0,60}without\s+(?:visa\s+)?sponsorship",
+    r"do(?:es)?\s+not\s+(?:provide|offer|support).{0,50}immigration",
+    r"cannot\s+(?:provide|offer|support).{0,50}(?:sponsor|visa|immigration)",
+    r"\b(?:u\.?s\.?|united\s+states)\s+citizenship\s+(?:is\s+)?required",
+    r"must\s+be\s+(?:a\s+)?(?:u\.?s\.?|united\s+states)\s+citizen",
+    r"must\s+be\s+(?:authorized|eligible)\s+to\s+work\s+(?:in\s+the\s+us|in\s+the\s+united\s+states)\s+without",
+    r"work\s+authorization\s+(?:is\s+)?required\s+(?:and\s+)?(?:we\s+)?(?:do\s+not|cannot|will\s+not)\s+sponsor",
+    r"(?:active|current|valid).{0,30}(?:ts|secret|top\s+secret)\s+clearance",
+    r"(?:active|current).{0,20}security\s+clearance",
+    r"requires?\s+.{0,20}security\s+clearance",
+    r"must\s+(?:hold|have|possess|maintain).{0,30}clearance",
+    r"green\s+card\s+(?:or\s+)?(?:u\.?s\.?\s+)?citizenship\s+required",
 ]
 _NO_SPONSORSHIP_RE = re.compile("|".join(_NO_SPONSORSHIP_PATTERNS), re.IGNORECASE)
 
 
 def jd_says_no_sponsorship(description: str) -> bool:
-    """True if the full JD explicitly rules out visa sponsorship (or requires
-    US citizenship / security clearance, which implies it)."""
+    """True if the full JD explicitly rules out visa sponsorship."""
     return bool(_NO_SPONSORSHIP_RE.search(description or ""))
 
 
-# ── 2. Score jobs against resume using Claude (batched) ──────
+# ── 4. AI scoring (batched) ───────────────────────────────────
 
 def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
-    """Score all jobs in a single API call.
-
-    Returns a list of dicts keyed by url:
-      {url, score, missing_keywords, sponsorship}
-    Falls back to defaults for any entry that can't be parsed.
-    """
+    """Score all jobs in a single AI call → [{url, score, missing_keywords, sponsorship}].
+    Sponsorship classification here is a second-pass safety net; the deterministic
+    regex catches the clear cases before we even reach scoring."""
     if not jobs:
         return []
 
@@ -201,11 +298,12 @@ def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
     )
 
     prompt = f"""Score each job below against the resume on a 0-100 ATS keyword alignment scale.
-Also classify visa sponsorship for each:
-  - "no"      : JD explicitly rules out sponsorship (no visa sponsorship, must be authorized
-                without sponsorship, US citizenship required, security clearance required, etc.)
-  - "yes"     : JD explicitly offers sponsorship
-  - "unknown" : JD does not mention work authorization
+
+Also classify visa sponsorship:
+  "no"      — JD explicitly rules out sponsorship (no visa sponsorship, must be authorized
+               without sponsorship, US citizenship required, security clearance required, etc.)
+  "yes"     — JD explicitly offers or mentions sponsorship
+  "unknown" — JD is silent on work authorization
 
 RESUME:
 {resume[:3000]}
@@ -221,16 +319,13 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
     try:
         raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with a valid JSON array.")
         data = parse_json_response(raw)
-        # parse_json_response returns a dict for objects; handle array wrapped in object too
         if isinstance(data, dict):
-            # model may have returned {"results": [...]}
             for key in ("results", "jobs", "scores"):
                 if isinstance(data.get(key), list):
                     data = data[key]
                     break
         if not isinstance(data, list):
             raise ValueError("Expected JSON array")
-        # Index by url for fast lookup
         by_url = {entry.get("url", ""): entry for entry in data if isinstance(entry, dict)}
         results = []
         for job in jobs:
@@ -246,24 +341,20 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
             })
         return results
     except Exception:
-        # Full fallback — give every job a neutral score
         return [{"url": j["url"], "score": 50, "missing_keywords": [], "sponsorship": "unknown"} for j in jobs]
 
 
-# ── 2b. Ingest manually-added "Interested" jobs from Notion ──
+# ── 5. Ingest manually-added "Interested" jobs from Notion ───
 
 def ingest_interested_from_notion(resume: str) -> int:
-    """Pull jobs the user marked 'Interested' in Notion, enrich their JD via
-    Apify, score them, and promote them to 'Scraped' (linked to the existing
-    Notion page). Hand-picked jobs bypass the company/location/sponsorship
-    filters. Returns the number of jobs ingested."""
+    """Pull jobs the user marked 'Interested' in Notion, enrich via Apify,
+    score, and promote to 'Scraped'. Hand-picked jobs bypass all filters."""
     pages = get_notion_jobs_by_status("Interested")
     if not pages:
         return 0
 
     log(f"  Found {len(pages)} 'Interested' job(s) in Notion")
 
-    # Split out URLs already in the DB — just retire their Notion page.
     fresh = []
     for page in pages:
         if db_find_job_by_url(page["url"]):
@@ -275,7 +366,6 @@ def ingest_interested_from_notion(resume: str) -> int:
     if not fresh:
         return 0
 
-    # One Apify run to enrich all fresh URLs with real title/company/JD.
     enriched = scrape_job_urls([p["url"] for p in fresh])
 
     candidates = []
@@ -310,80 +400,131 @@ def ingest_interested_from_notion(resume: str) -> int:
     return ingested
 
 
-# ── 3. Main pipeline ─────────────────────────────────────────
+# ── 6. Drop-log writer ───────────────────────────────────────
+
+def _open_drop_log() -> tuple[Path, object]:
+    """Create/open today's drop log file. Returns (path, file handle)."""
+    log_dir = Path(OUTPUT_DIR) / "filter_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    run_ts  = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path    = log_dir / f"dropped_{run_ts}.txt"
+    fh      = path.open("w", encoding="utf-8")
+    fh.write(f"Drop log — run started {run_ts}\n")
+    fh.write("=" * 70 + "\n\n")
+    return path, fh
+
+
+def _log_drop(fh, reason: str, job: dict) -> None:
+    """Append one dropped-job record to the open drop log."""
+    fh.write(
+        f"[{reason.upper()}]\n"
+        f"  Company  : {job.get('company', '')}\n"
+        f"  Title    : {job.get('title', '')}\n"
+        f"  Location : {job.get('location', '')}\n"
+        f"  Source   : {job.get('source', '')}\n"
+        f"  URL      : {job.get('url', '')}\n\n"
+    )
+
+
+# ── 7. Pre-filter helper ─────────────────────────────────────
+
+def _pre_filter(job: dict, seen_urls: set, counters: dict, drop_fh) -> bool:
+    """Apply all pre-scoring filters. Returns True if the job should be kept.
+    Mutates `counters` and `seen_urls` in place; writes drops to `drop_fh`."""
+    url         = job.get("url", "")
+    title       = job.get("title", "")
+    company     = job.get("company", "")
+    location    = job.get("location", "")
+    description = job.get("description", "")
+
+    if not url:
+        return False
+    if url in seen_urls:
+        return False
+    if is_skipped_company(company):
+        counters["company"] += 1
+        _log_drop(drop_fh, "company", job)
+        log(f"  ⊘ [company]    {company} — {title}")
+        return False
+    if is_skipped_title(title):
+        counters["title"] += 1
+        _log_drop(drop_fh, "title", job)
+        log(f"  ⊘ [title]      {company} — {title}")
+        return False
+    if not is_us_location(location):
+        counters["location"] += 1
+        _log_drop(drop_fh, "location", job)
+        log(f"  ⊘ [location]   {company} — {title} ({location})")
+        return False
+    if EXCLUDE_NO_SPONSORSHIP and jd_says_no_sponsorship(description):
+        counters["sponsorship"] += 1
+        _log_drop(drop_fh, "no-sponsor", job)
+        log(f"  ⊘ [no-sponsor] {company} — {title}")
+        return False
+    if db_find_job_by_url(url):
+        counters["duplicate"] += 1
+        # duplicates are noise — skip them from the drop file
+        return False
+    return True
+
+
+# ── 8. Main pipeline ─────────────────────────────────────────
 
 def run():
-    resume = load_resume()
-    added = 0
-    skipped = 0
-    skipped_sponsorship = 0
-    skipped_company = 0
-    skipped_location = 0
+    resume   = load_resume()
+    added    = 0
+    ingested = 0
+    counters = {"company": 0, "title": 0, "location": 0, "sponsorship": 0, "duplicate": 0}
 
-    # First, fold in any jobs the user hand-picked in Notion (Status=Interested)
+    drop_log_path, drop_fh = _open_drop_log()
+
+    # ── 8a. Ingest hand-picked Notion jobs ───────────────────
     try:
         ingested = ingest_interested_from_notion(resume)
     except Exception as e:
         log(f"  ✗ Notion ingestion failed: {e}")
-        ingested = 0
+
+    # ── 8b. Scrape LinkedIn + Indeed for each target role ────
+    seen_urls: set[str] = set()
 
     for role in TARGET_ROLES:
-        try:
-            jobs = scrape_jobs(role, "United States", max_results=10)
-        except Exception as e:
-            log(f"  ✗ Scrape failed for '{role}': {e}")
-            continue
+        log(f"\n── Role: {role} ──────────────────────────────")
+        drop_fh.write(f"\n{'-'*60}\nROLE: {role}\n{'-'*60}\n\n")
 
-        log(f"  Found {len(jobs)} listings for '{role}'")
+        raw_jobs: list[dict] = []
+        raw_jobs.extend(scrape_linkedin(role, LINKEDIN_MAX))
+        raw_jobs.extend(scrape_indeed(role, INDEED_MAX))
+        log(f"  Total raw listings: {len(raw_jobs)}")
 
-        # Normalise Apify fields and pre-filter before scoring
         candidates = []
-        for job in jobs:
-            url = job.get("link") or job.get("jobUrl") or job.get("url") or job.get("applyUrl") or ""
-            title = job.get("title") or job.get("positionName") or role
-            company = job.get("companyName") or job.get("company") or ""
-            location = job.get("location") or job.get("formattedLocation") or job.get("jobLocation") or ""
-            description = (job.get("descriptionText") or job.get("descriptionHtml")
-                           or job.get("description") or job.get("jobDescription") or "")
-
-            if not url:
+        for job in raw_jobs:
+            if job["url"] in seen_urls:
+                counters["duplicate"] += 1
                 continue
-            if is_skipped_company(company):
-                skipped_company += 1
-                log(f"  ⊘ Skipped (non-product company): {company} — {title}")
-                continue
-            if not is_us_location(location):
-                skipped_location += 1
-                log(f"  ⊘ Skipped (non-US location: {location}): {company} — {title}")
-                continue
-            if db_find_job_by_url(url):
-                skipped += 1
-                continue
-
-            candidates.append({
-                "url": url, "title": title, "company": company,
-                "location": location, "description": description,
-            })
+            if _pre_filter(job, seen_urls, counters, drop_fh):
+                seen_urls.add(job["url"])
+                candidates.append(job)
 
         if not candidates:
+            log(f"  No candidates survived pre-filter for '{role}'")
             time.sleep(2)
             continue
 
-        # Score all candidates in a single API call
-        log(f"  Scoring {len(candidates)} new job(s) in one batch call…")
-        scores = score_jobs_batch(candidates, resume)
+        log(f"  Scoring {len(candidates)} candidate(s)...")
+        scores       = score_jobs_batch(candidates, resume)
         score_by_url = {s["url"]: s for s in scores}
 
         for job in candidates:
             s = score_by_url.get(job["url"], {"score": 50, "missing_keywords": [], "sponsorship": "unknown"})
-            score, sponsorship = s["score"], s["sponsorship"]
+            score       = s["score"]
+            sponsorship = s["sponsorship"]
 
             if EXCLUDE_NO_SPONSORSHIP and sponsorship == "no":
-                skipped_sponsorship += 1
-                log(f"  ⊘ Skipped (no sponsorship): {job['company']} — {job['title']}")
+                counters["sponsorship"] += 1
+                _log_drop(drop_fh, "no-sponsor/AI", job)
+                log(f"  ⊘ [no-sponsor/AI] {job['company']} — {job['title']}")
                 continue
 
-            # Persist description so Stage 2/5 can skip re-fetching it via AI
             db_add_job({
                 "title":       job["title"],
                 "company":     job["company"],
@@ -393,14 +534,25 @@ def run():
                 "description": job["description"],
             })
             added += 1
-            log(f"  ✓ Added: {job['company']} — {job['title']} ({job['location']}) (ATS: {score})")
+            src = job.get("source", "")
+            log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}")
 
-        time.sleep(2)  # polite pause between role queries
+        time.sleep(2)
 
-    log(f"\nDone. Added {added} new jobs ({ingested} ingested from Notion 'Interested'). "
-        f"Skipped {skipped} duplicates, {skipped_company} non-product companies, "
-        f"{skipped_location} non-US locations, {skipped_sponsorship} for no sponsorship.")
-    log(f"View your tracker: https://www.notion.so/{NOTION_DB_ID.replace('-', '')}")
+    summary = (
+        f"\n{'-'*60}\n"
+        f"Done. Added {added} new job(s)  |  {ingested} ingested from Notion 'Interested'\n"
+        f"Pre-filter drops -> "
+        f"company:{counters['company']}  title:{counters['title']}  "
+        f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
+        f"duplicate:{counters['duplicate']}\n"
+        f"Drop log saved -> {drop_log_path}"
+    )
+    drop_fh.write(f"\n{'='*70}\nSUMMARY\n{summary}\n")
+    drop_fh.close()
+
+    log(summary)
+    log(f"View tracker: https://www.notion.so/{NOTION_DB_ID.replace('-', '')}")
 
 
 if __name__ == "__main__":
