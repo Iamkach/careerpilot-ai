@@ -74,16 +74,43 @@ def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
 
 # ── 1a. LinkedIn scraper (bebity~linkedin-jobs-scraper) ──────
 
-def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
-    """Scrape LinkedIn for `role` posted in the last 24 h."""
-    log(f"  [LinkedIn] Scraping: '{role}'")
-    payload = {
-        "queries":    [role],
-        "location":   "United States",
-        "timePosted": "past24Hours",
-        "maxItems":   max_results,
+def _linkedin_payload_base(role: str, max_results: int) -> dict:
+    """Build the base Apify payload, injecting Premium cookie when available."""
+    payload: dict = {
+        "queries":       [role],
+        "location":      "United States",
+        "timePosted":    "past24Hours",
+        "maxItems":      max_results,
         "scrapeCompany": False,
     }
+    cookie = (LINKEDIN_SESSION_COOKIE or "").strip()
+    if cookie:
+        # bebity~linkedin-jobs-scraper accepts a `cookie` field with the li_at value.
+        # This unlocks Premium data: applicantCount, salaryRange, topApplicant signal.
+        payload["cookie"] = cookie
+        log("  [LinkedIn] Using Premium session cookie")
+    return payload
+
+
+def _parse_salary(job: dict) -> str:
+    """Extract a human-readable salary string from any field the actor returns."""
+    for key in ("salaryRange", "salary", "compensationRange", "pay"):
+        val = job.get(key)
+        if val:
+            if isinstance(val, dict):
+                lo = val.get("min") or val.get("from") or val.get("low") or ""
+                hi = val.get("max") or val.get("to")   or val.get("high") or ""
+                if lo or hi:
+                    return f"{lo}–{hi}".strip("–")
+            return str(val)
+    return ""
+
+
+def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
+    """Scrape LinkedIn for `role` posted in the last 24 h.
+    With a Premium cookie, also captures applicant_count and salary_range."""
+    log(f"  [LinkedIn] Scraping: '{role}'")
+    payload = _linkedin_payload_base(role, max_results)
     try:
         items = _apify_run(LINKEDIN_ACTOR, payload)
     except Exception as e:
@@ -98,15 +125,25 @@ def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
         )
         if not url:
             continue
+
+        # Applicant count — Premium exposes this; anonymous sessions return None
+        raw_count = job.get("applicantCount") or job.get("applicantsCount") or job.get("numApplicants")
+        try:
+            applicant_count = int(str(raw_count).replace("+", "").replace(",", "").strip()) if raw_count else None
+        except (ValueError, TypeError):
+            applicant_count = None
+
         results.append({
-            "url":         url,
-            "title":       job.get("title") or job.get("positionName") or role,
-            "company":     job.get("companyName") or job.get("company") or "",
-            "location":    (job.get("location") or job.get("formattedLocation")
-                            or job.get("jobLocation") or ""),
-            "description": (job.get("descriptionText") or job.get("descriptionHtml")
-                            or job.get("description")  or job.get("jobDescription") or ""),
-            "source":      "linkedin",
+            "url":             url,
+            "title":           job.get("title") or job.get("positionName") or role,
+            "company":         job.get("companyName") or job.get("company") or "",
+            "location":        (job.get("location") or job.get("formattedLocation")
+                                or job.get("jobLocation") or ""),
+            "description":     (job.get("descriptionText") or job.get("descriptionHtml")
+                                or job.get("description")  or job.get("jobDescription") or ""),
+            "applicant_count": applicant_count,
+            "salary_range":    _parse_salary(job),
+            "source":          "linkedin",
         })
     log(f"  [LinkedIn] Got {len(results)} listings for '{role}'")
     return results
@@ -378,9 +415,11 @@ def ingest_interested_from_notion(resume: str) -> int:
             "company":        e.get("company") or page["company"],
             "location":       e.get("location") or page["location"],
             "description":    e.get("description", ""),
+            "applicant_count": None,
+            "salary_range":    "",
         })
 
-    log(f"  Scoring {len(candidates)} Interested job(s) in one batch call…")
+    log(f"  Scoring {len(candidates)} Interested job(s) in one batch call...")
     score_by_url = {s["url"]: s for s in score_jobs_batch(candidates, resume)}
 
     ingested = 0
@@ -402,13 +441,13 @@ def ingest_interested_from_notion(resume: str) -> int:
 
 # ── 6. Drop-log writer ───────────────────────────────────────
 
-def _open_drop_log() -> tuple[Path, object]:
-    """Create/open today's drop log file. Returns (path, file handle)."""
+def _open_drop_log():
+    """Create today's drop log file. Returns (path, file handle)."""
     log_dir = Path(OUTPUT_DIR) / "filter_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    run_ts  = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    path    = log_dir / f"dropped_{run_ts}.txt"
-    fh      = path.open("w", encoding="utf-8")
+    run_ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path   = log_dir / f"dropped_{run_ts}.txt"
+    fh     = path.open("w", encoding="utf-8")
     fh.write(f"Drop log — run started {run_ts}\n")
     fh.write("=" * 70 + "\n\n")
     return path, fh
@@ -418,24 +457,26 @@ def _log_drop(fh, reason: str, job: dict) -> None:
     """Append one dropped-job record to the open drop log."""
     fh.write(
         f"[{reason.upper()}]\n"
-        f"  Company  : {job.get('company', '')}\n"
-        f"  Title    : {job.get('title', '')}\n"
-        f"  Location : {job.get('location', '')}\n"
-        f"  Source   : {job.get('source', '')}\n"
-        f"  URL      : {job.get('url', '')}\n\n"
+        f"  Company   : {job.get('company', '')}\n"
+        f"  Title     : {job.get('title', '')}\n"
+        f"  Location  : {job.get('location', '')}\n"
+        f"  Applicants: {job.get('applicant_count', '')}\n"
+        f"  Salary    : {job.get('salary_range', '')}\n"
+        f"  Source    : {job.get('source', '')}\n"
+        f"  URL       : {job.get('url', '')}\n\n"
     )
 
 
 # ── 7. Pre-filter helper ─────────────────────────────────────
 
 def _pre_filter(job: dict, seen_urls: set, counters: dict, drop_fh) -> bool:
-    """Apply all pre-scoring filters. Returns True if the job should be kept.
-    Mutates `counters` and `seen_urls` in place; writes drops to `drop_fh`."""
-    url         = job.get("url", "")
-    title       = job.get("title", "")
-    company     = job.get("company", "")
-    location    = job.get("location", "")
-    description = job.get("description", "")
+    """Apply all pre-scoring filters. Returns True if job should be kept."""
+    url             = job.get("url", "")
+    title           = job.get("title", "")
+    company         = job.get("company", "")
+    location        = job.get("location", "")
+    description     = job.get("description", "")
+    applicant_count = job.get("applicant_count")
 
     if not url:
         return False
@@ -444,26 +485,30 @@ def _pre_filter(job: dict, seen_urls: set, counters: dict, drop_fh) -> bool:
     if is_skipped_company(company):
         counters["company"] += 1
         _log_drop(drop_fh, "company", job)
-        log(f"  ⊘ [company]    {company} — {title}")
+        log(f"  ⊘ [company]       {company} — {title}")
         return False
     if is_skipped_title(title):
         counters["title"] += 1
         _log_drop(drop_fh, "title", job)
-        log(f"  ⊘ [title]      {company} — {title}")
+        log(f"  ⊘ [title]         {company} — {title}")
         return False
     if not is_us_location(location):
         counters["location"] += 1
         _log_drop(drop_fh, "location", job)
-        log(f"  ⊘ [location]   {company} — {title} ({location})")
+        log(f"  ⊘ [location]      {company} — {title} ({location})")
         return False
     if EXCLUDE_NO_SPONSORSHIP and jd_says_no_sponsorship(description):
         counters["sponsorship"] += 1
         _log_drop(drop_fh, "no-sponsor", job)
-        log(f"  ⊘ [no-sponsor] {company} — {title}")
+        log(f"  ⊘ [no-sponsor]    {company} — {title}")
+        return False
+    if MAX_APPLICANT_COUNT and applicant_count and applicant_count > MAX_APPLICANT_COUNT:
+        counters["applicants"] += 1
+        _log_drop(drop_fh, "high-applicants", job)
+        log(f"  ⊘ [high-applicants] {company} — {title} ({applicant_count} applicants)")
         return False
     if db_find_job_by_url(url):
         counters["duplicate"] += 1
-        # duplicates are noise — skip them from the drop file
         return False
     return True
 
@@ -474,24 +519,27 @@ def run():
     resume   = load_resume()
     added    = 0
     ingested = 0
-    counters = {"company": 0, "title": 0, "location": 0, "sponsorship": 0, "duplicate": 0}
+    counters = {
+        "company": 0, "title": 0, "location": 0,
+        "sponsorship": 0, "applicants": 0, "duplicate": 0,
+    }
 
     drop_log_path, drop_fh = _open_drop_log()
 
-    # ── 8a. Ingest hand-picked Notion jobs ───────────────────
+    # 8a. Ingest hand-picked Notion jobs
     try:
         ingested = ingest_interested_from_notion(resume)
     except Exception as e:
         log(f"  ✗ Notion ingestion failed: {e}")
 
-    # ── 8b. Scrape LinkedIn + Indeed for each target role ────
-    seen_urls: set[str] = set()
+    # 8b. Scrape LinkedIn + Indeed for each target role
+    seen_urls: set = set()
 
     for role in TARGET_ROLES:
         log(f"\n── Role: {role} ──────────────────────────────")
         drop_fh.write(f"\n{'-'*60}\nROLE: {role}\n{'-'*60}\n\n")
 
-        raw_jobs: list[dict] = []
+        raw_jobs = []
         raw_jobs.extend(scrape_linkedin(role, LINKEDIN_MAX))
         raw_jobs.extend(scrape_indeed(role, INDEED_MAX))
         log(f"  Total raw listings: {len(raw_jobs)}")
@@ -515,27 +563,33 @@ def run():
         score_by_url = {s["url"]: s for s in scores}
 
         for job in candidates:
-            s = score_by_url.get(job["url"], {"score": 50, "missing_keywords": [], "sponsorship": "unknown"})
+            s           = score_by_url.get(job["url"], {"score": 50, "missing_keywords": [], "sponsorship": "unknown"})
             score       = s["score"]
             sponsorship = s["sponsorship"]
 
             if EXCLUDE_NO_SPONSORSHIP and sponsorship == "no":
                 counters["sponsorship"] += 1
                 _log_drop(drop_fh, "no-sponsor/AI", job)
-                log(f"  ⊘ [no-sponsor/AI] {job['company']} — {job['title']}")
+                log(f"  ⊘ [no-sponsor/AI]  {job['company']} — {job['title']}")
                 continue
 
+            ac  = job.get("applicant_count")
+            sal = job.get("salary_range", "")
             db_add_job({
-                "title":       job["title"],
-                "company":     job["company"],
-                "location":    job["location"],
-                "url":         job["url"],
-                "ats_score":   score,
-                "description": job["description"],
+                "title":           job["title"],
+                "company":         job["company"],
+                "location":        job["location"],
+                "url":             job["url"],
+                "ats_score":       score,
+                "description":     job["description"],
+                "applicant_count": ac,
+                "salary_range":    sal,
             })
-            added += 1
-            src = job.get("source", "")
-            log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}")
+            added  += 1
+            src     = job.get("source", "")
+            ac_str  = f"  applicants:{ac}" if ac  is not None else ""
+            sal_str = f"  salary:{sal}"     if sal             else ""
+            log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}{ac_str}{sal_str}")
 
         time.sleep(2)
 
@@ -545,7 +599,7 @@ def run():
         f"Pre-filter drops -> "
         f"company:{counters['company']}  title:{counters['title']}  "
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
-        f"duplicate:{counters['duplicate']}\n"
+        f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}\n"
         f"Drop log saved -> {drop_log_path}"
     )
     drop_fh.write(f"\n{'='*70}\nSUMMARY\n{summary}\n")
