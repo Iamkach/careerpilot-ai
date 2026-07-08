@@ -83,6 +83,17 @@ SKIP_TITLE_KEYWORDS = [
     "project manager",  # optional
 ]
 
+# --- LinkedIn Premium (stage 1) -----------------------------
+# Paste your LinkedIn "li_at" session cookie value here.
+# With a Premium session, Apify returns applicant_count, salary ranges,
+# and "Top Applicant" signals that anonymous scraping can't see.
+# How to get it: browser DevTools → Application → Cookies → linkedin.com → li_at
+LINKEDIN_SESSION_COOKIE = ""   # e.g. "AQEDARxxxxxxxxxxxxxxxx"
+
+# Drop jobs with more than this many applicants (high competition).
+# Set to 0 to disable the filter.
+MAX_APPLICANT_COUNT = 200
+
 # --- Visa sponsorship filter (stage 1) ----------------------
 # When True, stage 1 skips jobs whose JD EXPLICITLY rules out sponsorship
 # (e.g. "no visa sponsorship", "must be authorized to work without sponsorship",
@@ -101,16 +112,22 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages
-# Options: "claude" | "gemini" | "codex"
-AI_PROVIDER = "codex"
+# Options: "claude" (metered API) | "claude_code" (subscription via CLI) | "gemini" | "codex"
+#
+# "claude_code" routes stage-script calls (run.py: stages 1,2,3,5,6) through the `claude -p`
+# CLI, which uses your logged-in Claude Code subscription instead of a metered API key.
+# Prerequisite: install the Claude Code CLI and run `claude /login`. No prompt caching on
+# this path. NOTE: do NOT export ANTHROPIC_API_KEY as an env var — the CLI would prefer it
+# over the subscription. (workflow.py's agentic loop still uses the metered API directly.)
+AI_PROVIDER = "claude_code"
 
 # Model overrides — leave blank to use the defaults below
-#   claude default : claude-opus-4-6
-
-#   gemini default : gemini-2.0-flash
-#   codex  default : gpt-4o
-AI_MODEL_OVERRIDE = "gpt-4o"   # fast/cheap — stages 1, 3 claude-haiku-4-5-20251001
-QUALITY_MODEL     = "gpt-5-mini"            # strong — stages 2, 5, 6, workflow claude-sonnet-4-6
+#   claude default      : claude-opus-4-6
+#   claude_code default : sonnet  (CLI accepts aliases: haiku | sonnet | opus, or full claude-* ids)
+#   gemini default      : gemini-2.0-flash
+#   codex  default      : gpt-4o
+AI_MODEL_OVERRIDE = "haiku"     # fast/cheap — stages 1, 3
+QUALITY_MODEL     = "sonnet"    # strong — stages 2, 5, 6, workflow
 
 # --- API Keys -----------------------------------------------
 ANTHROPIC_API_KEY = "***REMOVED-ANTHROPIC-KEY***"   # https://console.anthropic.com         (provider: claude)
@@ -130,6 +147,12 @@ SUPABASE_KEY      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 # Set up via Google Cloud OAuth credentials
 GMAIL_CREDENTIALS_PATH = "config/gmail_credentials.json"
 DIGEST_RECIPIENT_EMAIL = YOUR_EMAIL
+
+# --- LinkedIn Premium InMail (stage 3) ----------------------
+# ATS score threshold above which an InMail draft is generated
+# (in addition to / instead of a cold email).
+# LinkedIn Career gives 5 InMail credits/month — use them on your best-fit jobs.
+INMAIL_ATS_THRESHOLD = 70
 
 # --- Output dirs --------------------------------------------
 OUTPUT_DIR        = "output"
