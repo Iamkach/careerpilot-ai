@@ -36,42 +36,47 @@ ROOT = Path(__file__).parent
 # ── Dependency check ──────────────────────────────────────────
 
 # Only the active provider's SDK is required; the others are optional
-_PROVIDER_PKGS = {"claude": "anthropic", "gemini": "google-generativeai", "codex": "openai"}
+_PROVIDER_PKGS = {"claude": "anthropic", "claude_code": "anthropic", "gemini": "google-generativeai", "codex": "openai"}
 
 def _get_required():
     from config.settings import AI_PROVIDER
     provider_pkg = _PROVIDER_PKGS.get(AI_PROVIDER, "anthropic")
-    return [provider_pkg, "supabase", "notion_client", "requests"]
+    return [provider_pkg, "notion_client", "requests"]
 
 def check_setup():
     print("=== Setup Check ===\n")
     from config.settings import (
         AI_PROVIDER, AI_MODEL_OVERRIDE,
-        ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY,
         APIFY_API_TOKEN, NOTION_API_KEY, NOTION_DB_ID,
-        SUPABASE_URL, SUPABASE_KEY, RESUME_PATH
+        RESUME_PATH
     )
+    import config.settings as _settings
+    # Alternate-provider keys are optional under the default claude_code provider.
+    ANTHROPIC_API_KEY = getattr(_settings, "ANTHROPIC_API_KEY", "")
+    GEMINI_API_KEY    = getattr(_settings, "GEMINI_API_KEY", "")
+    OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
 
+    import shutil
+    _cli_found = bool(shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe"))
     _provider_key = {
-        "claude": ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in config/settings.py"),
-        "gemini": ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in config/settings.py"),
-        "codex":  ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in config/settings.py"),
+        "claude":      ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in config/settings.py"),
+        "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login`"),
+        "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in config/settings.py"),
+        "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in config/settings.py"),
     }
-    _defaults = {"claude": "claude-opus-4-6", "gemini": "gemini-2.0-flash", "codex": "gpt-4o"}
+    _defaults = {"claude": "claude-opus-4-6", "claude_code": "sonnet", "gemini": "gemini-2.0-flash", "codex": "gpt-4o"}
     active_model = AI_MODEL_OVERRIDE or _defaults.get(AI_PROVIDER, "?")
     print(f"  AI provider : {AI_PROVIDER}  (model: {active_model})\n")
 
     key_label, key_val, key_fix = _provider_key.get(
         AI_PROVIDER,
-        ("Unknown provider key", False, f"Set AI_PROVIDER to claude/gemini/codex in config/settings.py")
+        ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex in config/settings.py")
     )
 
     checks = [
         (key_label,    bool(key_val),              key_fix),
         ("Apify token",     bool(APIFY_API_TOKEN), "Set APIFY_API_TOKEN in config/settings.py"),
-        ("Supabase URL",    bool(SUPABASE_URL),    "Set SUPABASE_URL in config/settings.py"),
-        ("Supabase key",    bool(SUPABASE_KEY),    "Set SUPABASE_KEY in config/settings.py"),
-        ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in config/settings.py (optional — visual tracker)"),
+        ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in config/settings.py (PRIMARY data store)"),
         ("Notion DB ID",    bool(NOTION_DB_ID),    "Already set — your tracker DB"),
         ("Resume file",     (ROOT / RESUME_PATH).exists(), f"Add your resume to {RESUME_PATH}"),
     ]
@@ -171,14 +176,10 @@ def morning_routine(args):
 
 
 def evaluate_routine(args):
-    """Sync Reviewed jobs from Notion → Supabase, then tailor + outreach + ready digest."""
+    """Tailor 'Reviewed' jobs (read straight from Notion), then outreach + ready digest."""
     print("\n🔄 EVALUATE — Tailor reviewed jobs")
     print("=" * 45)
-
-    from scripts.utils import sync_notion_to_supabase
-    print("\n  Syncing Reviewed status from Notion → Supabase...")
-    n = sync_notion_to_supabase()
-    print(f"  ✓ {n} job(s) synced as Reviewed in Supabase")
+    print("\n  Reading 'Reviewed' jobs directly from Notion (primary store)...")
 
     stage2(args)
     # Pass no_confirm so --evaluate runs non-interactively; drafts saved, user marks manually
