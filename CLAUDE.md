@@ -111,11 +111,20 @@ Set `AI_PROVIDER` in `config/settings.py`:
 
 | `AI_PROVIDER` | Key setting | Default model |
 |---|---|---|
-| `"claude"` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+| `"claude_code"` (default) | Claude Code subscription (`claude /login`) | `sonnet` |
+| `"claude"` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 | `"gemini"` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
 | `"codex"` | `OPENAI_API_KEY` | `gpt-4o` |
 
 Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (strong).
+
+**`claude_code` (subscription, no per-call billing):** routes stage-script calls (the
+`run.py` path: stages 1, 2, 3, 5, 6) through the `claude -p` CLI via `_chat_claude_code` in
+`scripts/utils.py`, using your logged-in Claude Code subscription instead of a metered API
+key. Prerequisite: install the Claude Code CLI and run `claude /login`. Caveats: **no prompt
+caching** on this path, and `ANTHROPIC_API_KEY` must **not** be exported as an env var (the
+CLI would prefer it over the subscription). `workflow.py`'s agentic loop is unaffected — it
+still calls the metered Anthropic API directly.
 
 ## Development Notes
 
