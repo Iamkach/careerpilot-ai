@@ -16,9 +16,10 @@ OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
 
 # ── Default models per provider ─────────────────────────────
 _DEFAULTS = {
-    "claude": "claude-opus-4-6",
-    "gemini": "gemini-2.0-flash",
-    "codex":  "gpt-4o",
+    "claude":      "claude-opus-4-6",
+    "claude_code": "sonnet",
+    "gemini":      "gemini-2.0-flash",
+    "codex":       "gpt-4o",
 }
 
 def _active_model() -> str:
@@ -137,10 +138,16 @@ def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False
 # ── Public chat interface ────────────────────────────────────
 
 _BACKENDS = {
-    "claude": _chat_claude,
-    "gemini": _chat_gemini,
-    "codex":  _chat_codex,
+    "claude":      _chat_claude,
+    "claude_code": _chat_claude_code,
+    "gemini":      _chat_gemini,
+    "codex":       _chat_codex,
 }
+
+def _active_provider() -> str:
+    """Return STAGE_AI_PROVIDER if set, else AI_PROVIDER."""
+    from config.settings import STAGE_AI_PROVIDER
+    return STAGE_AI_PROVIDER or AI_PROVIDER
 
 def _active_provider() -> str:
     """Return STAGE_AI_PROVIDER if set, else AI_PROVIDER."""
