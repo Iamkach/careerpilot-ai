@@ -79,7 +79,7 @@ def fetch_jd(url: str) -> str:
 
 # ── Tailor resume using Claude ───────────────────────────────
 
-def tailor_resume(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
+def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
     """Return a list of {old, new} text edits to apply to the base resume .docx.
 
     The resume_text is extracted verbatim from Achyuth_Resume.docx so Claude
@@ -138,6 +138,99 @@ Return ONLY this JSON (no markdown fences, no commentary):
     return [], []
 
 
+def tailor_resumes_batch(
+    resume_text: str,
+    jobs_and_jds: list[tuple[dict, str]],
+) -> dict[str, tuple[list, list]]:
+    """One AI call for all jobs. Returns {page_id: (edits, keywords)}.
+    Missing entries mean parse failed — caller falls back to _tailor_resume_single().
+    """
+    if not jobs_and_jds:
+        return {}
+
+    resume_block = {
+        "type": "text",
+        "text": f"RESUME (verbatim source for all 'old' fields):\n\n<resume>\n{resume_text}\n</resume>",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    job_entries = "\n\n".join(
+        f"{i+1}. Company: {job['company']}\n"
+        f"   Role: {job['title']}\n"
+        f"   <job_description>\n{jd[:2000]}\n   </job_description>"
+        for i, (job, jd) in enumerate(jobs_and_jds)
+    )
+
+    prompt_block = {
+        "type": "text",
+        "text": f"""For EACH numbered job, produce one JSON entry with targeted resume edits.
+
+Edit priority (highest impact first):
+  1. TITLE LINE: Replace header title with exact role title from JD if different. REQUIRED unless identical.
+  2. PROFESSIONAL SUMMARY: Front-load 3-5 missing JD keywords, keep all real metrics and facts.
+  3. TECHNICAL SKILLS: Append missing keywords to the most relevant existing skill category only.
+  4. TOP BULLETS (2-4 max): Inject 1-2 missing keywords per bullet into the highest-signal bullets.
+
+Hard constraints:
+  - "old" must be EXACT verbatim text from the resume above — character for character
+  - Never invent tools, technologies, companies, metrics, or dates
+  - Do not change bullet meaning — only add missing terminology where it genuinely fits
+  - Prefer depth over breadth: 5 strong edits beats 15 shallow ones
+
+JOBS:
+{job_entries}
+
+Return ONLY a JSON array (no markdown fences, no commentary):
+[
+  {{
+    "job_index": 1,
+    "company": "...",
+    "keywords_injected": ["k1", "k2"],
+    "edits": [
+      {{"old": "exact verbatim text", "new": "updated text", "reason": "one-line rationale"}}
+    ]
+  }}
+]""",
+    }
+
+    max_tok = min(4000 + 1500 * len(jobs_and_jds), 16000)
+    raw = ai_chat_blocks([resume_block, prompt_block], system=SYSTEM_PROMPT,
+                         max_tokens=max_tok, quality=True)
+
+    try:
+        data = parse_json_response(raw)
+        if isinstance(data, dict):
+            for key in ("results", "jobs", "edits"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+        if not isinstance(data, list):
+            raise ValueError(f"Expected JSON array, got {type(data)}")
+    except Exception as exc:
+        log(f"  ⚠ Batch parse failed ({exc}) — will fall back per-job")
+        return {}
+
+    by_index: dict[int, dict] = {}
+    by_company: dict[str, dict] = {}
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        idx = entry.get("job_index")
+        if idx is not None:
+            by_index[int(idx)] = entry
+        company = (entry.get("company") or "").lower()
+        if company:
+            by_company[company] = entry
+
+    results: dict[str, tuple[list, list]] = {}
+    for i, (job, _) in enumerate(jobs_and_jds):
+        pid = job.get("page_id") or job.get("id")
+        entry = by_index.get(i + 1) or by_company.get(job["company"].lower())
+        if entry and isinstance(entry.get("edits"), list):
+            results[pid] = (entry["edits"], entry.get("keywords_injected", []))
+    return results
+
+
 # ── Save tailored resume to file ─────────────────────────────
 
 def save_resume(edits: list, job: dict) -> str:
@@ -175,29 +268,49 @@ def run(min_score: int = 0):
 
     log(f"Tailoring resumes for {len(jobs)} jobs (min ATS score: {min_score})")
 
+    # Phase 1: Fetch all JDs (no AI)
+    jobs_and_jds: list[tuple[dict, str]] = []
     for job in jobs:
-        log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
-
-        # Use cached JD from Supabase; fall back to URL fetch
-        jd = db_get_job_description(job["id"])
+        log(f"  Fetching JD: {job['company']} — {job['title']}")
+        jd = db_get_job_description(job.get("id") or job.get("page_id"))
         if not jd:
             log("  ↳ No cached JD — fetching from URL…")
             jd = fetch_jd(job["url"])
         if not jd:
-            log("  ⚠ Could not fetch job description. Skipping.")
+            log(f"  ⚠ Could not fetch JD — skipping {job['company']}.")
             continue
+        jobs_and_jds.append((job, jd))
 
-        # Ask Claude for targeted keyword edits
-        edits, keywords = tailor_resume(resume_text, jd, job)
+    if not jobs_and_jds:
+        log("No jobs with accessible JDs. Nothing to tailor.")
+        return
+
+    # Phase 2: ONE batch AI call for all jobs
+    log(f"\nBatch tailoring {len(jobs_and_jds)} job(s) in 1 AI call…")
+    batch_results = tailor_resumes_batch(resume_text, jobs_and_jds)
+
+    missing = [(j, d) for j, d in jobs_and_jds
+               if (j.get("page_id") or j.get("id")) not in batch_results]
+    if missing:
+        log(f"  ↳ Batch missed {len(missing)} job(s) — falling back to per-job calls")
+        for job, jd in missing:
+            log(f"    → {job['company']} — single-job fallback")
+            edits, keywords = _tailor_resume_single(resume_text, jd, job)
+            pid = job.get("page_id") or job.get("id")
+            batch_results[pid] = (edits, keywords)
+
+    # Phase 3: Apply edits + update Notion (no AI)
+    for job, _ in jobs_and_jds:
+        pid = job.get("page_id") or job.get("id")
+        log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
+        edits, keywords = batch_results.get(pid, ([], []))
         log(f"  ↳ {len(edits)} edit(s) suggested")
         if keywords:
             log(f"  ↳ Keywords injected: {', '.join(keywords)}")
 
-        # Apply edits to a copy of Achyuth_Resume.docx
         file_path = save_resume(edits, job)
         log(f"  ✓ Saved: {file_path}")
 
-        # Update Supabase + mirror to Notion.
         # NOTE: do NOT set date_applied here — tailoring is not applying.
         db_update_status(job["page_id"], "Resume Tailored", {
             "tailored_resume_link": f"file://{Path(file_path).resolve()}",

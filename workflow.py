@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-workflow.py — Claude API Workflow for Job Search Pipeline
-─────────────────────────────────────────────────────────
-Replaces run.py with a Claude-native workflow: the model orchestrates all
-6 stages via tool calls, with prompt caching on the resume and streaming output.
+workflow.py — Claude Agent SDK Workflow for Job Search Pipeline
+──────────────────────────────────────────────────────────────
+A Claude-native workflow on the Claude Code subscription (claude-agent-sdk): the model
+orchestrates all 6 stages via in-process tools (exposed as the `jobpipe` MCP server) with
+streaming output. No metered API key — auth is the logged-in subscription.
 
 Usage:
   python workflow.py                                          # Morning pipeline (stages 1-4)
@@ -16,7 +17,7 @@ Usage:
   python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 185000
 """
 
-import sys, json, argparse
+import sys, os, json, asyncio, argparse
 from pathlib import Path
 from datetime import date
 
@@ -28,12 +29,17 @@ if hasattr(sys.stderr, "reconfigure"):
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-import anthropic
+# Force subscription auth: the Agent SDK spawns the `claude` CLI, which uses the logged-in
+# subscription only when ANTHROPIC_API_KEY is absent from the environment.
+os.environ.pop("ANTHROPIC_API_KEY", None)
+
+from claude_agent_sdk import (
+    query, ClaudeAgentOptions, tool, create_sdk_mcp_server,
+    AssistantMessage, TextBlock, ToolUseBlock, ResultMessage,
+)
 from config.settings import (
-    ANTHROPIC_API_KEY,
     APIFY_API_TOKEN,
     NOTION_API_KEY, NOTION_DB_ID,
-    SUPABASE_URL, SUPABASE_KEY,
     TARGET_ROLES,
     RESUME_PATH, OUTPUT_DIR, RESUMES_DIR, PREP_GUIDES_DIR,
     YOUR_NAME, YOUR_EMAIL, YOUR_BIO,
@@ -199,10 +205,9 @@ def _impl_save_html_file(content: str, filename: str, subdirectory: str = "") ->
 
 
 def _impl_sync_disregard() -> dict:
-    """Sync Reviewed status from Notion → Supabase before the evaluate run."""
-    from scripts.utils import sync_notion_to_supabase
-    updated = sync_notion_to_supabase()
-    return {"synced": updated, "success": True}
+    """No-op kept for tool compatibility: Notion is the single source of truth, so
+    'Reviewed' status is read directly from Notion — no sync step is needed."""
+    return {"synced": 0, "success": True}
 
 
 def _impl_update_status(
@@ -261,14 +266,31 @@ _TOOL_IMPL = {
 }
 
 
-def execute_tool(name: str, inputs: dict) -> str:
-    fn = _TOOL_IMPL.get(name)
-    if not fn:
-        return json.dumps({"error": f"Unknown tool: {name}"})
-    try:
-        return json.dumps(fn(**inputs))
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+def _print_tool_outcome(result: dict):
+    """Brief, human-readable outcome line for a tool result (mirrors the old loop)."""
+    if "error" in result:
+        print(f"     ✗ {result['error']}")
+    elif "count" in result:
+        print(f"     → {result['count']} item(s)")
+    elif result.get("success"):
+        fp = result.get("file_path", "")
+        print(f"     ✓{' ' + fp if fp else ''}")
+    elif result.get("exists") is not None:
+        print(f"     → exists={result['exists']}")
+
+
+def _make_tool(name: str, description: str, schema: dict, impl):
+    """Wrap an existing sync `_impl_*` function (+ its JSON schema) as an SDK in-process
+    tool. The blocking impl runs in a thread so it doesn't stall the event loop."""
+    @tool(name, description, schema)
+    async def _t(args):
+        try:
+            result = await asyncio.to_thread(impl, **args)
+        except Exception as e:
+            result = {"error": str(e)}
+        _print_tool_outcome(result)
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+    return _t
 
 
 # ── Tool schemas for Claude ───────────────────────────────────────────
@@ -447,8 +469,8 @@ TOOLS = [
     {
         "name": "sync_disregard",
         "description": (
-            "Sync 'Reviewed' status changes made in Notion back into Supabase. "
-            "Always call this first at the start of the evaluate task, before fetching jobs to tailor."
+            "Deprecated no-op (Notion is the single source of truth — 'Reviewed' status is read "
+            "directly from Notion). Safe to skip; kept only for backward compatibility."
         ),
         "input_schema": {
             "type": "object",
@@ -457,6 +479,18 @@ TOOLS = [
         },
     },
 ]
+
+
+# ── SDK in-process tool server ────────────────────────────────────────
+# Wrap each schema (TOOLS) + impl (_TOOL_IMPL) pair into an SDK tool and expose them as a
+# single in-process MCP server. Tool names the model may call: mcp__jobpipe__<name>.
+
+_SDK_TOOLS = [
+    _make_tool(t["name"], t["description"], t["input_schema"], _TOOL_IMPL[t["name"]])
+    for t in TOOLS
+]
+_SERVER  = create_sdk_mcp_server(name="jobpipe", version="1.0.0", tools=_SDK_TOOLS)
+_ALLOWED = [f"mcp__jobpipe__{t['name']}" for t in TOOLS]
 
 
 # ── Task prompts ──────────────────────────────────────────────────────
@@ -531,14 +565,10 @@ def _task_evaluate(args) -> str:
     today = date.today().isoformat()
     min_score = getattr(args, "min_score", 0)
     return f"""Today is {today}. The user has reviewed the scraped jobs in Notion and marked good ones as Reviewed.
-Now run the evaluate pipeline: sync → tailor → outreach → ready digest.
+Now run the evaluate pipeline: tailor → outreach → ready digest.
 
-STEP 1 — SYNC REVIEWED
-  Call sync_disregard() to pull any Notion "Reviewed" status changes back into Supabase.
-  Report how many jobs were marked Reviewed.
-
-STEP 2 — TAILOR
-Get all "Reviewed" jobs (min_score={min_score}).
+STEP 1 — TAILOR
+Get all "Reviewed" jobs (min_score={min_score}) directly from Notion.
 Process jobs ONE AT A TIME — fully tailor and save a single resume before starting the next.
 For each job:
   1. fetch_job_description from the job URL
@@ -549,10 +579,10 @@ For each job:
      — Preserve structure, length, and factual accuracy — do NOT invent experience
   4. save_tailored_resume (updates status to "Resume Tailored" automatically)
 
-STEP 3 — OUTREACH
+STEP 2 — OUTREACH
 For each job just tailored, draft a cold outreach email and save with save_outreach_email.
 
-STEP 4 — READY DIGEST
+STEP 3 — READY DIGEST
   1. Call get_ready_to_apply to get all tailored jobs
   2. Build a clean HTML digest:
      — Header: "Job Applications Ready — {today}"
@@ -743,118 +773,73 @@ Rules:
     ]
 
 
-# ── Agentic loop ──────────────────────────────────────────────────────
+# ── Agentic loop (Agent SDK over the Claude Code subscription) ─────────
+
+_MAX_TURNS = 60  # generous cap for the morning pipeline (many jobs × many tools)
+
+
+async def _run(task_prompt: str, system_str: str):
+    """Drive one task to completion via the SDK's native agentic loop. The SDK runs the
+    full tool loop internally; we just stream text, echo tool calls, and report usage."""
+    opts = ClaudeAgentOptions(
+        system_prompt=system_str,
+        model=QUALITY_MODEL or AI_MODEL_OVERRIDE or "sonnet",
+        mcp_servers={"jobpipe": _SERVER},
+        allowed_tools=_ALLOWED,        # pre-approve only our jobpipe tools
+        permission_mode="dontAsk",     # deny anything not pre-approved (no built-ins, no prompts)
+        strict_mcp_config=True,        # ignore any user/project MCP servers (Notion, etc.)
+        setting_sources=[],            # don't load project CLAUDE.md/settings into the prompt
+        max_turns=_MAX_TURNS,
+    )
+
+    async for msg in query(prompt=task_prompt, options=opts):
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    print(block.text, end="", flush=True)
+                elif isinstance(block, ToolUseBlock):
+                    preview = ", ".join(f"{k}={repr(v)[:50]}" for k, v in (block.input or {}).items())
+                    # Strip the mcp__jobpipe__ prefix for readability
+                    short = block.name.split("__")[-1]
+                    print(f"\n  ⚙  {short}({preview})")
+        elif isinstance(msg, ResultMessage):
+            print(f"\n\n{'─' * 40}")
+            if msg.subtype != "success":
+                print(f"  [!] Ended: {msg.subtype}")
+            cost = getattr(msg, "total_cost_usd", None)
+            usage = getattr(msg, "usage", None)
+            if usage:
+                print(f"  Usage: {usage}")
+            if cost is not None:
+                print(f"  Subscription cost-equivalent: ${cost:.4f}")
+            print(f"  Done. ({msg.num_turns} turn(s))" if getattr(msg, "num_turns", None) else "  Done.")
+            print(f"{'─' * 40}\n")
+
 
 def run_workflow(task: str, args):
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
     resume_path = ROOT / RESUME_PATH
     if not resume_path.exists():
         print(f"✗ Resume not found at {RESUME_PATH}. Add your resume to config/resume.txt first.")
         sys.exit(1)
     resume = resume_path.read_text(encoding="utf-8")
 
-    system_blocks = _build_system(resume)
+    # cache_control is dropped here (unsupported over the subscription); join blocks to a string.
+    system_str = "\n\n".join(b["text"] for b in _build_system(resume))
     task_prompt = _TASK_BUILDERS[task](args)
-    messages = [{"role": "user", "content": task_prompt}]
 
     banner = f"Claude Workflow — {task.upper()}"
     print(f"\n{'─' * len(banner)}")
     print(banner)
     print(f"{'─' * len(banner)}\n")
 
-    iteration = 0
-    max_iterations = 60  # generous cap for the morning pipeline (many jobs × many tools)
-    total_cache_read = 0
-    total_input = 0
-
-    while iteration < max_iterations:
-        iteration += 1
-
-        with client.messages.stream(
-            model=QUALITY_MODEL or AI_MODEL_OVERRIDE or "claude-sonnet-4-6",
-            max_tokens=24000,
-            thinking={"type": "adaptive"},
-            system=system_blocks,
-            tools=TOOLS,
-            messages=messages,
-        ) as stream:
-            # Stream Claude's text output in real time
-            for text in stream.text_stream:
-                print(text, end="", flush=True)
-            response = stream.get_final_message()
-
-        # Track token usage across the loop
-        usage = response.usage
-        total_cache_read += usage.cache_read_input_tokens or 0
-        total_input += usage.input_tokens or 0
-
-        # Add newline after streamed text if any was printed
-        if any(b.type == "text" and b.text.strip() for b in response.content):
-            print()
-
-        if response.stop_reason == "end_turn":
-            break
-
-        if response.stop_reason != "tool_use":
-            print(f"\n[!] Unexpected stop_reason: {response.stop_reason}")
-            break
-
-        # Preserve the full assistant turn (including tool_use blocks)
-        messages.append({"role": "assistant", "content": response.content})
-
-        # Execute every tool call in this turn
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
-            # Format args preview for terminal
-            preview = ", ".join(
-                f"{k}={repr(v)[:50]}" for k, v in block.input.items()
-            )
-            print(f"\n  ⚙  {block.name}({preview})")
-
-            result_str = execute_tool(block.name, block.input)
-            result = json.loads(result_str)
-
-            # Show a brief outcome
-            if "error" in result:
-                print(f"     ✗ {result['error']}")
-            elif "count" in result:
-                print(f"     → {result['count']} item(s)")
-            elif result.get("success"):
-                fp = result.get("file_path", "")
-                print(f"     ✓{' ' + fp if fp else ''}")
-            elif result.get("exists") is not None:
-                print(f"     → exists={result['exists']}")
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result_str,
-            })
-
-        # Feed all results back in one user turn
-        messages.append({"role": "user", "content": tool_results})
-
-    if iteration >= max_iterations:
-        print(f"\n[!] Hit max iterations ({max_iterations}). Pipeline may be incomplete.")
-
-    # Usage summary
-    print(f"\n{'─' * 40}")
-    if total_cache_read:
-        savings_pct = int(total_cache_read / max(total_cache_read + total_input, 1) * 100)
-        print(f"  Cache: {total_cache_read:,} tokens served from cache ({savings_pct}% savings)")
-    print(f"  Done. ({iteration} API call(s))")
-    print(f"{'─' * 40}\n")
+    asyncio.run(_run(task_prompt, system_str))
 
 
 # ── CLI ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AI Job Search — Claude API Workflow",
+        description="AI Job Search — Claude Agent SDK Workflow (subscription)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
