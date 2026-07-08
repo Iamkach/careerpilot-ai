@@ -111,7 +111,8 @@ Set `AI_PROVIDER` in `config/settings.py`:
 
 | `AI_PROVIDER` | Key setting | Default model |
 |---|---|---|
-| `"claude"` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+| `"claude_code"` (default) | Claude Code subscription (`claude /login`) | `sonnet` |
+| `"claude"` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
 | `"gemini"` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
 | `"codex"` | `OPENAI_API_KEY` | `gpt-4o` |
 

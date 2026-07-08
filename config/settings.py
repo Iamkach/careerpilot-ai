@@ -85,6 +85,17 @@ SKIP_TITLE_KEYWORDS = [
     "project manager",  # optional
 ]
 
+# --- LinkedIn Premium (stage 1) -----------------------------
+# Paste your LinkedIn "li_at" session cookie value here.
+# With a Premium session, Apify returns applicant_count, salary ranges,
+# and "Top Applicant" signals that anonymous scraping can't see.
+# How to get it: browser DevTools → Application → Cookies → linkedin.com → li_at
+LINKEDIN_SESSION_COOKIE = ""   # e.g. "AQEDARxxxxxxxxxxxxxxxx"
+
+# Drop jobs with more than this many applicants (high competition).
+# Set to 0 to disable the filter.
+MAX_APPLICANT_COUNT = 200
+
 # --- Visa sponsorship filter (stage 1) ----------------------
 # When True, stage 1 skips jobs whose JD EXPLICITLY rules out sponsorship
 # (e.g. "no visa sponsorship", "must be authorized to work without sponsorship",
@@ -138,6 +149,12 @@ NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
 # Set up via Google Cloud OAuth credentials
 GMAIL_CREDENTIALS_PATH = "config/gmail_credentials.json"
 DIGEST_RECIPIENT_EMAIL = YOUR_EMAIL
+
+# --- LinkedIn Premium InMail (stage 3) ----------------------
+# ATS score threshold above which an InMail draft is generated
+# (in addition to / instead of a cold email).
+# LinkedIn Career gives 5 InMail credits/month — use them on your best-fit jobs.
+INMAIL_ATS_THRESHOLD = 70
 
 # --- Output dirs --------------------------------------------
 OUTPUT_DIR        = "output"
