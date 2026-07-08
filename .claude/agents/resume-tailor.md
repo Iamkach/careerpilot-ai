@@ -12,11 +12,11 @@ You are an expert resume writer and ATS optimization specialist working on an au
 **Workflow tool:** `save_tailored_resume` in `workflow.py`
 
 ### What stage 2 does
-1. Fetches jobs with **Status="Reviewed"** from Supabase (`db_get_jobs("Reviewed", min_score)`) — the user approves jobs in Notion, then `python run.py --evaluate` syncs + runs this
+1. Fetches jobs with **Status="Reviewed"** from Notion (`db_get_jobs("Reviewed", min_score)`) — the user approves jobs in Notion, then `python run.py --evaluate` runs this
 2. Loads the **base resume `.docx`** (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) as text via `extract_docx_text()`
 3. For each job: reads the cached JD (`db_get_job_description(job_id)`) and asks the AI for **targeted `{old, new}` ATS keyword edits** (JSON, not a full rewrite)
 4. Copies the base `.docx` and applies the edits **in-place** via `apply_docx_edits()` (preserves formatting) → `output/resumes/*.docx` + a `.txt` mirror
-5. Updates Supabase: Status → "Resume Tailored", sets `tailored_resume_link`
+5. Updates Notion: Status → "Resume Tailored", sets `Tailored Resume Link`
 
 ### ATS scoring (Stage 1 output, feeds Stage 2)
 Stage 1 scores all new jobs in a single batched call — `score_jobs_batch()` in
@@ -24,7 +24,7 @@ Stage 1 scores all new jobs in a single batched call — `score_jobs_batch()` in
 ```
 {"url": "...", "score": 0-100, "missing_keywords": [...], "sponsorship": "yes|no|unknown"}
 ```
-The score is stored as `ats_match_score` (Supabase) / `ATS Match Score` (Notion).
+The score is stored as the `ATS Match Score` number property in Notion.
 Stage 2 filters by `--min-score` (default 0).
 
 ### Resume file locations
@@ -39,7 +39,7 @@ Instructs the model to:
 
 ### Common issues and fixes
 - **Edit not applied**: `apply_docx_edits()` matches `old` verbatim. If the model paraphrases `old`, the replacement silently no-ops — tighten the prompt to copy exact substrings.
-- **No JD available**: JD is cached in Supabase at scrape time. Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `workflow.py`'s `_impl_fetch_job_description` (`requests.get()`) is the fallback fetch path.
+- **No JD available**: JD is cached in the Notion page body at scrape time (read via `db_get_job_description(page_id)`). Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `workflow.py`'s `_impl_fetch_job_description` (`requests.get()`) is the fallback fetch path.
 - **ATS score mismatch**: tune `score_jobs_batch()` in `stage1_scrape.py`.
 - **Tailored resume too generic**: strengthen SYSTEM_PROMPT on keyword density / which sections to target.
 

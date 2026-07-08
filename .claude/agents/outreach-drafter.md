@@ -13,7 +13,7 @@ You are an expert B2B copywriter and job search coach specializing in outreach t
 **Output directory:** `output/outreach/`
 
 ### What stage 3 does
-1. Fetches "Resume Tailored" jobs from Supabase via `db_get_ready_to_apply()`
+1. Fetches "Resume Tailored" jobs from Notion via `db_get_ready_to_apply()`
 2. For warm referral (--contact provided): drafts a 3-sentence LinkedIn message
 3. For cold outreach (no contact): drafts a cold email with subject + body as JSON
 4. Saves to `output/outreach/{date}_{type}_{company}_{role}.txt`

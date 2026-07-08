@@ -149,11 +149,6 @@ def _active_provider() -> str:
     from config.settings import STAGE_AI_PROVIDER
     return STAGE_AI_PROVIDER or AI_PROVIDER
 
-def _active_provider() -> str:
-    """Return STAGE_AI_PROVIDER if set, else AI_PROVIDER."""
-    from config.settings import STAGE_AI_PROVIDER
-    return STAGE_AI_PROVIDER or AI_PROVIDER
-
 def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
     provider = _active_provider()
     backend = _BACKENDS.get(provider)

@@ -20,14 +20,13 @@ Driver: `.claude/skills/run-local-n8n-engine/smoke.py`
 Python 3.9+ with these packages (already installed if setup passed):
 
 ```
-pip install -r requirements.txt        # or: anthropic supabase notion-client requests docxtpl
+pip install -r requirements.txt        # or: claude-agent-sdk notion-client requests docxtpl
 ```
 
 API keys set in `config/settings.py`:
-- Provider key matching `AI_PROVIDER` — `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` (codex), or `GEMINI_API_KEY` (gemini). The repo currently defaults to `AI_PROVIDER = "codex"`.
+- Provider auth matching `AI_PROVIDER` — Claude Code subscription (`claude_code`, default; run `claude /login`), or `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini). The repo defaults to `AI_PROVIDER = "claude_code"`.
 - `APIFY_API_TOKEN` — LinkedIn scraper (apify.com, free tier works)
-- `SUPABASE_URL` + `SUPABASE_KEY` — primary data store (service_role key)
-- `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); optional visual mirror
+- `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); **primary data store** (the DB must be shared with the integration)
 
 Resume at `config/resume.txt` (plain text) and the base `config/Achyuth_Resume.docx` for stage-2 in-place tailoring.
 
@@ -116,7 +115,7 @@ hand in Notion with `Status = Interested` are pulled in on the next scrape (or `
 
 | Stage | Output |
 |---|---|
-| 1 (scrape) | Supabase/Notion rows, status=Scraped (incl. ingested "Interested") |
+| 1 (scrape) | Notion rows, status=Scraped (incl. ingested "Interested") |
 | 2 (tailor) | `output/resumes/{date}_{company}_{role}.docx` + `.txt`, status=Resume Tailored |
 | 3 (outreach) | `output/outreach/{date}_{company}_outreach.txt` (not auto-sent) |
 | 4 (digest) | `output/digest_{date}.html` / `review_digest_{date}.html`, optional Gmail send |
@@ -125,7 +124,7 @@ hand in Notion with `Status = Interested` are pulled in on the next scrape (or `
 
 ---
 
-## Status pipeline (Supabase primary, mirrored to Notion)
+## Status pipeline (Notion — single source of truth)
 
 ```
 Interested (manual) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received

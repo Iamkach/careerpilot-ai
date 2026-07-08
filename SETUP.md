@@ -15,10 +15,9 @@ Both read everything from `config/settings.py`.
 
 - **Python 3.9+**
 - Accounts / keys (only the ones for the features you use):
-  - An AI provider key — Anthropic **or** Gemini **or** OpenAI
+  - A Claude Code subscription (default provider `claude_code`) **or** an AI provider key — Anthropic **or** Gemini **or** OpenAI
   - **Apify** token (LinkedIn scraping) — free tier works
-  - **Supabase** project (primary data store) — free tier works
-  - **Notion** integration key (optional — visual tracker mirror)
+  - **Notion** integration key (primary data store — the job tracker database)
   - **Gmail** OAuth credentials (optional — emailed digest)
 
 ---
@@ -26,23 +25,24 @@ Both read everything from `config/settings.py`.
 ## 2. Install dependencies
 
 Install the SDK for your chosen provider plus the shared packages. `run.py --setup`
-expects `supabase`, `notion_client`, and `requests` in addition to the provider SDK.
+expects `notion_client` and `requests` in addition to the provider SDK. Or just
+`pip install -r requirements.txt`.
 
 ```bash
-# Claude (default)
-pip install anthropic supabase notion-client requests docxtpl
+# Claude Code subscription (default provider: claude_code)
+pip install claude-agent-sdk notion-client requests docxtpl
 
 # Gemini
-pip install google-generativeai supabase notion-client requests docxtpl
+pip install google-generativeai notion-client requests docxtpl
 
 # OpenAI / Codex
-pip install openai supabase notion-client requests docxtpl
+pip install openai notion-client requests docxtpl
 ```
 
 > `docxtpl` powers the stage-2 `.docx` resume rendering (see step 3b).
 
-> `workflow.py` always imports `anthropic`, so install it if you plan to use the
-> agentic orchestrator regardless of provider.
+> `workflow.py` runs on the **Agent SDK** (`claude-agent-sdk`) over your Claude Code
+> subscription, so install it if you plan to use the agentic orchestrator.
 
 ---
 
@@ -101,40 +101,42 @@ TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 
 ### AI provider
 ```python
-AI_PROVIDER       = "claude"        # "claude" | "gemini" | "codex"
+AI_PROVIDER       = "claude_code"   # "claude_code" | "claude" | "gemini" | "codex"
 AI_MODEL_OVERRIDE = ""              # leave blank to use the provider default
 ```
 
-| `AI_PROVIDER` | Default model       | Key to set          |
-|---------------|---------------------|---------------------|
-| `claude`      | `claude-opus-4-6`   | `ANTHROPIC_API_KEY` |
-| `gemini`      | `gemini-2.0-flash`  | `GEMINI_API_KEY`    |
-| `codex`       | `gpt-4o`            | `OPENAI_API_KEY`    |
+| `AI_PROVIDER`  | Default model       | Key to set                             |
+|----------------|---------------------|----------------------------------------|
+| `claude_code`  | `sonnet`            | Claude Code subscription (`claude /login`) |
+| `claude`       | `claude-opus-4-6`   | `ANTHROPIC_API_KEY`                    |
+| `gemini`       | `gemini-2.0-flash`  | `GEMINI_API_KEY`                       |
+| `codex`        | `gpt-4o`            | `OPENAI_API_KEY`                       |
+
+> **`claude_code` (default)** routes all AI through your logged-in Claude Code
+> subscription via the Agent SDK — no metered API key is used. Prerequisites: install
+> the Claude Code CLI, run `claude /login`, and `pip install claude-agent-sdk`.
+> **`ANTHROPIC_API_KEY` must NOT be present in the environment** or the SDK/CLI would
+> prefer it and bill metered.
 
 ### API keys
 ```python
-ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com        (provider: claude)
+ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com        (provider: claude only)
 GEMINI_API_KEY    = "..."   # https://aistudio.google.com/apikey   (provider: gemini)
 OPENAI_API_KEY    = "***REMOVED-SECRET***"   # https://platform.openai.com/api-keys (provider: codex)
 APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com (free token)
-NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrations (optional)
+NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrations (PRIMARY data store)
 ```
-Set only the AI key matching `AI_PROVIDER`; the other two can stay blank.
+Under the default `claude_code` provider, no AI key is needed. Otherwise set only the
+key matching `AI_PROVIDER`.
 
-### Supabase (primary data store — required)
+### Notion (primary data store — required)
 ```python
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_KEY = "..."   # service_role key — Project Settings > API
+NOTION_API_KEY = "***REMOVED-SECRET***"   # the integration token
+NOTION_DB_ID   = "2ac0907e693744698a1c748d37774a07"   # already set — your tracker DB
 ```
-Reads always come from Supabase; writes go to Supabase first, then mirror to Notion
-if `NOTION_API_KEY` is set. Create the table once (see step 5).
-
-### Notion (optional visual tracker)
-```python
-NOTION_API_KEY = "***REMOVED-SECRET***"   # leave blank to skip the Notion mirror
-NOTION_DB_ID   = "2ac0907e693744698a1c748d37774a07"   # already set
-```
-If you use Notion, share your tracker database with the integration you created.
+Notion is the single source of truth. Create the integration at
+https://www.notion.so/my-integrations and **share your tracker database with it** —
+all reads and writes go through the Notion API (see step 5 for the required schema).
 
 ### Gmail (optional — emailed digest)
 ```python
@@ -145,58 +147,40 @@ Only needed for `--send` on stage 4 (see step 6).
 
 ---
 
-## 5. Create the Supabase table (run once)
+## 5. Set up the Notion database schema (once)
 
-In the Supabase **SQL Editor**, run:
+Notion is the primary data store. Your tracker DB (`NOTION_DB_ID`) must have these
+properties — **names and types must match exactly** (a missing or mistyped property
+silently breaks queries/writes):
 
-```sql
-CREATE TABLE jobs (
-    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_title               TEXT NOT NULL,
-    company                 TEXT NOT NULL,
-    location                TEXT,
-    job_url                 TEXT UNIQUE NOT NULL,
-    status                  TEXT NOT NULL DEFAULT 'Scraped'
-                            CHECK (status IN (
-                                'Interested','Scraped','Reviewed','Resume Tailored','Applied',
-                                'Outreach Sent','Interview Scheduled','Offer Received'
-                            )),
-    date_scraped            DATE NOT NULL DEFAULT CURRENT_DATE,
-    ats_match_score         NUMERIC(5,2),
-    job_description         TEXT,
-    tailored_resume_link    TEXT,
-    date_applied            DATE,
-    hiring_manager          TEXT,
-    hiring_manager_linkedin TEXT,
-    notion_page_id          TEXT,
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+| Property | Type | Notes |
+|----------|------|-------|
+| `Job Title` | title | |
+| `Company` | rich_text | |
+| `Location` | rich_text | |
+| `Job URL` | url | used for URL-based dedup |
+| `Status` | select | options: `Interested`, `Scraped`, `Reviewed`, `Resume Tailored`, `Applied`, `Outreach Sent`, `Interview Scheduled`, `Offer Received`, `Disregard` |
+| `ATS Match Score` | number | |
+| `Date Scraped` | date | |
+| `Tailored Resume Link` | url | |
+| `Date Applied` | date | |
+| `Hiring Manager` | rich_text | |
+| `Hiring Manager LinkedIn` | url | |
 
-CREATE INDEX jobs_status_score_idx ON jobs (status, ats_match_score DESC);
+> The full **job description is not a property** — it is cached in the page **body**
+> (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by
+> `db_get_job_description()`.
 
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER jobs_updated_at
-BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-```
-
-> **Upgrading an existing table?** Add the JD cache column and widen the status check:
-> ```sql
-> ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_description text;
-> -- and ensure 'Interested' and 'Reviewed' are allowed by your status CHECK
-> ```
+Create each `Status` select option once (type it into the select to create it), and
+make sure the Notion integration is **shared with the database**.
 
 ### Notion intake & review statuses
 
 Two statuses are set by you in Notion, not by the scripts:
 - **`Interested`** — add a job by hand (Job Title + Company + Job URL); the next scrape
   ingests, enriches, and scores it (`python run.py --ingest` runs only this).
-- **`Reviewed`** — approve a scraped job for tailoring; `python run.py --evaluate` syncs
-  these back to Supabase and runs stages 2–4.
+- **`Reviewed`** — approve a scraped job for tailoring; `python run.py --evaluate` reads
+  these straight from Notion and runs stages 2–4.
 
 In the Notion DB's **Status** select, add `Interested` and `Reviewed` as options (type them
 once into the select to create them).
@@ -218,9 +202,9 @@ once into the select to create them).
 python run.py --setup
 ```
 
-This prints a ✓/✗ checklist for the active provider key, Apify token, Supabase URL +
-key, Notion key (optional), Notion DB ID, resume file, and installed packages. Fix any
-✗ before running. Output dirs under `output/` are auto-created on first run.
+This prints a ✓/✗ checklist for the active provider key, Apify token, Notion API key
+(primary data store), Notion DB ID, resume file, and installed packages. Fix any ✗
+before running. Output dirs under `output/` are auto-created on first run.
 
 ---
 
@@ -263,7 +247,7 @@ python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 18500
 | `output/negotiation/` | Negotiation briefs (`.html`) |
 | `output/digest_YYYY-MM-DD.html` | Daily digest |
 
-Status pipeline (tracked in Supabase, mirrored to Notion):
+Status pipeline (tracked in Notion, the single source of truth):
 `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
 ---
@@ -273,9 +257,9 @@ Status pipeline (tracked in Supabase, mirrored to Notion):
 | Symptom | Fix |
 |---------|-----|
 | `Resume not found` | Add `config/resume.txt` |
-| Provider key ✗ | Set the key matching `AI_PROVIDER` in `config/settings.py` |
-| `Supabase URL/key` ✗ | Fill `SUPABASE_URL` and `SUPABASE_KEY` (service_role) |
-| `supabase not installed` | `pip install supabase` |
+| Provider key ✗ | Set the key matching `AI_PROVIDER`, or use `claude_code` (`claude /login`) |
+| Notion errors / empty results | Set `NOTION_API_KEY`, share the DB with the integration, and match the schema in step 5 |
+| `notion-client` version error | Pin `notion-client>=2.2.1,<2.6` (2.6+/3.x dropped `databases.query`) |
 | Apify timeouts | Scraper retries 30×10s; retry on network errors |
 | Gmail send fails | Ensure `config/gmail_credentials.json` exists (OAuth) |
-| Duplicate jobs | Dedup is by job URL; check the `jobs.job_url` unique constraint |
+| Duplicate jobs | Dedup is by job URL; check the `Job URL` property for trailing slashes / query params |
