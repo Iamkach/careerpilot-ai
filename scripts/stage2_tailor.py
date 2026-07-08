@@ -3,12 +3,12 @@
 stage2_tailor.py — AI resume tailoring per job
 ────────────────────────────────────────────────
 What it does:
-  1. Fetches all "Reviewed" jobs from Supabase (jobs marked for application)
+  1. Fetches all "Reviewed" jobs from Notion (jobs marked for application)
   2. Extracts text from config/Achyuth_Resume.docx as the base resume content
   3. For each job, asks Claude for targeted ATS keyword edits ({old, new} pairs)
   4. Copies Achyuth_Resume.docx, applies edits in-place → output/resumes/*.docx
      (preserves all original formatting; also writes a .txt mirror for quick review)
-  5. Updates Supabase: Status → "Resume Tailored", Tailored Resume Link
+  5. Updates Notion: Status → "Resume Tailored", Tailored Resume Link
 
 Run:  python run.py --evaluate
   or: python run.py --stage 2 --min-score 60   (only score ≥ 60 from Reviewed status)
@@ -48,7 +48,7 @@ def load_base_resume_text() -> str:
         return load_resume()
 
 
-# ── Fetch "Reviewed" jobs from Supabase ───────────────────────
+# ── Fetch "Reviewed" jobs from Notion ─────────────────────────
 
 def get_reviewed_jobs(min_score: int = 0) -> list:
     return db_get_jobs(status="Reviewed", min_score=min_score)

@@ -2,7 +2,7 @@
 
 Automated job search system using Claude API — no N8N, no VPS required.
 Scrapes LinkedIn, tailors resumes, drafts outreach, preps interviews, and negotiates offers.
-Data lives in Supabase (primary), mirrored to a Notion database you use as the visual tracker.
+Progress is tracked in **Notion** (the single source of truth — the job tracker database).
 
 ---
 
@@ -15,7 +15,7 @@ flowchart TD
 
     subgraph S1["Stage 1 — Scrape (+ ingest Notion 'Interested')"]
         L1[Apify LinkedIn Scraper] --> L2[AI: ATS score vs resume]
-        L2 --> L3[Supabase/Notion: Status = Scraped]
+        L2 --> L3[Notion: Status = Scraped]
     end
 
     S1 --> RG{Review in Notion\nStatus = Reviewed}
@@ -24,7 +24,7 @@ flowchart TD
     subgraph S2["Stage 2 — Tailor  --evaluate / --min-score N"]
         T1[Fetch Reviewed jobs] --> T2[AI: targeted ATS edits to base .docx]
         T2 --> T3[output/resumes/*.docx + .txt]
-        T3 --> T4[Supabase/Notion: Status = Resume Tailored]
+        T3 --> T4[Notion: Status = Resume Tailored]
     end
 
     S2 --> S3 & S4
@@ -81,8 +81,8 @@ local-n8n-engine/
 │   └── resume_template.docx     # DOCX scaffold for render_docx.py
 │
 ├── scripts/
-│   ├── utils.py                 # Shared helpers: ai_chat(), Supabase CRUD, Notion mirror
-│   ├── stage1_scrape.py         # Scrape LinkedIn via Apify, ATS score, save to Supabase
+│   ├── utils.py                 # Shared helpers: ai_chat(), Notion-backed CRUD
+│   ├── stage1_scrape.py         # Scrape LinkedIn via Apify, ATS score, save to Notion
 │   ├── stage2_tailor.py         # Rewrite resume per JD, save to output/resumes/
 │   ├── stage3_outreach.py       # Draft cold/warm outreach emails
 │   ├── stage4_digest.py         # Generate HTML morning digest
@@ -113,17 +113,17 @@ local-n8n-engine/
 Install the SDK for your chosen AI provider plus the shared dependencies:
 
 ```bash
-# Claude (default)
-pip install anthropic supabase notion-client requests docxtpl
+# Claude Code subscription (default provider: claude_code)
+pip install claude-agent-sdk notion-client requests docxtpl
 
 # Gemini
-pip install google-generativeai supabase notion-client requests docxtpl
+pip install google-generativeai notion-client requests docxtpl
 
 # OpenAI / Codex
-pip install openai supabase notion-client requests docxtpl
+pip install openai notion-client requests docxtpl
 ```
 
-> `supabase` is the primary data store (required); `docxtpl` backs the stage-2 `.docx`
+> `notion-client` is the primary data store (required); `docxtpl` backs the stage-2 `.docx`
 > resumes. Or just `pip install -r requirements.txt`.
 
 ### 2. Add your resume
@@ -175,7 +175,7 @@ the auto-scraped jobs.
 
 | Stage | Command | What it does |
 |-------|---------|--------------|
-| 1 | `python run.py --stage 1` | Scrape fresh LinkedIn jobs (+ ingest "Interested") → Supabase/Notion |
+| 1 | `python run.py --stage 1` | Scrape fresh LinkedIn jobs (+ ingest "Interested") → Notion |
 | — | `python run.py --ingest` | Ingest only Notion "Interested" jobs → "Scraped" |
 | 2 | `python run.py --stage 2 --min-score 60` | AI-tailor resume per Reviewed job |
 | 3 | `python run.py --stage 3 --company "Stripe"` | Draft cold outreach email |
@@ -193,7 +193,7 @@ the auto-scraped jobs.
 Intake (manual): Notion row Status="Interested" → ingested on next scrape → "Scraped"
 
 Stage 1: Scrape
-  LinkedIn (via Apify) → AI scores ATS match → Supabase/Notion "Scraped"
+  LinkedIn (via Apify) → AI scores ATS match → Notion "Scraped"
                                     ↓
                   Review gate: set Status="Reviewed" in Notion
 

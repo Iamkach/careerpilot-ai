@@ -12,8 +12,8 @@ What it does:
        d. US-location check
        e. Deterministic no-sponsorship regex on the full JD
   3. Scores surviving candidates in one batched AI call (ATS + sponsorship)
-  4. Skips duplicates already in Supabase
-  5. Adds new jobs to Supabase + Notion tracker with Status = "Scraped"
+  4. Skips duplicates already in Notion
+  5. Adds new jobs to the Notion tracker with Status = "Scraped"
 
 Run:  python scripts/stage1_scrape.py
 """

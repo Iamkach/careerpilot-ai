@@ -12,11 +12,12 @@ You are an expert in this AI job search pipeline located at F:\workspace\Repo\lo
 - `workflow.py` — Claude-native agentic loop (primary). Claude is the orchestrator; it decides which tools to call. Uses tool use + prompt caching + streaming. Model: claude-opus-4-8 with adaptive thinking.
 - `run.py` — Legacy sequential runner. Calls `run()` from each stage script directly. Still functional as fallback.
 
-**Data layer:** Supabase is the primary store; Notion is an optional mirror. All stages
-read/write Supabase via the `db_*` helpers, which mirror to Notion when `NOTION_API_KEY` is set.
+**Data layer:** Notion is the single source of truth. All stages read/write the Notion jobs
+database via the `db_*` helpers (there is no Supabase — it was removed). `NOTION_API_KEY` +
+DB sharing are required; the JD is cached in each page's body (paragraph blocks).
 
 **Stage scripts** (each has a standalone `run()` function):
-- `scripts/stage1_scrape.py` — `ingest_interested_from_notion()` (manual intake) → Apify LinkedIn scraper → AI ATS scoring (`score_jobs_batch`) → Supabase insert (status=Scraped)
+- `scripts/stage1_scrape.py` — `ingest_interested_from_notion()` (manual intake) → Apify LinkedIn + Indeed scrapers → AI ATS scoring (`score_jobs_batch`) → Notion insert (status=Scraped)
 - `scripts/stage2_tailor.py` — Fetch **"Reviewed"** jobs → AI suggests `{old,new}` ATS edits → `apply_docx_edits()` edits the base `.docx` in-place → save `.docx`+`.txt` → status=Resume Tailored
 - `scripts/stage3_outreach.py` — Fetch "Resume Tailored" jobs → AI cold/warm email draft → save .txt. Has an `input()` confirm when run directly; `--evaluate` calls it with `no_confirm=True` (non-interactive)
 - `scripts/stage4_digest.py` — Build HTML digest (review digest of "Scraped", or ready digest of "Resume Tailored") → optional Gmail send
@@ -27,18 +28,18 @@ read/write Supabase via the `db_*` helpers, which mirror to Notion when `NOTION_
 - `ai_chat(prompt, system, max_tokens, quality)` — multi-provider dispatch (claude/gemini/codex); `claude_chat` is an alias
 - `ai_chat_blocks(blocks, ...)` — Claude-only structured blocks with `cache_control`
 - `db_add_job()`, `db_add_job_linked()`, `db_update_status()`, `db_find_job_by_url()`, `db_get_jobs()`, `db_get_ready_to_apply()`, `db_get_job_by_company()`, `db_get_job_description()`
-- `get_notion_jobs_by_status()`, `sync_notion_to_supabase()`, `_notion_write_job()`, `_notion_update()`, `_notion_promote_to_scraped()`
+- `get_notion_jobs_by_status()`, `sync_notion_to_supabase()` (no-op, kept for compat), `_notion_write_job()`, `_notion_update()`, `_notion_promote_to_scraped()`
 - `load_resume()`, `ensure_dirs()`, `log()`, `today()`, `parse_json_response()`
 
 **Configuration** (`config/settings.py`):
-- API keys: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, APIFY_API_TOKEN, NOTION_API_KEY, SUPABASE_URL + SUPABASE_KEY
+- API keys: NOTION_API_KEY (primary store), APIFY_API_TOKEN, plus the provider key matching AI_PROVIDER (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY; none needed for `claude_code`)
 - NOTION_DB_ID = "2ac0907e693744698a1c748d37774a07"
-- AI_PROVIDER ("claude" | "gemini" | "codex", currently "codex"), AI_MODEL_OVERRIDE (fast), QUALITY_MODEL (strong)
+- AI_PROVIDER ("claude_code" | "claude" | "gemini" | "codex", default "claude_code"), STAGE_AI_PROVIDER (optional per-stage override), AI_MODEL_OVERRIDE (fast), QUALITY_MODEL (strong)
 - User profile: YOUR_NAME, YOUR_EMAIL, YOUR_BIO, TARGET_ROLES (search is US-wide; no TARGET_CITY)
-- Stage 1 filters: SKIP_COMPANIES, EXCLUDE_NO_SPONSORSHIP
+- Stage 1 filters: SKIP_COMPANIES, SKIP_COMPANY_KEYWORDS, SKIP_TITLE_KEYWORDS, EXCLUDE_NO_SPONSORSHIP, MAX_APPLICANT_COUNT
 - RESUME_PATH (config/resume.txt), RESUME_TEMPLATE_PATH (config/Achyuth_Resume.docx — base for in-place tailoring)
 
-**Status pipeline (Supabase primary, mirrored to Notion):**
+**Status pipeline (Notion — single source of truth):**
 ```
 Interested (manual) → Scraped → Reviewed (manual) → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received
 ```
@@ -46,12 +47,12 @@ Interested (manual) → Scraped → Reviewed (manual) → Resume Tailored → Ap
 **Notion DB properties:**
 - Job Title (title), Company (rich_text), Location (rich_text), Job URL (url), Status (select)
 - ATS Match Score (number), Tailored Resume Link (url), Date Scraped (date), Date Applied (date)
-- (JD text is not a Notion prop — cached in Supabase `job_description`; rows link via `notion_page_id`)
+- (JD text is not a Notion prop — cached in the page **body** as paragraph blocks; read via `db_get_job_description(page_id)`)
 
 **workflow.py tools (`_TOOL_IMPL`, 12 total):**
 1. `scrape_linkedin_jobs` — Apify actor `curious_coder~linkedin-jobs-scraper`
-2. `check_job_in_db` — URL-based dedup query (Supabase)
-3. `add_job_to_db` — Inserts row with status=Scraped
+2. `check_job_in_db` — URL-based dedup query (Notion)
+3. `add_job_to_db` — Creates a Notion page with status=Scraped
 4. `get_jobs` — Filter by status + optional min_score
 5. `get_ready_to_apply` — status=Resume Tailored + no date_applied
 6. `fetch_job_description` — HTTP GET + HTML strip → 6000 chars
@@ -60,7 +61,7 @@ Interested (manual) → Scraped → Reviewed (manual) → Resume Tailored → Ap
 9. `save_html_file` — Writes HTML with optional subdir
 10. `update_status` — Updates any status field
 11. `send_digest_email` — Gmail OAuth send
-12. `sync_disregard` — `sync_notion_to_supabase()` before an evaluate run
+12. `sync_disregard` — deprecated no-op (Notion is the source of truth; kept for compat)
 
 ## Key design decisions
 

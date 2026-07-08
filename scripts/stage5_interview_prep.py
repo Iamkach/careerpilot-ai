@@ -34,7 +34,7 @@ interviews, particularly for product management, engineering, and business roles
 Generate highly specific, tailored interview prep — not generic advice."""
 
 
-# ── Fetch job details from Supabase ──────────────────────────
+# ── Fetch job details from Notion ────────────────────────────
 
 def get_job_from_notion(company: str) -> dict | None:
     return db_get_job_by_company(company)

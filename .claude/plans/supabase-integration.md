@@ -1,5 +1,10 @@
 # Supabase Integration
 
+> ⚠️ **SUPERSEDED / HISTORICAL.** This plan describes an earlier Supabase-primary
+> architecture that has since been **removed**. Notion is now the single source of truth
+> (see `CLAUDE.md`, `SETUP.md`, and the `db_*` helpers in `scripts/utils.py`). Kept only
+> for historical context — do **not** implement anything below.
+
 Supabase is the primary programmatic data store (SQL, no rate limits).
 Notion stays as the visual tracker — writes mirror to both.
 
