@@ -2,6 +2,8 @@
 #  config/settings.py  —  Fill these in before running
 # ============================================================
 
+import os
+
 # --- Your profile -------------------------------------------
 YOUR_NAME        = "Krishna Achyuth"
 YOUR_EMAIL       = "kachyuth06@example.com"
@@ -101,30 +103,36 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages
-# Options: "claude" | "gemini" | "codex"
-AI_PROVIDER = "codex"
+# Options: "claude_code" (subscription) | "claude" (metered API) | "gemini" | "codex"
+#
+# "claude_code" routes ALL AI through your Claude Code subscription via the Agent SDK
+# (claude-agent-sdk) — both the stage scripts (run.py) and the agentic orchestrator
+# (workflow.py). No metered API key is used. Prerequisites: install the Claude Code CLI,
+# run `claude /login`, and `pip install claude-agent-sdk`. No prompt caching on this path.
+# NOTE: ANTHROPIC_API_KEY must NOT be present in the environment — the SDK/CLI would prefer
+# it and bill metered. It is only needed if you switch AI_PROVIDER back to "claude".
+AI_PROVIDER = "claude_code"
+
+# Optional: route stage scripts (run.py path) through a different provider.
+# Set to "claude" and provide ANTHROPIC_API_KEY below to eliminate session drain
+# from stage scripts entirely (restores prompt caching too). workflow.py is unaffected.
+# Leave blank to fall through to AI_PROVIDER above (default behavior).
+STAGE_AI_PROVIDER = ""
 
 # Model overrides — leave blank to use the defaults below
-#   claude default : claude-opus-4-6
-
-#   gemini default : gemini-2.0-flash
-#   codex  default : gpt-4o
-AI_MODEL_OVERRIDE = "gpt-4o"   # fast/cheap — stages 1, 3 claude-haiku-4-5-20251001
-QUALITY_MODEL     = "gpt-5-mini"            # strong — stages 2, 5, 6, workflow claude-sonnet-4-6
+#   claude default      : claude-opus-4-6
+#   claude_code default : sonnet  (accepts aliases: haiku | sonnet | opus, or full claude-* ids)
+#   gemini default      : gemini-2.0-flash
+#   codex  default      : gpt-4o
+AI_MODEL_OVERRIDE = "haiku"     # fast/cheap — stages 1, 3
+QUALITY_MODEL     = "sonnet"    # strong — stages 2, 5, 6, workflow
 
 # --- API Keys -----------------------------------------------
-ANTHROPIC_API_KEY = "***REMOVED-ANTHROPIC-KEY***"   # https://console.anthropic.com         (provider: claude)
-GEMINI_API_KEY    = ""   # https://aistudio.google.com/apikey    (provider: gemini)
-OPENAI_API_KEY    = "***REMOVED-OPENAI-KEY***"   # https://platform.openai.com/api-keys  (provider: codex)
 APIFY_API_TOKEN   = "***REMOVED-APIFY-TOKEN***"   # https://apify.com  (free token)
-NOTION_API_KEY    = "***REMOVED-NOTION-KEY***"   # TEMP-DISABLED (was ***REMOVED-NOTION-KEY***) — DB not shared with integration; re-enable after sharing
+NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (the integration token; DB is shared & working)
 
 # --- Notion IDs (already created for you) -------------------
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
-
-# --- Supabase (primary data store) --------------------------
-SUPABASE_URL      = "https://qgluulgbtdzcreehrcqx.supabase.co"   # https://your-project.supabase.co
-SUPABASE_KEY      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnbHV1bGdidGR6Y3JlZWhyY3F4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDQxNjAwMCwiZXhwIjoyMDk1OTkyMDAwfQ.nUAAYgNVxa-87FDTshMYleQ2vQMpGmlf5mSNlKzuNi0"   # service_role key — Project Settings > API
 
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials

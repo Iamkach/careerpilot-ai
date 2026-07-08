@@ -7,6 +7,12 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from config.settings import *
+import config.settings as _settings
+# Alternate-provider keys are optional under the default claude_code provider. Ensure the
+# names are always defined so `import *` users don't NameError when they're absent.
+ANTHROPIC_API_KEY = getattr(_settings, "ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY    = getattr(_settings, "GEMINI_API_KEY", "")
+OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
 
 # ── Default models per provider ─────────────────────────────
 _DEFAULTS = {
@@ -51,6 +57,55 @@ def _chat_claude(prompt: str, system: str, max_tokens: int, quality: bool = Fals
     return resp.content[0].text
 
 
+def _find_claude_cli() -> str:
+    """Locate the Claude Code CLI executable, robust to Windows .cmd/.exe shims."""
+    import shutil
+    for name in ("claude", "claude.cmd", "claude.exe"):
+        path = shutil.which(name)
+        if path:
+            return path
+    raise RuntimeError(
+        "Claude Code CLI not found on PATH. Install it and run `claude /login` so the "
+        "`claude_code` provider can use your subscription. (Looked for: claude, claude.cmd, claude.exe)"
+    )
+
+
+async def _sdk_text(prompt: str, system: str, model: str) -> str:
+    """One-shot prompt->text via the Agent SDK, no tools. Accumulates assistant text,
+    preferring the final ResultMessage.result when present."""
+    from claude_agent_sdk import (
+        query, ClaudeAgentOptions, AssistantMessage, TextBlock, ResultMessage,
+    )
+    opts = ClaudeAgentOptions(
+        system_prompt=system or None,
+        model=model,
+        allowed_tools=[],          # pure text generation — no tool use
+        setting_sources=[],        # don't load project CLAUDE.md/settings into the prompt
+        permission_mode="bypassPermissions",
+        max_turns=1,
+    )
+    chunks, result = [], None
+    async for msg in query(prompt=prompt, options=opts):
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    chunks.append(block.text)
+        elif isinstance(msg, ResultMessage):
+            result = msg.result
+    return (result if result else "".join(chunks)).strip()
+
+
+def _chat_claude_code(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
+    """Route a single prompt->text call through the Claude Code subscription via the Agent
+    SDK (no metered API key). The SDK spawns the `claude` CLI as its transport, so it uses
+    the logged-in subscription as long as ANTHROPIC_API_KEY is not in the environment.
+    Note: prompt caching is unavailable over this path; `max_tokens` has no SDK knob."""
+    import asyncio
+    os.environ.pop("ANTHROPIC_API_KEY", None)  # force subscription auth, never metered
+    _find_claude_cli()  # fail fast with a clear message if the CLI is missing
+    return asyncio.run(_sdk_text(prompt, system, _resolve_model(quality)))
+
+
 def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
@@ -87,10 +142,16 @@ _BACKENDS = {
     "codex":  _chat_codex,
 }
 
+def _active_provider() -> str:
+    """Return STAGE_AI_PROVIDER if set, else AI_PROVIDER."""
+    from config.settings import STAGE_AI_PROVIDER
+    return STAGE_AI_PROVIDER or AI_PROVIDER
+
 def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
-    backend = _BACKENDS.get(AI_PROVIDER)
+    provider = _active_provider()
+    backend = _BACKENDS.get(provider)
     if not backend:
-        raise ValueError(f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Choose: claude, gemini, codex")
+        raise ValueError(f"Unknown provider '{provider}'. Choose: claude, claude_code, gemini, codex")
     return backend(prompt, system, max_tokens, quality)
 
 # Alias so all existing stage scripts continue to work without changes
@@ -99,8 +160,10 @@ claude_chat = ai_chat
 
 def ai_chat_blocks(blocks: list, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
     """Claude-only: send structured content blocks supporting per-block cache_control.
-    Falls back to plain ai_chat for non-Claude providers (cache_control is ignored)."""
-    if AI_PROVIDER != "claude":
+    Falls back to plain ai_chat for non-Claude providers (cache_control is ignored).
+    Only the metered "claude" API provider uses the structured/cached path; "claude_code"
+    (subscription CLI) joins blocks like gemini/codex since per-block caching is unsupported."""
+    if _active_provider() != "claude":
         text = "\n\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         return ai_chat(text, system=system, max_tokens=max_tokens, quality=quality)
     import anthropic
@@ -149,8 +212,14 @@ def parse_json_response(text: str) -> dict:
     try:
         return json.loads(s)
     except json.JSONDecodeError:
-        # Fall back to the outermost {...} span
         start, end = s.find("{"), s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(s[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        # Also try outermost [...] span for batch array responses
+        start, end = s.find("["), s.rfind("]")
         if start != -1 and end != -1 and end > start:
             return json.loads(s[start:end + 1])
         raise ValueError(f"Could not parse JSON from response:\n{text[:500]}")
@@ -164,14 +233,67 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-# ── Supabase (primary data store) ────────────────────────────
+# ── Notion (primary data store) ──────────────────────────────
 
-def _get_db():
-    from supabase import create_client
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+_NOTION = None
+
+def _notion():
+    """Cached notion_client. Raises if NOTION_API_KEY is unset (Notion is the only store)."""
+    global _NOTION
+    if not NOTION_API_KEY:
+        raise RuntimeError("NOTION_API_KEY is not set — Notion is the primary data store.")
+    if _NOTION is None:
+        from notion_client import Client as NotionClient
+        _NOTION = NotionClient(auth=NOTION_API_KEY)
+    return _NOTION
 
 
-# ── Notion mirror (optional — visual tracker UI) ──────────────
+# ── Notion property readers ───────────────────────────────────
+
+def _prop_url(props: dict, name: str) -> str:
+    return (props.get(name) or {}).get("url") or ""
+
+def _prop_number(props: dict, name: str):
+    return (props.get(name) or {}).get("number") or 0
+
+def _prop_date(props: dict, name: str):
+    d = (props.get(name) or {}).get("date")
+    return d.get("start") if d else None
+
+
+def _page_to_job(page: dict) -> dict:
+    """Map a Notion page to the job dict shape every stage/tool expects."""
+    props = page.get("properties", {})
+    ats = _prop_number(props, "ATS Match Score")
+    return {
+        "page_id":     page["id"],
+        "id":          page["id"],
+        "title":       _notion_plain_text(props.get("Job Title")),
+        "company":     _notion_plain_text(props.get("Company")),
+        "location":    _notion_plain_text(props.get("Location")),
+        "url":         _prop_url(props, "Job URL"),
+        "ats":         ats,
+        "ats_score":   ats,
+        "resume_link": _prop_url(props, "Tailored Resume Link"),
+        "hm":          _notion_plain_text(props.get("Hiring Manager")),
+        "hm_li":       _prop_url(props, "Hiring Manager LinkedIn"),
+    }
+
+
+# ── Job description ↔ page body blocks ────────────────────────
+# The JD is cached in the page body (paragraph blocks) so stages 2/5 don't re-fetch it.
+
+def _jd_blocks(description: str) -> list:
+    """Chunk a (possibly long) JD into Notion paragraph blocks (≤1900 chars each)."""
+    chunks = [description[i:i + 1900] for i in range(0, len(description), 1900)] or [""]
+    return [
+        {"object": "block", "type": "paragraph",
+         "paragraph": {"rich_text": [{"type": "text", "text": {"content": c}}]}}
+        for c in chunks
+    ]
+
+
+# ── Notion writers (page create / status update) ──────────────
 
 def _notion_write_job(job: dict) -> str | None:
     """Create a Notion page mirroring the job. Returns notion_page_id or None."""
@@ -221,44 +343,12 @@ def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
         pass
 
 
-# ── Notion → Supabase sync (used before --evaluate run) ──────
+# ── Notion is now the single source of truth ─────────────────
 
 def sync_notion_to_supabase() -> int:
-    """Sync jobs marked 'Reviewed' in Notion to Supabase.
-
-    User marks jobs as 'Reviewed' in Notion to indicate they want to apply.
-    This syncs only jobs that have 'Reviewed' in Notion but NOT in Supabase.
-    Returns the number of rows updated.
-    """
-    if not NOTION_API_KEY:
-        return 0
-    updated = 0
-    try:
-        import requests
-        db = _get_db()
-
-        # Query Notion API directly for jobs with "Reviewed" status
-        headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
-        body = {
-            "filter": {"property": "Status", "select": {"equals": "Reviewed"}},
-        }
-        resp = requests.post(
-            f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
-            json=body,
-            headers=headers,
-        )
-        results = resp.json() if resp.ok else {}
-
-        for page in results.get("results", []):
-            notion_page_id = page["id"]
-            res = db.table("jobs").select("id,status").eq("notion_page_id", notion_page_id).execute()
-            # Only update if Supabase status is NOT yet "Reviewed"
-            if res.data and res.data[0]["status"] != "Reviewed":
-                db.table("jobs").update({"status": "Reviewed"}).eq("id", res.data[0]["id"]).execute()
-                updated += 1
-    except Exception as e:
-        log(f"[sync_notion_to_supabase] warning: {e}")
-    return updated
+    """No-op since Notion is the primary store: 'Reviewed' status is read straight from
+    Notion (db_get_jobs(status='Reviewed')). Kept so existing callers don't break."""
+    return 0
 
 
 # ── Notion intake (manually-added "Interested" jobs) ─────────
@@ -331,150 +421,126 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict):
         pass
 
 
-# ── Public DB interface ───────────────────────────────────────
+# ── Public DB interface (Notion-backed) ───────────────────────
+# `job_id` / `page_id` everywhere is the Notion page id.
+
+def _query_db(filter_=None, sorts=None) -> list:
+    """Query the Notion jobs database, following pagination. Returns raw pages."""
+    pages, cursor = [], None
+    while True:
+        kwargs = {"database_id": NOTION_DB_ID}
+        if filter_:
+            kwargs["filter"] = filter_
+        if sorts:
+            kwargs["sorts"] = sorts
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        res = _notion().databases.query(**kwargs)
+        pages.extend(res.get("results", []))
+        if res.get("has_more"):
+            cursor = res.get("next_cursor")
+        else:
+            break
+    return pages
+
 
 def db_find_job_by_url(url: str) -> str | None:
-    """Return Supabase job id if URL already exists, else None."""
-    res = _get_db().table("jobs").select("id").eq("job_url", url).execute()
-    return res.data[0]["id"] if res.data else None
+    """Return the Notion page id if a job with this URL exists, else None."""
+    if not url:
+        return None
+    try:
+        pages = _query_db(filter_={"property": "Job URL", "url": {"equals": url}})
+        return pages[0]["id"] if pages else None
+    except Exception as e:
+        log(f"[db_find_job_by_url] warning: {e}")
+        return None
 
 
 def db_add_job(job: dict) -> str:
-    """Insert job into Supabase, mirror to Notion if key set. Returns Supabase id.
-
-    Prerequisite: run once in Supabase SQL editor if upgrading from an older schema:
-      ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_description text;
-    """
-    db = _get_db()
-    row = {
-        "job_title":        job.get("title", ""),
-        "company":          job.get("company", ""),
-        "location":         job.get("location", ""),
-        "job_url":          job["url"],
-        "status":           "Scraped",
-        "date_scraped":     today(),
-        "ats_match_score":  float(job.get("ats_score") or 0),
-        "job_description":  job.get("description", "") or "",
-    }
-    res = db.table("jobs").insert(row).execute()
-    supabase_id = res.data[0]["id"]
-
-    notion_page_id = _notion_write_job(job)
-    if notion_page_id:
-        db.table("jobs").update({"notion_page_id": notion_page_id}).eq("id", supabase_id).execute()
-
-    return supabase_id
+    """Create a Notion page (Status='Scraped') for a scraped job, caching the JD in the
+    page body. Returns the Notion page id."""
+    page_id = _notion_write_job(job)
+    if not page_id:
+        raise RuntimeError("Notion page creation failed — check NOTION_API_KEY and DB sharing.")
+    desc = job.get("description", "") or ""
+    if desc:
+        try:
+            _notion().blocks.children.append(block_id=page_id, children=_jd_blocks(desc))
+        except Exception as e:
+            log(f"[db_add_job] JD body append warning: {e}")
+    return page_id
 
 
 def db_add_job_linked(job: dict, notion_page_id: str) -> str:
-    """Insert a Supabase row for a job whose Notion page ALREADY exists (a
-    manually-added 'Interested' row). Unlike db_add_job, this does not create a
-    new Notion page — it links to the existing one and promotes it to 'Scraped'.
-    Returns the Supabase id."""
-    db = _get_db()
-    row = {
-        "job_title":        job.get("title", ""),
-        "company":          job.get("company", ""),
-        "location":         job.get("location", ""),
-        "job_url":          job["url"],
-        "status":           "Scraped",
-        "date_scraped":     today(),
-        "ats_match_score":  float(job.get("ats_score") or 0),
-        "job_description":  job.get("description", "") or "",
-        "notion_page_id":   notion_page_id,
-    }
-    res = db.table("jobs").insert(row).execute()
-    supabase_id = res.data[0]["id"]
+    """Promote a manually-added 'Interested' Notion page to 'Scraped' (set ATS/date,
+    backfill fields) and cache the JD in its body. Returns the same page id."""
     _notion_promote_to_scraped(notion_page_id, job)
-    return supabase_id
+    desc = job.get("description", "") or ""
+    if desc:
+        try:
+            _notion().blocks.children.append(block_id=notion_page_id, children=_jd_blocks(desc))
+        except Exception as e:
+            log(f"[db_add_job_linked] JD body append warning: {e}")
+    return notion_page_id
 
 
 def db_update_status(job_id: str, status: str, extra_props: dict = None):
-    """Update status in Supabase and mirror to Notion."""
-    db = _get_db()
-    updates = {"status": status}
-    if extra_props:
-        updates.update(extra_props)
-    db.table("jobs").update(updates).eq("id", job_id).execute()
-
-    if NOTION_API_KEY:
-        res = db.table("jobs").select("notion_page_id").eq("id", job_id).execute()
-        notion_page_id = res.data[0]["notion_page_id"] if res.data else None
-        _notion_update(notion_page_id, status, extra_props)
+    """Update a job's Status (+ mapped extra props) on its Notion page."""
+    _notion_update(job_id, status, extra_props)
 
 
 def db_get_ready_to_apply() -> list:
-    """Jobs with Status='Resume Tailored' and no date_applied, sorted by score desc."""
-    res = (
-        _get_db().table("jobs")
-        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
-        .eq("status", "Resume Tailored")
-        .is_("date_applied", "null")
-        .order("ats_match_score", desc=True)
-        .execute()
+    """Jobs with Status='Resume Tailored' and no Date Applied, sorted by score desc."""
+    pages = _query_db(
+        filter_={"and": [
+            {"property": "Status", "select": {"equals": "Resume Tailored"}},
+            {"property": "Date Applied", "date": {"is_empty": True}},
+        ]},
+        sorts=[{"property": "ATS Match Score", "direction": "descending"}],
     )
-    return [
-        {
-            "page_id":     r["id"],
-            "title":       r["job_title"],
-            "company":     r["company"],
-            "location":    r.get("location") or "",
-            "url":         r["job_url"],
-            "ats":         r["ats_match_score"] or 0,
-            "resume_link": r["tailored_resume_link"] or "",
-        }
-        for r in res.data
-    ]
+    return [_page_to_job(p) for p in pages]
 
 
 def db_get_job_description(job_id: str) -> str:
-    """Return the cached job_description for a Supabase job id, or '' if absent."""
-    res = _get_db().table("jobs").select("job_description").eq("id", job_id).execute()
-    return (res.data[0].get("job_description") or "") if res.data else ""
+    """Return the JD cached in the page body (paragraph blocks), or '' if none."""
+    try:
+        texts, cursor = [], None
+        while True:
+            kwargs = {"block_id": job_id}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().blocks.children.list(**kwargs)
+            for b in res.get("results", []):
+                if b.get("type") == "paragraph":
+                    texts.append("".join(t.get("plain_text", "") for t in b["paragraph"]["rich_text"]))
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return "\n".join(t for t in texts if t).strip()
+    except Exception as e:
+        log(f"[db_get_job_description] warning: {e}")
+        return ""
 
 
 def db_get_jobs(status: str, min_score: float = 0) -> list:
     """Jobs filtered by status and min ATS score, sorted by score desc."""
-    res = (
-        _get_db().table("jobs")
-        .select("id,job_title,company,location,job_url,ats_match_score,tailored_resume_link")
-        .eq("status", status)
-        .gte("ats_match_score", min_score)
-        .order("ats_match_score", desc=True)
-        .execute()
+    conditions = [{"property": "Status", "select": {"equals": status}}]
+    if min_score:
+        conditions.append({"property": "ATS Match Score",
+                           "number": {"greater_than_or_equal_to": min_score}})
+    pages = _query_db(
+        filter_={"and": conditions} if len(conditions) > 1 else conditions[0],
+        sorts=[{"property": "ATS Match Score", "direction": "descending"}],
     )
-    return [
-        {
-            "page_id":     r["id"],
-            "id":          r["id"],
-            "title":       r["job_title"],
-            "company":     r["company"],
-            "location":    r.get("location") or "",
-            "url":         r["job_url"],
-            "ats_score":   r["ats_match_score"] or 0,
-            "resume_link": r["tailored_resume_link"] or "",
-        }
-        for r in res.data
-    ]
+    return [_page_to_job(p) for p in pages]
 
 
 def db_get_job_by_company(company: str) -> dict | None:
-    """Return full job dict for first match on company name (case-insensitive), or None."""
-    res = (
-        _get_db().table("jobs")
-        .select("id,job_title,company,job_url,location,hiring_manager,hiring_manager_linkedin")
-        .ilike("company", f"%{company}%")
-        .limit(1)
-        .execute()
-    )
-    if not res.data:
+    """Return the first job whose Company contains `company` (case-insensitive), or None."""
+    try:
+        pages = _query_db(filter_={"property": "Company", "rich_text": {"contains": company}})
+        return _page_to_job(pages[0]) if pages else None
+    except Exception as e:
+        log(f"[db_get_job_by_company] warning: {e}")
         return None
-    r = res.data[0]
-    return {
-        "page_id": r["id"],
-        "title":   r["job_title"],
-        "company": r["company"],
-        "url":     r["job_url"],
-        "hm":      r["hiring_manager"] or "",
-        "hm_li":   r["hiring_manager_linkedin"] or "",
-    }
