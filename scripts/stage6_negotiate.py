@@ -122,6 +122,7 @@ def run(company: str, role: str, offer: float):
     Path(NEGO_DIR).mkdir(parents=True, exist_ok=True)
 
     log(f"Generating negotiation brief for {company} — {role} (offer: ${offer:,.0f})")
+    job = db_get_job_by_company(company)
     city = (job.get("location") if job else None) or "United States"
     brief = generate_negotiation_brief(company, role, city, offer)
 
@@ -132,7 +133,6 @@ def run(company: str, role: str, offer: float):
     log(f"✓ Brief saved: {out_path}")
 
     # Update status
-    job = db_get_job_by_company(company)
     if job:
         db_update_status(job["page_id"], "Offer Received")
         log("✓ Status updated → Offer Received")
