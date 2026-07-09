@@ -122,7 +122,7 @@ def run(company: str, role: str, offer: float):
     Path(NEGO_DIR).mkdir(parents=True, exist_ok=True)
 
     log(f"Generating negotiation brief for {company} — {role} (offer: ${offer:,.0f})")
-    job  = db_get_job_by_company(company)
+    job = db_get_job_by_company(company)
     city = (job.get("location") if job else None) or "United States"
     brief = generate_negotiation_brief(company, role, city, offer)
 

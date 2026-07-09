@@ -19,7 +19,7 @@ Usage:
   python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 185000
 """
 
-import sys, os, io, json, asyncio, argparse, contextlib
+import sys, os, io, json, asyncio, argparse, contextlib, threading, traceback
 from pathlib import Path
 from datetime import date
 
@@ -32,7 +32,6 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 from config.settings import (
-    AI_PROVIDER,
     NOTION_DB_ID,
     TARGET_ROLES,
     RESUME_PATH,
@@ -40,11 +39,11 @@ from config.settings import (
     AI_MODEL_OVERRIDE, QUALITY_MODEL,
 )
 
-# The Agent SDK spawns the `claude` CLI, which bills metered whenever ANTHROPIC_API_KEY is
-# present. Strip it so the orchestrator runs on the subscription — but only when the stage
-# scripts don't need it themselves (they honor AI_PROVIDER via scripts/utils.py).
-if AI_PROVIDER != "claude":
-    os.environ.pop("ANTHROPIC_API_KEY", None)
+# Force subscription auth: the Agent SDK spawns the `claude` CLI, which uses the logged-in
+# subscription only when ANTHROPIC_API_KEY is absent from the environment. The stage scripts
+# never read this env var — they get their key from config/settings.py directly (see
+# scripts/utils.py) — so popping it here is safe regardless of AI_PROVIDER.
+os.environ.pop("ANTHROPIC_API_KEY", None)
 
 from claude_agent_sdk import (
     query, ClaudeAgentOptions, tool, create_sdk_mcp_server,
@@ -71,17 +70,49 @@ class _Tee(io.TextIOBase):
     def flush(self):
         self._real.flush()
 
+    def writable(self):
+        return True
+
+    def fileno(self):
+        return self._real.fileno()
+
+    @property
+    def encoding(self):
+        return getattr(self._real, "encoding", "utf-8")
+
+
+# Stage functions print to sys.stdout, which _Tee rebinds process-globally. Only one stage
+# may run at a time or two concurrent tool calls (Claude can emit several in one turn) would
+# nest _Tee context managers across threads and leave sys.stdout wrapped permanently.
+_STAGE_LOCK = threading.Lock()
+
+
+def _truncate(text: str, head: int = 1000, tail: int = 2000) -> str:
+    """Keep the head (early per-job lines) and tail (the stage's summary) so long runs
+    don't lose the detail Claude is asked to report on."""
+    if len(text) <= head + tail:
+        return text
+    return text[:head] + "\n…\n" + text[-tail:]
+
 
 def _call_stage(fn, **kwargs) -> dict:
     """Run a blocking stage function, capturing its log output for Claude."""
     buffer = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
-            fn(**kwargs)
-    except Exception as e:
-        return {"success": False, "error": str(e), "output": buffer.getvalue()[-2000:]}
-    # The tail carries the stage's own summary line; the head is per-job noise.
-    return {"success": True, "output": buffer.getvalue()[-2000:]}
+    with _STAGE_LOCK:
+        try:
+            with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
+                result = fn(**kwargs)
+        except Exception as e:
+            print(traceback.format_exc(), file=sys.stderr)
+            return {
+                "success": False,
+                "error": f"{type(e).__name__}: {e}",
+                "output": _truncate(buffer.getvalue()),
+            }
+    out = {"success": True, "output": _truncate(buffer.getvalue())}
+    if result is not None:
+        out["result"] = result
+    return out
 
 
 def _impl_run_scrape() -> dict:
@@ -92,13 +123,10 @@ def _impl_run_scrape() -> dict:
 def _impl_run_ingest_interested() -> dict:
     from scripts.utils import load_resume
     from scripts.stage1_scrape import ingest_interested_from_notion
-    buffer = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(_Tee(sys.stdout, buffer)):
-            count = ingest_interested_from_notion(load_resume())
-    except Exception as e:
-        return {"success": False, "error": str(e), "output": buffer.getvalue()[-2000:]}
-    return {"success": True, "ingested": count, "output": buffer.getvalue()[-2000:]}
+    result = _call_stage(ingest_interested_from_notion, resume=load_resume())
+    if result["success"]:
+        result["ingested"] = result.pop("result", 0)
+    return result
 
 
 def _impl_run_tailor(min_score: float = 0) -> dict:
@@ -363,7 +391,10 @@ def _task_evaluate(args) -> str:
     company      = getattr(args, "company", None) or ""
     contact      = getattr(args, "contact", None) or ""
     contact_role = getattr(args, "contact_role", "") or ""
-    outreach_args = f'company="{company}", contact="{contact}", contact_role="{contact_role}"'
+    outreach_args = (
+        f"company={json.dumps(company)}, contact={json.dumps(contact)}, "
+        f"contact_role={json.dumps(contact_role)}"
+    )
     return f"""Today is {date.today().isoformat()}. The user has marked good jobs as Reviewed in
 Notion. Run the evaluate pipeline:
 
@@ -380,7 +411,8 @@ def _task_outreach(args) -> str:
     company      = getattr(args, "company", None) or ""
     contact      = getattr(args, "contact", None) or ""
     contact_role = getattr(args, "contact_role", "") or ""
-    return f"""Call run_outreach(company="{company}", contact="{contact}", contact_role="{contact_role}").
+    return f"""Call run_outreach(company={json.dumps(company)}, contact={json.dumps(contact)}, \
+contact_role={json.dumps(contact_role)}).
 It drafts {"a warm referral message" if contact else "cold emails"} for ready-to-apply jobs and
 saves them to output/outreach/. Report which drafts were saved and remind the user they are not sent."""
 
@@ -397,21 +429,18 @@ def _task_interview(args) -> str:
     role        = getattr(args, "role", "") or ""
     jd_file     = getattr(args, "jd_file", "") or ""
     hm_linkedin = getattr(args, "hm_linkedin", "") or ""
-    if not company:
-        return "No company was provided. Tell the user to pass --company."
-    return f"""Call run_interview_prep(company="{company}", role="{role}", jd_file="{jd_file}",
-hm_linkedin="{hm_linkedin}"), then tell the user where the guide was saved and summarize the
-sections it covers."""
+    return f"""Call run_interview_prep(company={json.dumps(company)}, role={json.dumps(role)}, \
+jd_file={json.dumps(jd_file)}, hm_linkedin={json.dumps(hm_linkedin)}), then tell the user where
+the guide was saved and summarize the sections it covers."""
 
 
 def _task_negotiate(args) -> str:
     company = getattr(args, "company", "") or ""
     role    = getattr(args, "role", "") or ""
     offer   = getattr(args, "offer", 0)
-    if not company or not role:
-        return "Both --company and --role are required. Tell the user."
-    return f"""Call run_negotiate(company="{company}", role="{role}", offer={offer}), then tell the
-user where the brief was saved and summarize the recommended opening position."""
+    return f"""Call run_negotiate(company={json.dumps(company)}, role={json.dumps(role)}, \
+offer={offer}), then tell the user where the brief was saved and summarize the recommended
+opening position."""
 
 
 _TASK_BUILDERS = {
@@ -454,6 +483,8 @@ Rules:
   — A stage tool returns its own log output. Read it and summarize faithfully. If a stage says
     it found nothing to do, say so plainly rather than working around it.
   — get_jobs and get_ready_to_apply are read-only; use them for reporting.
+  — If a stage tool returns success=false, report the error to the user and STOP. Do not retry
+    the same call — stages like run_scrape hit paid external APIs (Apify) on every call.
 
 Candidate profile:
   Name:         {YOUR_NAME}
@@ -556,6 +587,12 @@ def main():
     parser.add_argument("--send",         action="store_true",
                         help="Send digest via Gmail (requires OAuth credentials)")
     args = parser.parse_args()
+
+    if args.task == "interview" and not args.company:
+        parser.error("--task interview requires --company")
+    if args.task == "negotiate" and (not args.company or not args.role):
+        parser.error("--task negotiate requires --company and --role")
+
     run_workflow(args.task, args)
 
 
