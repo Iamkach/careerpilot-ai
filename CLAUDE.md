@@ -19,9 +19,15 @@ Scrapes LinkedIn via Apify, tailors resumes per job, drafts cold/warm outreach e
 
 ### Two entry points
 
-**`workflow.py`** (preferred) — Claude-native agentic orchestrator built on the **Agent SDK** (`claude-agent-sdk`), running on the Claude Code subscription. Claude acts as the "brain" and calls the 12 Python tools (exposed as an in-process MCP server, `mcp__jobpipe__*`) as "hands." The SDK runs the multi-tool agentic loop natively (`query()`, `max_turns=60`) with streaming output. Supports `--task` flag. No prompt caching on the subscription path.
+Both entry points execute the **same** `scripts/stage*.py` code. They differ only in who sequences the stages.
 
-**`run.py`** (legacy) — Simple stage runner that calls each `scripts/stage*.py` directly. Uses `--stage` flag.
+**`run.py`** — Deterministic stage runner. Python decides the order; AI is called as a subroutine (`ai_chat`) for scoring and tailoring only. Uses `--stage` / `--evaluate` / `--ingest` flags. Honors `AI_PROVIDER`.
+
+**`workflow.py`** — Agentic orchestrator on the **Agent SDK** (`claude-agent-sdk`). Claude decides *which* stage runs and with what arguments, then summarizes the result. Its 9 tools (an in-process MCP server, `mcp__jobpipe__*`) are **thin wrappers over the stage `run()` functions** — 7 `run_*` tools plus 2 read-only Notion queries. Uses `--task`.
+
+Because the tools delegate, the filters, Indeed scraping, `.docx` tailoring, Notion intake, and drop logs exist in exactly one place (the stage scripts) and both paths inherit them. **Never re-implement stage logic inside `workflow.py`'s tools** — that is precisely the drift this structure removed.
+
+> Note: `run.py` is *not* agentic. Under the default `claude_code` provider it reaches the subscription through the Agent SDK, but `_sdk_text()` runs with `allowed_tools=[]` and `max_turns=1` — a one-shot prompt→text call. The SDK is a transport, not a loop.
 
 ### Pipeline stages
 
@@ -70,10 +76,12 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 ## Common Commands
 
 ```bash
-# Preferred: Claude-native agentic workflow
-python workflow.py                                               # Morning pipeline (stages 1–4)
+# Claude-native agentic orchestrator (delegates to the stage scripts)
+python workflow.py                                               # Morning: scrape + review digest
 python workflow.py --task scrape                                 # Stage 1 only
-python workflow.py --task tailor --min-score 65                  # Stage 2, ATS ≥65
+python workflow.py --task ingest                                 # Ingest Notion "Interested" jobs
+python workflow.py --task evaluate --min-score 65                # Stages 2–4: tailor + outreach + digest
+python workflow.py --task tailor --min-score 65                  # Stage 2, ATS ≥65 (reads "Reviewed")
 python workflow.py --task outreach --company "Stripe"            # Cold outreach
 python workflow.py --task outreach --company "Google" --contact "Jane Doe" --contact-role "PM"
 python workflow.py --task digest --send                          # Stage 4 + email
@@ -96,7 +104,7 @@ python run.py --stage 5 --company "Meta" --role "Senior PM"
 2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/workflow. Both set in `config/settings.py`.
 3. **Idempotent stages** — Duplicates skipped via `db_find_job_by_url()` (URL-based dedup, querying Notion by the Job URL property).
 4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
-5. **Prompt caching** — `workflow.py` caches the resume in the system prompt across all agentic loop iterations. `utils.py` `ai_chat_blocks()` caches structured blocks for stage scripts.
+5. **Prompt caching** — `utils.py` `ai_chat_blocks()` caches structured blocks, but only on the metered `"claude"` provider; every other provider joins the blocks into plain text. On the `claude_code` path the CLI manages its own caching.
 6. **Adding a provider** — Add a `_chat_<name>` function to `_BACKENDS` dict in `scripts/utils.py`. No other changes needed.
 
 ## Stage 1 Filters
@@ -121,8 +129,10 @@ Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (str
 **`claude_code` (subscription, no per-call billing):** routes **all** AI through your
 logged-in Claude Code subscription via the **Agent SDK** (`claude-agent-sdk`) — both the
 stage scripts (`run.py`, via `_chat_claude_code` in `scripts/utils.py`) and the agentic
-orchestrator (`workflow.py`, whose 12 Python tools are exposed as an in-process MCP server
-and driven by `query()`). No metered API key is used. Prerequisites: install the Claude Code
+orchestrator (`workflow.py`, whose 9 stage-wrapper tools are exposed as an in-process MCP server
+and driven by `query()`). No metered API key is used. `workflow.py` strips `ANTHROPIC_API_KEY`
+from the environment unless `AI_PROVIDER="claude"`, so the stage scripts it invokes keep working
+on whichever provider is configured. Prerequisites: install the Claude Code
 CLI, run `claude /login`, and `pip install claude-agent-sdk`. Caveats: **no prompt caching**
 on this path, and `ANTHROPIC_API_KEY` must **not** be present in the environment (the SDK/CLI
 would prefer it and bill metered). The key in `config/settings.py` is only used if you switch
