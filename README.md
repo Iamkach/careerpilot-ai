@@ -239,6 +239,11 @@ Scripts update status automatically at each stage. **You** set two of them by ha
 Notion: `Interested` (to queue a job you found) and `Reviewed` (to approve a scraped
 job for tailoring).
 
+Five more options exist for parking a job outside the pipeline — `Disregard`, `Blacklist`,
+`Archived`, `Rejected`, `Human Review`. No stage ever writes these; they're yours. A parked job
+stops moving through the stages but still counts as a duplicate, so it won't come back on the
+next scrape.
+
 ---
 
 ## Gmail digest (optional)

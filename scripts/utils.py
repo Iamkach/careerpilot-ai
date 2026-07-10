@@ -538,6 +538,30 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
     return [_page_to_job(p) for p in pages]
 
 
+def db_get_all_jobs() -> list[dict]:
+    """Fetch ALL rows from the Notion jobs DB in a few paginated reads (no filter).
+    Each dict: page_id, title, company, location, url, status, ats_score.
+    Returns [] on failure — dedup then falls back to per-run seen_urls only."""
+    try:
+        pages = _query_db()  # no filter → all rows, follows pagination
+    except Exception as e:
+        log(f"[db_get_all_jobs] warning: {e}")
+        return []
+    jobs = []
+    for p in pages:
+        props = p.get("properties", {})
+        jobs.append({
+            "page_id":   p["id"],
+            "title":     _notion_plain_text(props.get("Job Title")),
+            "company":   _notion_plain_text(props.get("Company")),
+            "location":  _notion_plain_text(props.get("Location")),
+            "url":       _prop_url(props, "Job URL"),
+            "status":    ((props.get("Status") or {}).get("select") or {}).get("name") or "",
+            "ats_score": _prop_number(props, "ATS Match Score"),
+        })
+    return jobs
+
+
 def db_get_job_by_company(company: str) -> dict | None:
     """Return the first job whose Company contains `company` (case-insensitive), or None."""
     try:

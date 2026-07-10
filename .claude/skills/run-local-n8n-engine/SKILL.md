@@ -130,6 +130,10 @@ hand in Notion with `Status = Interested` are pulled in on the next scrape (or `
 Interested (manual) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received
 ```
 
+Five off-pipeline options — `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` —
+are set by hand; no stage writes them. Parked rows drop out of the pipeline but still count as
+duplicates on the next scrape.
+
 Status names are case-sensitive. Each stage reads the previous status and writes the next.
 `Interested` and `Reviewed` are set by the user in Notion: `Interested` queues a hand-added
 job (ingested on the next scrape); `Reviewed` approves a scraped job for `--evaluate`.
