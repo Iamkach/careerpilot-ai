@@ -2,7 +2,7 @@
 
 ## Context
 
-The user reports that scraped jobs are "still mostly consulting/staffing companies" and that roles which don't offer visa sponsorship keep slipping through. The existing plan doc (`plan/reliability-filtering-networking.md` §2) attributes this to substring-only company matching and to `sponsorship == "unknown"` passing through the gate.
+The user reports that scraped jobs are "still mostly consulting/staffing companies" and that roles which don't offer visa sponsorship keep slipping through. The earlier plan doc (`plan/reliability-filtering-networking.md` §2, which this document supersedes — removed in `63b64e7`, readable via `git show 1030d71:plan/reliability-filtering-networking.md`) attributes this to substring-only company matching and to `sponsorship == "unknown"` passing through the gate.
 
 Reading the code confirmed those, but found three sharper causes the plan doc missed:
 
