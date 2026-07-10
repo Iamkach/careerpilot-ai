@@ -50,6 +50,11 @@ Apify (LinkedIn scrape)  →  stage 1
 
 Status pipeline: `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
+Off-pipeline states (`Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review`) exist as
+select options and are set **by hand** — no stage writes them. Since `db_get_jobs()` filters on an
+exact status, a row parked in one of them is simply never picked up. Dedup is the exception: it
+spans every status, so a `Disregard`d job is not re-scraped.
+
 ### Two-step daily flow
 
 The pipeline has a human review gate between scraping and tailoring:
@@ -66,7 +71,8 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 
 - `ai_chat(prompt, system, max_tokens, quality)` — provider-agnostic chat; `claude_chat` is an alias
 - `ai_chat_blocks(blocks, ...)` — Claude-only structured content blocks with `cache_control`
-- `db_find_job_by_url()`, `db_add_job()`, `db_update_status()`, `db_get_jobs()`, `db_get_ready_to_apply()`, `db_get_job_by_company()`, `db_get_job_description()` — Notion-backed CRUD (`page_id`/`id` is the Notion page id; the JD is cached in the page body via paragraph blocks)
+- `db_find_job_by_url()`, `db_add_job()`, `db_update_status()`, `db_get_jobs()`, `db_get_all_jobs()`, `db_get_ready_to_apply()`, `db_get_job_by_company()`, `db_get_job_description()` — Notion-backed CRUD (`page_id`/`id` is the Notion page id; the JD is cached in the page body via paragraph blocks)
+- `db_get_all_jobs()` — one unfiltered paginated read of every row (`page_id, title, company, location, url, status, ats_score`); backs Stage 1's in-memory dedup. Returns `[]` on failure
 - `db_add_job_linked(job, notion_page_id)` — promote an existing manually-added Notion page ("Interested" intake) to "Scraped" in place (no duplicate page); caches the JD in its body
 - `get_notion_jobs_by_status(status)` — read Notion rows by status. `sync_notion_to_supabase()` is now a no-op kept for compatibility (Notion is the store)
 - `load_resume()`, `ensure_dirs()`, `today()`, `parse_json_response()` — misc helpers
@@ -102,7 +108,7 @@ python run.py --stage 5 --company "Meta" --role "Senior PM"
 
 1. **Notion-first** — Notion is the single source of truth. All stages read/write the Notion jobs database via the `db_*` helpers; `NOTION_API_KEY` + DB sharing are required.
 2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/workflow. Both set in `config/settings.py`.
-3. **Idempotent stages** — Duplicates skipped via `db_find_job_by_url()` (URL-based dedup, querying Notion by the Job URL property).
+3. **Idempotent stages** — Duplicates skipped by exact Job URL match. Stage 1 reads every existing row once via `db_get_all_jobs()` and dedups against that in-memory URL set (spanning *all* statuses), rather than querying Notion per listing. `db_find_job_by_url()` remains for one-off lookups (e.g. "Interested" intake).
 4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
 5. **Prompt caching** — `utils.py` `ai_chat_blocks()` caches structured blocks, but only on the metered `"claude"` provider; every other provider joins the blocks into plain text. On the `claude_code` path the CLI manages its own caching.
 6. **Adding a provider** — Add a `_chat_<name>` function to `_BACKENDS` dict in `scripts/utils.py`. No other changes needed.
@@ -141,7 +147,7 @@ would prefer it and bill metered). The key in `config/settings.py` is only used 
 ## Development Notes
 
 - **Resume:** `config/resume.txt` must exist before any stage runs
-- **Notion database schema:** the tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, Disregard), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
+- **Notion database schema:** the tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select — 13 options: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, plus the manual-only Disregard, Blacklist, Archived, Rejected, Human Review), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The live DB also carries `Notes` (rich_text), `Referral Contact` (rich_text), and `Job ID` (unique_id), none of which any stage reads or writes. The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
 - **Output dirs:** Auto-created by `ensure_dirs()` on first run
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
 - **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.

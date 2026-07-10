@@ -21,6 +21,10 @@ entirely when `NOTION_API_KEY` is unset.
 ```
 Interested → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received
 ```
+Off-pipeline options, set by hand and written by no stage:
+`Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review`.
+`db_get_jobs()` matches an exact status, so parked rows are never picked up — but
+`db_get_all_jobs()` (dedup) spans every status, so they are never re-scraped either.
 Most transitions are written by the stages. **Two are set by the user in Notion:**
 - `Interested` — a job added by hand (Title + Company + Job URL). The next Stage 1 run (or
   `python run.py --ingest`) calls `ingest_interested_from_notion()`: enrich via Apify, score,

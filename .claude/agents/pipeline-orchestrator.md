@@ -43,6 +43,8 @@ DB sharing are required; the JD is cached in each page's body (paragraph blocks)
 ```
 Interested (manual) → Scraped → Reviewed (manual) → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received
 ```
+Off-pipeline, manual-only (no stage writes them): `Disregard`, `Blacklist`, `Archived`,
+`Rejected`, `Human Review`. Parked rows leave the pipeline but still count as duplicates.
 
 **Notion DB properties:**
 - Job Title (title), Company (rich_text), Location (rich_text), Job URL (url), Status (select)

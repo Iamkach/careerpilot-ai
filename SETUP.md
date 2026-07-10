@@ -159,7 +159,7 @@ silently breaks queries/writes):
 | `Company` | rich_text | |
 | `Location` | rich_text | |
 | `Job URL` | url | used for URL-based dedup |
-| `Status` | select | options: `Interested`, `Scraped`, `Reviewed`, `Resume Tailored`, `Applied`, `Outreach Sent`, `Interview Scheduled`, `Offer Received`, `Disregard` |
+| `Status` | select | pipeline: `Interested`, `Scraped`, `Reviewed`, `Resume Tailored`, `Applied`, `Outreach Sent`, `Interview Scheduled`, `Offer Received`<br>manual-only: `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` |
 | `ATS Match Score` | number | |
 | `Date Scraped` | date | |
 | `Tailored Resume Link` | url | |
@@ -249,6 +249,10 @@ python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 18500
 
 Status pipeline (tracked in Notion, the single source of truth):
 `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
+
+Five further options — `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` — are set
+by hand and written by no stage. A row parked in one of them drops out of the pipeline but is still
+seen by dedup, so it will not be re-scraped.
 
 ---
 

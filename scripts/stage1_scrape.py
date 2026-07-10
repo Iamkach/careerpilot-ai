@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import *
 from scripts.utils import (
     claude_chat, parse_json_response, load_resume, db_add_job, db_add_job_linked,
-    db_find_job_by_url, get_notion_jobs_by_status, _notion_promote_to_scraped,
-    log, today,
+    db_find_job_by_url, db_get_all_jobs, get_notion_jobs_by_status,
+    _notion_promote_to_scraped, log, today,
 )
 
 APIFY_BASE = "https://api.apify.com/v2"
@@ -469,8 +469,11 @@ def _log_drop(fh, reason: str, job: dict) -> None:
 
 # ── 7. Pre-filter helper ─────────────────────────────────────
 
-def _pre_filter(job: dict, seen_urls: set, counters: dict, drop_fh) -> bool:
-    """Apply all pre-scoring filters. Returns True if job should be kept."""
+def _pre_filter(job: dict, seen_urls: set, existing_urls: set, counters: dict, drop_fh) -> bool:
+    """Apply all pre-scoring filters. Returns True if job should be kept.
+
+    `seen_urls` dedups within this run; `existing_urls` is a one-shot snapshot of every
+    URL already in Notion, so the two together cover this run and all prior ones."""
     url             = job.get("url", "")
     title           = job.get("title", "")
     company         = job.get("company", "")
@@ -507,7 +510,7 @@ def _pre_filter(job: dict, seen_urls: set, counters: dict, drop_fh) -> bool:
         _log_drop(drop_fh, "high-applicants", job)
         log(f"  ⊘ [high-applicants] {company} — {title} ({applicant_count} applicants)")
         return False
-    if db_find_job_by_url(url):
+    if url in existing_urls:
         counters["duplicate"] += 1
         return False
     return True
@@ -532,6 +535,12 @@ def run():
     except Exception as e:
         log(f"  ✗ Notion ingestion failed: {e}")
 
+    # 8a-bis. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
+    # Taken after ingestion so freshly-promoted "Interested" rows are included.
+    existing_jobs = db_get_all_jobs()
+    existing_urls = {j["url"] for j in existing_jobs if j["url"]}
+    log(f"  Notion snapshot: {len(existing_urls)} existing job URL(s)")
+
     # 8b. Scrape LinkedIn + Indeed for each target role
     seen_urls: set = set()
 
@@ -549,7 +558,7 @@ def run():
             if job["url"] in seen_urls:
                 counters["duplicate"] += 1
                 continue
-            if _pre_filter(job, seen_urls, counters, drop_fh):
+            if _pre_filter(job, seen_urls, existing_urls, counters, drop_fh):
                 seen_urls.add(job["url"])
                 candidates.append(job)
 
