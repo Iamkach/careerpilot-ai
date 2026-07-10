@@ -1,7 +1,9 @@
 # Communications subsystem — LinkedIn leads + verified cold email
 
-*Absorbs and replaces `feature-plans/communications/networking-sourcing.md`, which covered only the LinkedIn prong.*
-*Corrects and supersedes §3 of `feature-plans/reliability-filtering-networking.md`. Baseline: `feat/maverick` @ `3f91db7`.*
+*Absorbs and replaces the earlier `networking-sourcing.md` draft (never committed; covered only the LinkedIn prong).*
+*Corrects and supersedes §3 of the former `plan/reliability-filtering-networking.md`, removed in `63b64e7` —
+read it with `git show 1030d71:plan/reliability-filtering-networking.md`. Baseline: `feat/maverick` @ `3f91db7`.*
+*See [`../README.md`](../README.md) for how this plan relates to the other four.*
 
 ## Context
 
@@ -45,7 +47,7 @@ section primitive. This is largely greenfield.
    A Leads database is an **entirely new write/query layer**.
 
 2. **The pattern §3 wants to copy is the bug.** §3 justifies reuse by saying the existing actors "were presumably
-   vetted." `feature-plans/sourcing/scraping-sources.md` establishes the opposite: `bebity~indeed-scraper` **returns
+   vetted." [`../sourcing/scraping-sources.md`](../sourcing/scraping-sources.md) establishes the opposite: `bebity~indeed-scraper` **returns
    HTTP 404** and has silently contributed zero listings on every run, hidden by `except Exception: return []`
    (`stage1_scrape.py:166-170`). If the new stage copies that swallow, a broken actor reads as "nobody is hiring."
    **A failed run and an empty run must never look alike.**
@@ -94,7 +96,7 @@ Researched per the instruction not to assume Apify.
 
 Apify is not eliminated — it is reduced to the one job it alone can do.
 
-> **Interaction with `feature-plans/sourcing/scraping-sources.md`:** that plan already recommends swapping LinkedIn to
+> **Interaction with [`../sourcing/scraping-sources.md`](../sourcing/scraping-sources.md):** that plan already recommends swapping LinkedIn to
 > `valig~linkedin-jobs-scraper` on cost grounds ($0.28–0.40/1k vs. the current $29.99/mo bebity rental). That actor
 > returns `recruiterName` + `recruiterUrl`, no cookie. **If the swap lands first, prong 1's job-linked contact data
 > arrives free as a side effect of scraping, with no second actor.** Sequence the swap first if both are planned.

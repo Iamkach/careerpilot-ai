@@ -1,7 +1,8 @@
 # Implementation README — Hybrid AI Provider Setup + Graceful Failure
 
-> Companion to [`ai-failure-analysis.md`](ai-failure-analysis.md). This documents the approved
-> implementation plan. **Not yet implemented** — use this as the spec when executing.
+> This documents the approved implementation plan. **Not yet implemented** — use this as the spec
+> when executing. See [`../README.md`](../README.md) for how this plan relates to the other four,
+> and for the conflicts to resolve before starting.
 
 ## Problem recap
 
@@ -40,9 +41,11 @@ Two problems resulted:
   `Status = Retry`, so the next Stage 1 batch re-scores it. Never a default 50.
 - **Bulk runs**: steer to `run.py` **and** slim `workflow.py` with a batched scoring tool (both).
 
-This refines §1 of `plan/reliability-filtering-networking.md` (which recommended all-metered);
-the tier split satisfies the added "doesn't cost too much" constraint. §2/§3 of that doc are
-untouched.
+This refines §1 of the former `plan/reliability-filtering-networking.md` (which recommended
+all-metered); the tier split satisfies the added "doesn't cost too much" constraint. That doc was
+removed in `63b64e7` — read it with `git show 1030d71:plan/reliability-filtering-networking.md`.
+Its §2 is superseded by [`../filtering/stage1-filtering-rework.md`](../filtering/stage1-filtering-rework.md)
+and its §3 by [`../communications/communications-subsystem.md`](../communications/communications-subsystem.md).
 
 ---
 
@@ -147,10 +150,11 @@ parameter and skip a hit whose `id` equals it — the ingest/retry paths pass th
 `page_id`. Alternatively filter the query to exclude `Status ∈ {Interested, Retry}`. Either way,
 the check must ask "is this job tracked under a **different** page?"
 
-The same trap applies to the `existing_urls` snapshot in
-[`../notion-dedup-snapshot-TODO.md`](../notion-dedup-snapshot-TODO.md): build that set from rows
-whose status is **not** `Interested`/`Retry`, or a queued row will be dropped as a duplicate of
-itself on the next scrape.
+The same trap applies to the `existing_urls` snapshot, and **that code has since landed** (`54ad4fc`,
+`3f91db7`): `run()` builds `existing_urls` from *every* row regardless of status
+(`stage1_scrape.py:540-541`), and `_pre_filter` drops on it (`:513`). So this is a live condition,
+not a future one — rebuild that set from rows whose status is **not** `Interested`/`Retry`, or a
+queued row will be dropped as a duplicate of itself on the next scrape.
 
 ### 4. `workflow.py` — batched scoring tool + resilient loop
 
@@ -190,19 +194,21 @@ Optionally add a `Retry` view to the tracker so queued jobs are visible at a gla
   schema properties, and the guidance **`run.py` for scheduled/bulk runs; `workflow.py` for
   interactive one-offs** (its morning task now uses the batched `score_jobs` tool). Add `Retry`
   to the documented status pipeline.
-- Write the final tradeoff analysis to `plan/problem/ai-api-agentic-tradeoff.md`.
+- Write the final tradeoff analysis to `refinement-plans/reliability/ai-api-agentic-tradeoff.md`.
 
 ## Files touched
 
 `config/settings.py`, `scripts/utils.py`, `scripts/stage1_scrape.py`, `workflow.py`,
-`run.py` (setup check only), `CLAUDE.md`, new `plan/problem/ai-api-agentic-tradeoff.md`,
+`run.py` (setup check only), `CLAUDE.md`, new `refinement-plans/reliability/ai-api-agentic-tradeoff.md`,
 plus the two Notion schema changes above.
 
 **Not touched:** stages 2/3/5/6 call sites (they already pass `quality=` correctly and route
 automatically through the new `ai_chat`), filtering logic.
 
-**Interacts with:** [`../notion-dedup-snapshot-TODO.md`](../notion-dedup-snapshot-TODO.md) — if
-that lands first, its `existing_urls` set must exclude `Interested`/`Retry` rows (see §3.5).
+**Interacts with:** the Notion dedup snapshot, which **already landed** (`54ad4fc`, `3f91db7`). Its
+`existing_urls` set must be narrowed to exclude `Interested`/`Retry` rows (see §3.5). Also with
+[`../sourcing/multi-source-sourcing.md`](../sourcing/multi-source-sourcing.md), whose cross-source
+fingerprint set is built from the same snapshot and inherits the same trap.
 
 ## Suggested order
 

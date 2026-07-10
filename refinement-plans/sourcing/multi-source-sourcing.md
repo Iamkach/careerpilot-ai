@@ -221,7 +221,7 @@ The Interested-intake path (`ingest_interested_from_notion` → `_notion_promote
 
 Actors exist for all four, several from `bebity` — the same vendor as the current LinkedIn/Indeed actors. Once the `APIFY_SOURCES` table from 1a exists, each is a payload builder + a field map, roughly 15 lines.
 
-Ship them **one at a time, disabled by default**, appended to `ENABLED_SOURCES` only after validation. Before writing the field map for each, run the actor once with `maxItems=3` and dump the raw item keys — write the mapping against real output rather than a guessed schema. (This mirrors the "research spike first" advice already recorded in `plan/reliability-filtering-networking.md` §3.)
+Ship them **one at a time, disabled by default**, appended to `ENABLED_SOURCES` only after validation. Before writing the field map for each, run the actor once with `maxItems=3` and dump the raw item keys — write the mapping against real output rather than a guessed schema. (This mirrors the "research spike first" advice recorded in §3 of the former `plan/reliability-filtering-networking.md`, removed in `63b64e7`; the same advice now lives in [`../communications/communications-subsystem.md`](../communications/communications-subsystem.md) Phase 0.)
 
 | Source | Note |
 |---|---|
