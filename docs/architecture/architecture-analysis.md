@@ -57,13 +57,6 @@ flowchart LR
     class M main;
     class V mav;
     class F fut;
-
-    classDef main fill:#e7effd,stroke:#2f6fed,color:#12336e;
-    classDef mav fill:#f0e8fd,stroke:#7b3fe4,color:#3d1a80;
-    classDef fut fill:#e5f6ee,stroke:#1f9d6b,color:#0d5236;
-    class m1,m2,m3 main;
-    class v1,v2,v3 mav;
-    class f1,f2,f3 fut;
 ```
 
 ### 1.1 Capability matrix across horizons
