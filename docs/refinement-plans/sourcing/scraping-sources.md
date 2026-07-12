@@ -191,6 +191,66 @@ baseline for what Stage 1 ingests is unknown.
 
 ---
 
+## Step 1 spike — live verification (2026-07-11)
+
+Ran the three actors via the Apify API (`title="Software Engineer"`, `location="United
+States"`, 1-day window, `limit`/`maxItemsPerSearch=3`). Raw dataset item keys, not assumed
+from documentation:
+
+- **`bebity/linkedin-jobs-scraper`** — **not run live.** Its real input schema (pulled from
+  the Apify API) is `title / location / companyName / companyId / publishedAt / rows /
+  workType / contractType / experienceLevel / proxy`. **None** of the fields the current code
+  sends (`queries`, `timePosted`, `maxItems`, `scrapeCompany`, `cookie`) exist in that schema —
+  the mismatch is total, not partial. Pricing is `FLAT_PRICE_PER_MONTH` at $29.99; triggering a
+  live run risked starting a real monthly rental charge for a data point the schema diff
+  already answers, so the run was skipped. **Confirmed via schema inspection, not a live call.**
+- **`valig/linkedin-jobs-scraper`** — live run succeeded (`runId: ivQ4pBuRZyIk9XK9C`, 1 item,
+  20 fields, $0.0004/result + $0.001 actor-start). Dataset keys: `id, url, title, location,
+  postedDate, companyName, companyUrl, recruiterName, recruiterUrl, experienceLevel,
+  contractType, workType, sector, salary, applyType, postedTimeAgo, applicationsCount,
+  description, descriptionHtml, applyUrl`. Real item returned `applicationsCount: "Over 200
+  applicants"` (a phrase, not an int) and populated `salary`/`applyType` — **with no session
+  cookie set**, confirming the doc's claim that Premium data doesn't require `li_at` on this
+  actor.
+- **`misceres/indeed-scraper`** — live run succeeded (`runId: Mpr91HttINeCfrWOr`, 2 items, 21
+  fields, $0.006/result at FREE tier). Dataset keys: `salary, postedAt, externalApplyLink,
+  positionName, company, companyIndeedUrl, location, rating, reviewsCount, urlInput, url, id,
+  scrapedAt, postingDateParsed, description, descriptionHTML, isExpired, jobType,
+  searchInput.position, searchInput.location, searchInput.country`. Confirms the doc's
+  prediction: the existing (broken) Indeed payload needed exactly one rename,
+  `maxItems` → `maxItemsPerSearch`, and no other field changes.
+
+### Decision
+
+**Option A** (actor swap only) — `valig~linkedin-jobs-scraper` + `misceres~indeed-scraper`.
+Implemented in `scripts/stage1_scrape.py`: new `LINKEDIN_ACTOR`/`INDEED_ACTOR` constants,
+rewritten `_linkedin_payload_base()` for valig's real fields (`title`/`location`/
+`datePosted`/`limit`, no `cookie`), `maxItemsPerSearch` rename for Indeed, and an
+`applicant_count` parser that extracts digits from valig's `"Over 200 applicants"`-style
+strings instead of assuming a bare int. `config/settings.py`'s `LINKEDIN_SESSION_COOKIE` is
+now dead (noted in place, not removed) since valig has no cookie field.
+
+Option B (JobSpy/ATS boards) remains the Step 6 recommendation for expanding source coverage;
+Step 1's scope was only to unblock Stage 1 with a working, verified actor pair.
+
+### A third bug found during end-to-end verification
+
+Running the real `scrape_indeed()` code path (not just the raw actor, to catch anything the
+schema diff alone wouldn't) surfaced a fourth issue beyond what the doc predicted: misceres
+validates `country` against a **strict uppercase enum** (`"US"`, not `"us"`). The existing
+payload — inherited unchanged from the original bebity-targeting code — sent lowercase `"us"`
+and would have 400'd immediately, independent of the `maxItemsPerSearch` rename. Fixed
+alongside the actor swap in `scripts/stage1_scrape.py`.
+
+**Baseline (schema-verification volume, not production):** `limit=3`/`maxItemsPerSearch=3`,
+role="Software Engineer", 1-day window → 3/3 real LinkedIn listings (Pave, Stripe, Replit —
+one with full salary range and applicant counts) and 3/3 real Indeed listings (JPMorganChase,
+Booz Allen Hamilton, US OPM) through the actual `scrape_linkedin()`/`scrape_indeed()` code
+paths. Production-volume baseline (`TARGET_ROLES` × 25/role/day) still needs a full
+`python run.py --stage 1` run to measure — capture jobs/role/day in the run log once available.
+
+---
+
 ## Sources
 
 - [bebity/linkedin-jobs-scraper](https://apify.com/bebity/linkedin-jobs-scraper)

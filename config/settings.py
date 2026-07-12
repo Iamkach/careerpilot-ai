@@ -86,10 +86,9 @@ SKIP_TITLE_KEYWORDS = [
 ]
 
 # --- LinkedIn Premium (stage 1) -----------------------------
-# Paste your LinkedIn "li_at" session cookie value here.
-# With a Premium session, Apify returns applicant_count, salary ranges,
-# and "Top Applicant" signals that anonymous scraping can't see.
-# How to get it: browser DevTools → Application → Cookies → linkedin.com → li_at
+# Unused since the Step 1 sourcing spike moved Stage 1 to valig~linkedin-jobs-scraper,
+# whose schema has no cookie field — it returns applicant_count and salary without one.
+# Kept in case a future actor swap needs it again.
 LINKEDIN_SESSION_COOKIE = ""   # e.g. "AQEDARxxxxxxxxxxxxxxxx"
 
 # Drop jobs with more than this many applicants (high competition).
