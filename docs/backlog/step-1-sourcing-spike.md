@@ -46,17 +46,24 @@ assume the schema.
 
 ## Acceptance criteria
 
-- [ ] Raw dataset item keys captured for all three actor runs (bebity-current, valig, misceres) —
-      paste into a scratch file or the spike notes, not into a committed script.
-- [ ] LinkedIn payload/actor mismatch confirmed or refuted with real output.
-- [ ] Indeed 404 confirmed (trivial — the URL alone proves it) and a replacement chosen.
-- [ ] Decision recorded: `valig` + `misceres` swap vs. JobSpy, with the actual field-mapping
-      differences noted (this feeds Step 6's `sources.py` design either way).
-- [ ] `config/settings.py` actor constants and `_linkedin_payload_base()` / `_indeed_payload...()`
-      updated to match whichever actor won, so Stage 1 produces real listings again before Step 2
-      builds on top of it.
-- [ ] `python run.py --stage 1` (small `maxItems`, one role) produces non-zero Indeed results (if
-      Indeed is kept — see Q4) and confirmed-real LinkedIn results.
+- [x] Raw dataset item keys captured for all three actor runs (bebity-current, valig, misceres) —
+      recorded in `scraping-sources.md`'s "Step 1 spike" addendum, not a committed script.
+      bebity's schema was pulled from the Apify API and compared field-for-field rather than
+      live-run, since it's a $29.99/mo flat-rate rental — see rationale in the addendum.
+- [x] LinkedIn payload/actor mismatch confirmed or refuted with real output. Confirmed total
+      (zero overlapping fields) via schema diff; valig live run confirmed as the replacement.
+- [x] Indeed 404 confirmed (trivial — the URL alone proves it) and a replacement chosen
+      (`misceres~indeed-scraper`).
+- [x] Decision recorded: `valig` + `misceres` swap (Option A) — see `scraping-sources.md`
+      addendum for the field-mapping differences.
+- [x] `config/settings.py` (note only — no actor constants lived there) and
+      `scripts/stage1_scrape.py`'s `LINKEDIN_ACTOR`/`INDEED_ACTOR`/`_linkedin_payload_base()`/
+      `scrape_indeed()` updated to match the winning actors.
+- [x] `python run.py --stage 1`-equivalent (direct `scrape_linkedin()`/`scrape_indeed()` calls,
+      `max_results=3`, one role, no Notion writes) produced 3/3 real LinkedIn and 3/3 real
+      Indeed listings. A production-volume `python run.py --stage 1` run (all `TARGET_ROLES`,
+      writes to Notion) is still needed for the jobs/role/day baseline — not run here since it
+      has real side effects on the live tracker; see addendum.
 
 ## Out of scope
 

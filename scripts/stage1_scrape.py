@@ -3,8 +3,8 @@
 stage1_scrape.py — Scrape fresh LinkedIn + Indeed jobs & log to Notion
 ───────────────────────────────────────────────────────────────────────
 What it does:
-  1. Runs Apify LinkedIn scraper (bebity~linkedin-jobs-scraper, 25/role)
-     + Indeed scraper (bebity~indeed-scraper, 25/role) for each target role
+  1. Runs Apify LinkedIn scraper (valig~linkedin-jobs-scraper, 25/role)
+     + Indeed scraper (misceres~indeed-scraper, 25/role) for each target role
   2. Applies a 3-layer pre-filter BEFORE scoring (saves API cost):
        a. Company name exact denylist  (SKIP_COMPANIES)
        b. Company name keyword filter  (SKIP_COMPANY_KEYWORDS)
@@ -32,10 +32,13 @@ from scripts.utils import (
 APIFY_BASE = "https://api.apify.com/v2"
 
 # ── Apify actors ─────────────────────────────────────────────
-# bebity~linkedin-jobs-scraper: well-maintained, supports maxItems up to 100+
-LINKEDIN_ACTOR = "bebity~linkedin-jobs-scraper"
-# bebity~indeed-scraper: free Indeed actor; good field coverage
-INDEED_ACTOR   = "bebity~indeed-scraper"
+# valig~linkedin-jobs-scraper: pay-per-event (~$0.0004/result), no cookie required,
+# returns applicationsCount + salary without a Premium session (see Step 1 spike:
+# docs/refinement-plans/sourcing/scraping-sources.md). Replaces bebity's $29.99/mo
+# rental, whose payload never matched its schema (see git history for the bug).
+LINKEDIN_ACTOR = "valig~linkedin-jobs-scraper"
+# misceres~indeed-scraper: maintained successor to the deprecated bebity Indeed actor.
+INDEED_ACTOR   = "misceres~indeed-scraper"
 
 # Per-role result caps (free Apify tier: ~5 CU/month, each run ~0.05–0.10 CU)
 LINKEDIN_MAX = 25
@@ -75,21 +78,15 @@ def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
 # ── 1a. LinkedIn scraper (bebity~linkedin-jobs-scraper) ──────
 
 def _linkedin_payload_base(role: str, max_results: int) -> dict:
-    """Build the base Apify payload, injecting Premium cookie when available."""
-    payload: dict = {
-        "queries":       [role],
-        "location":      "United States",
-        "timePosted":    "past24Hours",
-        "maxItems":      max_results,
-        "scrapeCompany": False,
+    """Build the valig~linkedin-jobs-scraper payload.
+    No cookie field exists in this actor's schema — applicationsCount and salary
+    come back without a Premium session (confirmed via live Step 1 spike run)."""
+    return {
+        "title":      role,
+        "location":   "United States",
+        "datePosted": "r86400",  # past 24 hours
+        "limit":      max_results,
     }
-    cookie = (LINKEDIN_SESSION_COOKIE or "").strip()
-    if cookie:
-        # bebity~linkedin-jobs-scraper accepts a `cookie` field with the li_at value.
-        # This unlocks Premium data: applicantCount, salaryRange, topApplicant signal.
-        payload["cookie"] = cookie
-        log("  [LinkedIn] Using Premium session cookie")
-    return payload
 
 
 def _parse_salary(job: dict) -> str:
@@ -126,12 +123,17 @@ def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
         if not url:
             continue
 
-        # Applicant count — Premium exposes this; anonymous sessions return None
-        raw_count = job.get("applicantCount") or job.get("applicantsCount") or job.get("numApplicants")
-        try:
-            applicant_count = int(str(raw_count).replace("+", "").replace(",", "").strip()) if raw_count else None
-        except (ValueError, TypeError):
-            applicant_count = None
+        # Applicant count — valig returns a phrase like "Over 200 applicants", not a bare int
+        raw_count = (job.get("applicationsCount") or job.get("applicantCount")
+                    or job.get("applicantsCount")  or job.get("numApplicants"))
+        applicant_count = None
+        if raw_count:
+            m = re.search(r"\d[\d,]*", str(raw_count))
+            if m:
+                try:
+                    applicant_count = int(m.group(0).replace(",", ""))
+                except ValueError:
+                    applicant_count = None
 
         results.append({
             "url":             url,
@@ -139,8 +141,8 @@ def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
             "company":         job.get("companyName") or job.get("company") or "",
             "location":        (job.get("location") or job.get("formattedLocation")
                                 or job.get("jobLocation") or ""),
-            "description":     (job.get("descriptionText") or job.get("descriptionHtml")
-                                or job.get("description")  or job.get("jobDescription") or ""),
+            "description":     (job.get("description") or job.get("descriptionText")
+                                or job.get("descriptionHtml")  or job.get("jobDescription") or ""),
             "applicant_count": applicant_count,
             "salary_range":    _parse_salary(job),
             "source":          "linkedin",
@@ -156,9 +158,9 @@ def scrape_indeed(role: str, max_results: int = INDEED_MAX) -> list[dict]:
     log(f"  [Indeed] Scraping: '{role}'")
     payload = {
         "position":            role,
-        "country":             "us",
+        "country":             "US",  # misceres validates a strict uppercase enum
         "location":            "",          # blank = nationwide
-        "maxItems":            max_results,
+        "maxItemsPerSearch":   max_results,
         "parseCompanyDetails": False,
         "saveOnlyUniqueItems": True,
         "followApplyRedirects": False,
