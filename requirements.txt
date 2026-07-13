@@ -1,6 +1,6 @@
 # Core — AI job search pipeline
-claude-agent-sdk>=0.2.0    # Claude Code subscription via Agent SDK (default: AI_PROVIDER=claude_code + workflow.py)
-anthropic>=0.40.0          # Claude metered API (only used by AI_PROVIDER="claude")
+anthropic>=0.40.0          # Claude metered API (default: AI_PROVIDER="claude")
+claude-agent-sdk>=0.2.0    # Optional: Claude Code subscription via Agent SDK (AI_PROVIDER="claude_code")
 requests>=2.31.0           # HTTP client for Apify
 notion-client>=2.2.1,<2.6  # Primary data store (job tracker DB); 2.6+/3.x dropped databases.query (data_sources API)
 

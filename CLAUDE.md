@@ -9,25 +9,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Scrapes LinkedIn via Apify, tailors resumes per job, drafts cold/warm outreach emails, generates interview prep guides, and negotiates offers. Progress is tracked in **Notion** (the single source of truth — the job tracker database).
 
 ### Key Dependencies
-- `claude-agent-sdk` — Claude Code subscription (default provider `claude_code`; also powers `workflow.py`)
+- `anthropic` — Claude metered API (default provider `AI_PROVIDER="claude"`)
 - `notion-client` — **Primary data store** (the job tracker database)
-- `anthropic` — Claude metered API (only if `AI_PROVIDER="claude"`)
+- `claude-agent-sdk` — optional: Claude Code subscription path (`AI_PROVIDER="claude_code"`)
 - `google-generativeai` / `openai` — Alternative AI providers
 - `requests` — HTTP client for Apify
 
 ## Architecture
 
-### Two entry points
-
-Both entry points execute the **same** `scripts/stage*.py` code. They differ only in who sequences the stages.
+### Single entry point
 
 **`run.py`** — Deterministic stage runner. Python decides the order; AI is called as a subroutine (`ai_chat`) for scoring and tailoring only. Uses `--stage` / `--evaluate` / `--ingest` flags. Honors `AI_PROVIDER`.
 
-**`workflow.py`** — Agentic orchestrator on the **Agent SDK** (`claude-agent-sdk`). Claude decides *which* stage runs and with what arguments, then summarizes the result. Its 9 tools (an in-process MCP server, `mcp__jobpipe__*`) are **thin wrappers over the stage `run()` functions** — 7 `run_*` tools plus 2 read-only Notion queries. Uses `--task`.
+> Note: `run.py` is *not* agentic. Under the `claude_code` provider it reaches the subscription through the Agent SDK, but `_sdk_text()` runs with `allowed_tools=[]` and `max_turns=1` — a one-shot prompt→text call. The SDK is a transport, not a loop. The default provider is `claude` (metered API), which doesn't touch the SDK at all.
 
-Because the tools delegate, the filters, Indeed scraping, `.docx` tailoring, Notion intake, and drop logs exist in exactly one place (the stage scripts) and both paths inherit them. **Never re-implement stage logic inside `workflow.py`'s tools** — that is precisely the drift this structure removed.
-
-> Note: `run.py` is *not* agentic. Under the default `claude_code` provider it reaches the subscription through the Agent SDK, but `_sdk_text()` runs with `allowed_tools=[]` and `max_turns=1` — a one-shot prompt→text call. The SDK is a transport, not a loop.
+`workflow.py` — an earlier Claude-agentic orchestrator (Claude decided which stage to run via an in-process MCP server whose tools were thin wrappers over the same stage `run()` functions) — was removed. It always drove its own reasoning loop through the Claude Code Agent SDK regardless of `AI_PROVIDER`, which meant a subscription session-window limit on runs of any length; `run.py` has no such constraint and reads/writes the exact same stage scripts and Notion schema.
 
 ### Pipeline stages
 
@@ -59,7 +55,7 @@ spans every status, so a `Disregard`d job is not re-scraped.
 
 The pipeline has a human review gate between scraping and tailoring:
 
-1. **Scrape & review** — `python run.py` (or `python workflow.py`) runs stages 1 + 4: scrape LinkedIn, score, and emit a review digest of "Scraped" jobs. **Stop here.**
+1. **Scrape & review** — `python run.py` runs stages 1 + 4: scrape LinkedIn, score, and emit a review digest of "Scraped" jobs. **Stop here.**
 2. **Review in Notion** — open the tracker and set `Status = Reviewed` on jobs worth applying to.
 3. **Evaluate** — `python run.py --evaluate` reads the "Reviewed" jobs straight from Notion, then runs stage 2 (tailor) → stage 3 (outreach drafts, non-interactive) → stage 4 (ready digest).
 
@@ -82,32 +78,22 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 ## Common Commands
 
 ```bash
-# Claude-native agentic orchestrator (delegates to the stage scripts)
-python workflow.py                                               # Morning: scrape + review digest
-python workflow.py --task scrape                                 # Stage 1 only
-python workflow.py --task ingest                                 # Ingest Notion "Interested" jobs
-python workflow.py --task evaluate --min-score 65                # Stages 2–4: tailor + outreach + digest
-python workflow.py --task tailor --min-score 65                  # Stage 2, ATS ≥65 (reads "Reviewed")
-python workflow.py --task outreach --company "Stripe"            # Cold outreach
-python workflow.py --task outreach --company "Google" --contact "Jane Doe" --contact-role "PM"
-python workflow.py --task digest --send                          # Stage 4 + email
-python workflow.py --task interview --company "Meta" --role "Senior PM"
-python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 185000
-
-# Legacy stage runner
 python run.py                                                    # Scrape + review digest (stages 1, 4) — STOP for review
 python run.py --ingest                                          # Ingest only Notion "Interested" jobs → Scraped
 python run.py --evaluate                                        # Sync "Reviewed" from Notion, then tailor + outreach + digest
 python run.py --setup                                            # Verify config
+python run.py --stage 1                                          # Scrape only (also ingests "Interested")
 python run.py --stage 2 --min-score 65
 python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
+python run.py --stage 4 --send
 python run.py --stage 5 --company "Meta" --role "Senior PM"
+python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
 ```
 
 ## Key Design Patterns
 
 1. **Notion-first** — Notion is the single source of truth. All stages read/write the Notion jobs database via the `db_*` helpers; `NOTION_API_KEY` + DB sharing are required.
-2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/workflow. Both set in `config/settings.py`.
+2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/negotiation. Both set in `config/settings.py`.
 3. **Idempotent stages** — Duplicates skipped by exact Job URL match. Stage 1 reads every existing row once via `db_get_all_jobs()` and dedups against that in-memory URL set (spanning *all* statuses), rather than querying Notion per listing. `db_find_job_by_url()` remains for one-off lookups (e.g. "Interested" intake).
 4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
 5. **Prompt caching** — `utils.py` `ai_chat_blocks()` caches structured blocks, but only on the metered `"claude"` provider; every other provider joins the blocks into plain text. On the `claude_code` path the CLI manages its own caching.
@@ -125,24 +111,24 @@ Set `AI_PROVIDER` in `config/settings.py`:
 
 | `AI_PROVIDER` | Key setting | Default model |
 |---|---|---|
-| `"claude_code"` (default) | Claude Code subscription (`claude /login`) | `sonnet` |
-| `"claude"` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+| `"claude"` (default) | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+| `"claude_code"` | Claude Code subscription (`claude /login`) | `sonnet` |
 | `"gemini"` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
 | `"codex"` | `OPENAI_API_KEY` | `gpt-4o` |
 
 Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (strong).
 
-**`claude_code` (subscription, no per-call billing):** routes **all** AI through your
-logged-in Claude Code subscription via the **Agent SDK** (`claude-agent-sdk`) — both the
-stage scripts (`run.py`, via `_chat_claude_code` in `scripts/utils.py`) and the agentic
-orchestrator (`workflow.py`, whose 9 stage-wrapper tools are exposed as an in-process MCP server
-and driven by `query()`). No metered API key is used. `workflow.py` strips `ANTHROPIC_API_KEY`
-from the environment unless `AI_PROVIDER="claude"`, so the stage scripts it invokes keep working
-on whichever provider is configured. Prerequisites: install the Claude Code
+**`claude` (metered API, default):** calls the Anthropic API directly via `_chat_claude` in
+`scripts/utils.py`. Requires `ANTHROPIC_API_KEY`. No Claude Code CLI/login and no subscription
+session-window limit — every stage script's AI call runs independently. Also the only path
+with prompt caching (`ai_chat_blocks()`).
+
+**`claude_code` (subscription, no per-call billing):** routes AI through your logged-in
+Claude Code subscription via the **Agent SDK** (`claude-agent-sdk`), through `_chat_claude_code`
+in `scripts/utils.py`. No metered API key is used. Prerequisites: install the Claude Code
 CLI, run `claude /login`, and `pip install claude-agent-sdk`. Caveats: **no prompt caching**
 on this path, and `ANTHROPIC_API_KEY` must **not** be present in the environment (the SDK/CLI
-would prefer it and bill metered). The key in `config/settings.py` is only used if you switch
-`AI_PROVIDER` back to `"claude"`.
+would prefer it and bill metered) — `_chat_claude_code` pops it from `os.environ` before calling.
 
 ## Development Notes
 
@@ -155,7 +141,7 @@ would prefer it and bill metered). The key in `config/settings.py` is only used 
 ## Testing a Change
 
 1. Run `python run.py --setup` to verify config
-2. Test on a single job: `python workflow.py --task tailor` or `python run.py --stage 3 --company "Stripe"`
+2. Test on a single job: `python run.py --stage 2 --min-score 0` or `python run.py --stage 3 --company "Stripe"`
 3. Check output files in `output/` (resumes, emails, guides are human-readable)
 4. Verify the Notion jobs database rows updated (status/score/links)
 

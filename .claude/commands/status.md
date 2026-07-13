@@ -9,8 +9,8 @@ First, read config/settings.py to get NOTION_DB_ID and NOTION_API_KEY. Then chec
 3. **Next recommended action**: Based on what's present, what stage should run next?
 
 Also show the pipeline stage commands as a reminder:
-- Stage 1 (Scrape): `python workflow.py --task scrape`
-- Stage 2 (Tailor): `python workflow.py --task tailor --min-score 65`
-- Stage 3 (Outreach): `python workflow.py --task outreach --company "CompanyName"`
-- Stage 4 (Digest): `python workflow.py --task digest`
-- Full morning run: `python workflow.py`
+- Stage 1 (Scrape): `python run.py --stage 1`
+- Stage 2 (Tailor): `python run.py --stage 2 --min-score 65`
+- Stage 3 (Outreach): `python run.py --stage 3 --company "CompanyName"`
+- Stage 4 (Digest): `python run.py --stage 4`
+- Full morning run: `python run.py`

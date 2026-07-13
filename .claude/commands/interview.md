@@ -1,7 +1,7 @@
 Generate a comprehensive interview prep guide for a specific role.
 
 ```bash
-python workflow.py --task interview $ARGUMENTS
+python run.py --stage 5 $ARGUMENTS
 ```
 
 Required arguments: `--company "CompanyName" --role "Role Title"`
@@ -21,5 +21,3 @@ What this does:
 - Saves to `output/prep_guides/{company}_{role}_prep.html`
 
 Open the HTML file in a browser for a formatted guide. Review 24–48 hours before your interview.
-
-To run with legacy CLI: `python run.py --stage 5 --company "Meta" --role "Senior PM"`

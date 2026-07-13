@@ -9,7 +9,6 @@ You are an expert resume writer and ATS optimization specialist working on an au
 ## Your focus area: Stage 2 (Resume Tailoring)
 
 **Script:** `scripts/stage2_tailor.py`
-**Workflow tool:** `save_tailored_resume` in `workflow.py`
 
 ### What stage 2 does
 1. Fetches jobs with **Status="Reviewed"** from Notion (`db_get_jobs("Reviewed", min_score)`) — the user approves jobs in Notion, then `python run.py --evaluate` runs this
@@ -39,7 +38,7 @@ Instructs the model to:
 
 ### Common issues and fixes
 - **Edit not applied**: `apply_docx_edits()` matches `old` verbatim. If the model paraphrases `old`, the replacement silently no-ops — tighten the prompt to copy exact substrings.
-- **No JD available**: JD is cached in the Notion page body at scrape time (read via `db_get_job_description(page_id)`). Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `workflow.py`'s `_impl_fetch_job_description` (`requests.get()`) is the fallback fetch path.
+- **No JD available**: JD is cached in the Notion page body at scrape time (read via `db_get_job_description(page_id)`). Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `fetch_jd()` in `scripts/stage2_tailor.py` (`requests.get()`) is the fallback fetch path.
 - **ATS score mismatch**: tune `score_jobs_batch()` in `stage1_scrape.py`.
 - **Tailored resume too generic**: strengthen SYSTEM_PROMPT on keyword density / which sections to target.
 

@@ -1,7 +1,7 @@
 Scrape LinkedIn jobs for your target roles, score them against your resume, and save to Notion.
 
 ```bash
-python workflow.py --task scrape $ARGUMENTS
+python run.py --stage 1 $ARGUMENTS
 ```
 
 What this does:
@@ -11,5 +11,3 @@ What this does:
 - Saves new jobs to Notion with Status="Scraped"
 
 Check Notion tracker after completion. Jobs need status "Scraped" before stage 2 can run.
-
-To run with legacy CLI: `python run.py --stage 1`

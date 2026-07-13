@@ -1,14 +1,14 @@
 Research salary benchmarks and generate a negotiation script for an offer.
 
 ```bash
-python workflow.py --task negotiate $ARGUMENTS
+python run.py --stage 6 $ARGUMENTS
 ```
 
 Required arguments: `--company "CompanyName" --role "Role Title" --offer AMOUNT`
 
 Example:
 - `/negotiate --company "Stripe" --role "PM" --offer 185000`
-- `/negotiate --company "Google" --role "Senior PM" --offer 220000 --hm-linkedin "https://linkedin.com/in/..."`
+- `/negotiate --company "Google" --role "Senior PM" --offer 220000`
 
 What this does:
 - Uses Claude to research salary benchmarks for the role/company/location
@@ -22,5 +22,3 @@ What this does:
 - Saves to `output/prep_guides/{company}_{role}_negotiate.html`
 
 Open the HTML file in a browser. Have it ready before your negotiation call.
-
-To run with legacy CLI: `python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000`
