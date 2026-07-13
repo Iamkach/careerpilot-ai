@@ -202,6 +202,12 @@ NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (th
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")   # set in your env (required for AI_PROVIDER="gemini")
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")   # set in your env (required for AI_PROVIDER="codex")
+HUNTER_API_KEY    = os.environ.get("HUNTER_API_KEY", "")   # set in your env (Step 7 Phase 0 spike — Hunter.io email finder/verifier)
+
+# --- Step 7 Phase 0 spike (communications subsystem) ---------
+# Apify actor id for LinkedIn job-poster/recruiter discovery (coregent, no li_at cookie needed).
+# See scripts/spike_phase0_leads.py and docs/backlog/step-7-communications-subsystem.md.
+LEAD_ACTOR = "coregent~linkedin-recruiter-job-poster-finder"
 
 # --- Notion IDs (already created for you) -------------------
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
