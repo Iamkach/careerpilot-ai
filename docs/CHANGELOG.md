@@ -63,9 +63,37 @@ the original story were never run.
   AI/regex sponsorship check actually sees the EEO/work-authorization block that usually sits
   at the bottom of a JD.
 
-(Step 5's remaining scope — AI `company_type` classification, the `Sponsorship` write's
-upstream classification logic, retry/`Retry` status — is **not** part of this step; see
-`docs/TODO.md` and `refinement-plans/filtering/stage1-filtering-rework.md` §3-9.)
+## Step 5 — Scoring reliability + AI company_type classification
+
+`score_jobs_batch()` (`scripts/stage1_scrape.py`) no longer fabricates `score=50,
+sponsorship="unknown"` on failure — neither on a whole-batch exception nor on a URL missing
+from a successful response. Both cases now return `scored=False`, and callers write the job
+to Notion as `Status="Retry"` with an empty ATS score instead.
+
+- `rescore_retry_jobs()` runs at the top of every stage 1 `run()` (right after
+  `ingest_interested_from_notion()`), re-scoring every `Retry` row from its already-cached JD
+  body — no repeat Apify call — and incrementing `Scoring Attempts` each pass. Past
+  `MAX_SCORING_ATTEMPTS` (`config/settings.py`), a job is promoted to `Scraped` with an empty
+  score rather than retried forever.
+- The scoring prompt now also classifies `company_type` (`product` / `staffing_or_consulting`
+  / `agency` / `unknown`) in the same call — no second round-trip. A job whose type is in
+  `SKIP_COMPANY_TYPES` (`{"staffing_or_consulting"}` by default) is dropped and logged
+  `[STAFFING/AI]`, but only when `scored` is `True` — an unscored/failed batch is never
+  dropped on `company_type == "unknown"`.
+- `ai_chat()`/`ai_chat_blocks()` (`scripts/utils.py`) gained retry-with-backoff (3 attempts,
+  2s/8s) on transient errors (timeouts, 429/5xx) and typed exceptions: `AIChatError` on
+  retry exhaustion, `AIUsageCapError` raised immediately (no blind retry) on a detected
+  Claude Code subscription usage-cap error.
+- `ingest_interested_from_notion()` inherits the same `scored` gating — an unscored
+  hand-picked job stays `Retry` (already enriched/JD-cached) instead of promoting to
+  `Scraped`.
+- `run.py --setup` prints the current `Retry`-queue count.
+- Requires one manual Notion step: add `Retry` as a `Status` select option (the API can't
+  create select options on a write that references them).
+
+**Not in scope:** the `AI_ROUTING`/tiering design and any `workflow.py` changes from the
+original plan — both are superseded by the shipped `FAST_PROVIDER`/`QUALITY_PROVIDER` +
+nightly-workflow approach (see below). `workflow.py` itself is deleted; not resurrected.
 
 ## Step 6 — Multi-source sourcing (Greenhouse/Lever/Ashby + cross-source dedup + freshness)
 
