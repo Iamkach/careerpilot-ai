@@ -1,5 +1,12 @@
 # Stage-1 filtering rework
 
+> **Status — 2026-07-13.** §1-2 (word-boundary company matching, head+tail JD excerpt) are
+> **implemented** — see `docs/CHANGELOG.md`. §3-9 (AI `company_type` classification, the
+> `scored`/fail-open flag, `Sponsorship` write, `SKIP_COMPANY_TYPES`, the `run()` drop/write
+> branching, `ingest_interested_from_notion()` changes) are **not implemented** — tracked in
+> `docs/TODO.md` under Step 5, merged with the reliability plan below per Conflict C1 (Plan
+> 2's failure model wins; this plan contributes the classification/filter logic).
+
 ## Context
 
 The user reports that scraped jobs are "still mostly consulting/staffing companies" and that roles which don't offer visa sponsorship keep slipping through. The earlier plan doc (`plan/reliability-filtering-networking.md` §2, which this document supersedes — removed in `63b64e7`, readable via `git show 1030d71:plan/reliability-filtering-networking.md`) attributes this to substring-only company matching and to `sponsorship == "unknown"` passing through the gate.
