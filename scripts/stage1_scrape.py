@@ -526,7 +526,7 @@ def run():
     ingested = 0
     counters = {
         "company": 0, "title": 0, "location": 0,
-        "sponsorship": 0, "applicants": 0, "duplicate": 0,
+        "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
     }
 
     drop_log_path, drop_fh = _open_drop_log()
@@ -584,6 +584,12 @@ def run():
                 log(f"  ⊘ [no-sponsor/AI]  {job['company']} — {job['title']}")
                 continue
 
+            if MIN_ATS_SCORE and score < MIN_ATS_SCORE:
+                counters["low_score"] += 1
+                _log_drop(drop_fh, "low-ats-score", job)
+                log(f"  ⊘ [low-ats-score:{score}]  {job['company']} — {job['title']}")
+                continue
+
             ac  = job.get("applicant_count")
             sal = job.get("salary_range", "")
             db_add_job({
@@ -610,7 +616,8 @@ def run():
         f"Pre-filter drops -> "
         f"company:{counters['company']}  title:{counters['title']}  "
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
-        f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}\n"
+        f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}  "
+        f"low-ats-score:{counters['low_score']}\n"
         f"Drop log saved -> {drop_log_path}"
     )
     drop_fh.write(f"\n{'='*70}\nSUMMARY\n{summary}\n")
