@@ -176,6 +176,34 @@ filters including freshness.
 - [ ] `db_get_all_jobs()` read failure aborts the scrape instead of proceeding as if the DB were
       empty.
 
+## Backup plan — if Apify sourcing proves unsatisfactory
+
+Phase 1 keeps LinkedIn/Indeed on the Step 1 Apify actor pair (`valig` + `misceres`) and adds
+Greenhouse/Lever/Ashby as free, keyless board readers — it does **not** adopt JobSpy, even though
+the source doc's own recommendation was the hybrid "JobSpy + ATS boards" (Option B in
+`scraping-sources.md`). If the Apify side stops being satisfactory — pricing creeps up, `valig`
+gets deprecated/rate-limited the way `bebity` did, or per-role volume proves too thin — the
+fallback is already scoped, not something to re-research from scratch:
+
+- [ ] **TODO:** adopt `python-jobspy` (`pip install python-jobspy`) as a `KEYWORD_SOURCES` entry
+      in `scripts/sources.py`. One `scrape_jobs()` call covers LinkedIn + Indeed + Glassdoor +
+      Google Jobs + ZipRecruiter concurrently, for free, and its DataFrame columns map near 1:1
+      onto this module's output contract (see `scraping-sources.md` §B2 for the exact column
+      mapping). Concretely: add `scrape_jobspy(role) -> list[dict]` returning the same shape as
+      `scrape_linkedin`/`scrape_indeed`, register it as `KEYWORD_SOURCES["jobspy"]`, and add
+      `"jobspy"` to `ENABLED_SOURCES` in `config/settings.py` — nothing downstream
+      (`_pre_filter`, `collapse_by_fingerprint`, `score_jobs_batch`, the Notion writer) needs to
+      change, since they all operate on the shared dict shape.
+- Two caveats already flagged in the source doc, carried forward rather than re-discovered: (1)
+  JobSpy's own README states LinkedIn rate-limits around page 10 on one IP — "proxies are a must
+  basically" — so this only helps at today's ~25-jobs-per-role volume, not at scale; (2)
+  maintenance signal is mixed (PyPI ahead of the GitHub repo's last tagged release as of the Step 1
+  spike), so a breakage is on us to fix, not an actor maintainer.
+- Decision trigger: don't adopt preemptively. Only build this out once `valig`/`misceres` volume
+  or reliability is actually observed to degrade (drop-log `stale`/zero-listing runs, Apify actor
+  404s/schema drift the way `bebity` broke) — re-litigating Option A vs. B without a concrete
+  failure is exactly the kind of premature swap Step 1 was scoped to avoid.
+
 ## Out of scope
 
 - **Phase 2** (Glassdoor, Wellfound, Welcome to the Jungle, Built In) — opt-in, one source at a
@@ -187,11 +215,16 @@ filters including freshness.
 
 ## Files touched
 
-`scripts/sources.py` (new), `scripts/stage1_scrape.py` (restructure `run()`, `_pre_filter`
-freshness check), `scripts/utils.py` (`_notion_write_job` extension, `db_get_all_jobs` failure
-guard), `config/settings.py` (`ENABLED_SOURCES`, `MAX_JOB_AGE_DAYS`, `DROP_UNDATED_JOBS`,
-`TARGET_COMPANIES` becomes live), `config/ats_tokens.json` (new), `workflow.py` (copy-only:
-`run_scrape` tool description still says "LinkedIn + Indeed"), `CLAUDE.md`.
+`scripts/sources.py` (new — registry, fingerprint dedup, freshness, ATS token discovery),
+`scripts/stage1_scrape.py` (restructured `run()` to global gather → collapse → filter → score;
+`_pre_filter` gained the freshness + fingerprint checks; LinkedIn/Indeed scraping moved out to
+`sources.py`), `scripts/utils.py` (`db_get_all_jobs` now raises on a failed read instead of
+returning `[]`; `_notion_write_job` already wrote `Posted Date`/`Source`/`Applicant Count`/`Salary
+Range` from an earlier pass), `config/settings.py` (`ENABLED_SOURCES`, `MAX_JOB_AGE_DAYS`,
+`DROP_UNDATED_JOBS` added; `TARGET_COMPANIES` is now live, seeding `discover_tokens()`),
+`config/ats_tokens.json` (new — live cache, already seeded via a real `discover_tokens()` run
+against `TARGET_COMPANIES`). `workflow.py` no longer exists (removed prior to this story), so its
+stale tool description is moot. CLAUDE.md updated to describe the new sourcing module.
 
 ## References
 
