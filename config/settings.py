@@ -102,6 +102,11 @@ MAX_APPLICANT_COUNT = 200
 # Jobs that say they sponsor OR are silent on the topic are kept.
 EXCLUDE_NO_SPONSORSHIP = True
 
+# --- ATS score filter (stage 1) ------------------------------
+# Jobs scoring below this are scored but not saved to Notion.
+# Set to 0 to disable the filter.
+MIN_ATS_SCORE = 30
+
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"
