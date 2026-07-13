@@ -112,20 +112,15 @@ GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
 RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 
 # --- AI Provider --------------------------------------------
-# Choose which LLM powers all pipeline stages
-# Options: "claude_code" (subscription) | "claude" (metered API) | "gemini" | "codex"
+# Choose which LLM powers all pipeline stages (run.py is the only entry point in use).
+# Options: "claude" (metered API) | "claude_code" (subscription) | "gemini" | "codex"
 #
-# "claude_code" routes ALL AI through your Claude Code subscription via the Agent SDK
-# (claude-agent-sdk) — both the stage scripts (run.py) and the agentic orchestrator
-# (workflow.py). No metered API key is used. Prerequisites: install the Claude Code CLI,
-# run `claude /login`, and `pip install claude-agent-sdk`. No prompt caching on this path.
-# NOTE: ANTHROPIC_API_KEY must NOT be present in the environment — the SDK/CLI would prefer
-# it and bill metered. It is only needed if you switch AI_PROVIDER back to "claude".
-AI_PROVIDER = "claude_code"
+# "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
+# No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
+# runs independently of any subscription session, and prompt caching is enabled.
+AI_PROVIDER = "claude"
 
-# Optional: route stage scripts (run.py path) through a different provider.
-# Set to "claude" and provide ANTHROPIC_API_KEY below to eliminate session drain
-# from stage scripts entirely (restores prompt caching too). workflow.py is unaffected.
+# Optional: route stage scripts (run.py path) through a different provider than AI_PROVIDER.
 # Leave blank to fall through to AI_PROVIDER above (default behavior).
 STAGE_AI_PROVIDER = ""
 
@@ -134,12 +129,13 @@ STAGE_AI_PROVIDER = ""
 #   claude_code default : sonnet  (accepts aliases: haiku | sonnet | opus, or full claude-* ids)
 #   gemini default      : gemini-2.0-flash
 #   codex  default      : gpt-4o
-AI_MODEL_OVERRIDE = "haiku"     # fast/cheap — stages 1, 3
-QUALITY_MODEL     = "sonnet"    # strong — stages 2, 5, 6, workflow
+AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3
+QUALITY_MODEL     = "claude-sonnet-5"             # strong — stages 2, 5, 6
 
 # --- API Keys -----------------------------------------------
 APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com  (free token)
 NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (the integration token; DB is shared & working)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
 
 # --- Notion IDs (already created for you) -------------------
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
