@@ -1,8 +1,16 @@
 # Implementation README — Hybrid AI Provider Setup + Graceful Failure
 
-> This documents the approved implementation plan. **Not yet implemented** — use this as the spec
-> when executing. See [`../README.md`](../README.md) for how this plan relates to the other four,
-> and for the conflicts to resolve before starting.
+> **Status — 2026-07-13.** The AI-provider-tiering half of this plan (§1, `AI_ROUTING`, and
+> any `workflow.py` changes) is **superseded, not implemented** — the shipped design instead
+> moved all interactive stages to metered `AI_PROVIDER="claude"` and added
+> `FAST_PROVIDER`/`QUALITY_PROVIDER` hybrid routing for the nightly GitHub Actions run;
+> `workflow.py` was deleted outright. Don't implement §1/§4 as written. **The reliability half
+> (§2-3: retries/typed errors, killing the fabricated `score=50`, the `Retry` status,
+> `Scoring Attempts` cap, `company_type` classification) is still unimplemented and is the
+> spec for it** — tracked in `docs/TODO.md` under Step 5. See `docs/CHANGELOG.md` for what
+> already shipped. This documents the approved implementation plan for what's left; use §2-3
+> as the spec when executing. See [`../README.md`](../README.md) for how this plan relates to
+> the others.
 
 ## Problem recap
 
@@ -207,8 +215,8 @@ automatically through the new `ai_chat`), filtering logic.
 
 **Interacts with:** the Notion dedup snapshot, which **already landed** (`54ad4fc`, `3f91db7`). Its
 `existing_urls` set must be narrowed to exclude `Interested`/`Retry` rows (see §3.5). Also with
-[`../sourcing/multi-source-sourcing.md`](../sourcing/multi-source-sourcing.md), whose cross-source
-fingerprint set is built from the same snapshot and inherits the same trap.
+`scripts/sources.py`'s cross-source fingerprint dedup (already implemented — see
+`../../CHANGELOG.md` Step 6), which is built from the same snapshot and inherits the same trap.
 
 ## Suggested order
 

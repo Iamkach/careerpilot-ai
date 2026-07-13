@@ -47,10 +47,10 @@ section primitive. This is largely greenfield.
    A Leads database is an **entirely new write/query layer**.
 
 2. **The pattern §3 wants to copy is the bug.** §3 justifies reuse by saying the existing actors "were presumably
-   vetted." [`../sourcing/scraping-sources.md`](../sourcing/scraping-sources.md) establishes the opposite: `bebity~indeed-scraper` **returns
-   HTTP 404** and has silently contributed zero listings on every run, hidden by `except Exception: return []`
-   (`stage1_scrape.py:166-170`). If the new stage copies that swallow, a broken actor reads as "nobody is hiring."
-   **A failed run and an empty run must never look alike.**
+   vetted." That was wrong: `bebity~indeed-scraper` **returned HTTP 404** and had silently contributed zero
+   listings on every run, hidden by `except Exception: return []` (now fixed — see `../../CHANGELOG.md` Step 1).
+   If the new stage copies that swallow, a broken actor reads as "nobody is hiring." **A failed run and an empty
+   run must never look alike.**
 
 3. **§3 has an undeclared dependency on §2 that §2 does not deliver.** §3 says to reuse "the new `company_type`
    classification." That lives inside `score_jobs_batch()` (`stage1_scrape.py:322-381`), whose prompt is built around
@@ -96,10 +96,10 @@ Researched per the instruction not to assume Apify.
 
 Apify is not eliminated — it is reduced to the one job it alone can do.
 
-> **Interaction with [`../sourcing/scraping-sources.md`](../sourcing/scraping-sources.md):** that plan already recommends swapping LinkedIn to
-> `valig~linkedin-jobs-scraper` on cost grounds ($0.28–0.40/1k vs. the current $29.99/mo bebity rental). That actor
-> returns `recruiterName` + `recruiterUrl`, no cookie. **If the swap lands first, prong 1's job-linked contact data
-> arrives free as a side effect of scraping, with no second actor.** Sequence the swap first if both are planned.
+> **Already landed (see `../../CHANGELOG.md` Step 1):** LinkedIn sourcing was swapped to
+> `valig~linkedin-jobs-scraper` on cost grounds ($0.28–0.40/1k vs. the old $29.99/mo bebity rental). That actor
+> returns `recruiterName` + `recruiterUrl`, no cookie — **prong 1's job-linked contact data arrives free as a
+> side effect of scraping, with no second actor needed.**
 
 ---
 

@@ -5,9 +5,9 @@ roadmap lands.
 **Depends on:** none
 **Blocks:** Step 7 (moves secrets into GitHub Actions — must not carry a leaked token into CI)
 **Size:** XS (~15 min + propagation)
-**Source plan(s):** [`refinement-plans/README.md`](../refinement-plans/README.md) Step 0;
-[`refinement-plans/sourcing/scraping-sources.md`](../refinement-plans/sourcing/scraping-sources.md)
-(flags it independently)
+**Source plan(s):** [`refinement-plans/README.md`](../refinement-plans/README.md) Step 0
+(originally also flagged independently by the sourcing spike plan, now retired — see
+`../CHANGELOG.md`)
 
 ## Context
 
