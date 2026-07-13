@@ -47,9 +47,10 @@ Apify (LinkedIn scrape)  →  stage 1
 Status pipeline: `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
 Off-pipeline states (`Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review`) exist as
-select options and are set **by hand** — no stage writes them. Since `db_get_jobs()` filters on an
-exact status, a row parked in one of them is simply never picked up. Dedup is the exception: it
-spans every status, so a `Disregard`d job is not re-scraped.
+select options and are set **by hand** — no stage writes them, with one deliberate exception:
+stage 2's sponsorship gate (see below) moves a `Reviewed` job to `Human Review` on its own. Since
+`db_get_jobs()` filters on an exact status, a row parked in one of them is simply never picked up.
+Dedup is the exception: it spans every status, so a `Disregard`d job is not re-scraped.
 
 ### Two-step daily flow
 
@@ -102,8 +103,21 @@ python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
 ## Stage 1 Filters
 
 Two settings in `config/settings.py` control what gets saved:
-- `SKIP_COMPANIES` — substring denylist for consulting/staffing firms; grows over time
+- `SKIP_COMPANIES` — word-boundary denylist for consulting/staffing firms; grows over time
 - `EXCLUDE_NO_SPONSORSHIP = True` — skips jobs that explicitly deny visa sponsorship
+
+## Stage 2 Sponsorship Gate
+
+`RESTRICTED_SPONSORSHIP_COMPANIES` in `config/settings.py` is a manually-curated list of
+product companies known (from your own research/contacts) to sponsor only **existing**
+employees, not new external hires — even when the JD reads as sponsorship-friendly or says
+nothing. Unlike `SKIP_COMPANIES`, these are **not** excluded in stage 1 — they're scraped,
+scored, and tracked normally. Instead, stage 2 (`_sponsorship_gate()`) holds back any
+`Reviewed` job whose company matches this list: it moves that job's Notion Status to
+`Human Review` and writes a guidance note, without tailoring a resume. To release a held
+job, confirm sponsorship for a new hire yourself, add `SPONSORSHIP_CONFIRMED_MARKER`
+(default: `"sponsorship confirmed"`) to that job's Notion **Notes** field, then move its
+Status back to `Reviewed` by hand — stage 2 checks for the marker before re-gating it.
 
 ## Switching AI Provider
 
@@ -129,6 +143,26 @@ in `scripts/utils.py`. No metered API key is used. Prerequisites: install the Cl
 CLI, run `claude /login`, and `pip install claude-agent-sdk`. Caveats: **no prompt caching**
 on this path, and `ANTHROPIC_API_KEY` must **not** be present in the environment (the SDK/CLI
 would prefer it and bill metered) — `_chat_claude_code` pops it from `os.environ` before calling.
+For headless auth (e.g. CI), run `claude setup-token` locally once (requires Pro/Max) and set
+the resulting value as `CLAUDE_CODE_OAUTH_TOKEN` in the environment instead of `/login`.
+
+### Hybrid tiering (`FAST_PROVIDER` / `QUALITY_PROVIDER`)
+
+Optional per-tier override, on top of the single `AI_PROVIDER` above — set in `config/settings.py`
+or via env vars of the same name. `FAST_PROVIDER` covers stage 1 scoring + stage 3 outreach
+(many small/bulk calls); `QUALITY_PROVIDER` covers stage 2 tailor + stage 5/6 (few, larger
+calls). Both default to `AI_PROVIDER`, so this is a no-op unless explicitly set. Routing logic
+lives in `_active_provider(quality: bool)` in `scripts/utils.py`.
+
+Interactively, keep both on `"claude"` (metered) — the subscription's real cost is its shared
+5-hour usage window, which competes with your own interactive Claude Code sessions. This
+changes for an **unattended, off-hours run** (e.g. `.github/workflows/nightly-pipeline.yml`,
+scheduled at midnight): nothing is competing for the subscription window then, so
+`QUALITY_PROVIDER=claude_code` becomes free marginal capacity instead of a scarce resource,
+while `FAST_PROVIDER=claude` keeps the bulk/many-small-call stages on the cheap, cached,
+session-window-independent path. `_chat_claude_code` raises a clear error (not a silent hang)
+if a call hits the subscription's usage cap — re-running is safe since stages are idempotent
+via Notion status.
 
 ## Development Notes
 

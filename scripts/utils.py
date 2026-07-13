@@ -1,7 +1,7 @@
 """
 utils.py — Shared helpers used across all job search scripts
 """
-import os, json, sys, datetime
+import os, json, re, sys, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -22,16 +22,23 @@ _DEFAULTS = {
     "codex":       "gpt-4o",
 }
 
-def _active_model() -> str:
-    return AI_MODEL_OVERRIDE or _DEFAULTS.get(AI_PROVIDER, _DEFAULTS["claude"])
-
-
 # ── Provider backends ────────────────────────────────────────
 
-def _resolve_model(quality: bool) -> str:
-    if quality:
-        return QUALITY_MODEL or _active_model()
-    return _active_model()
+def _resolve_model(quality: bool, provider: str = "claude") -> str:
+    """Resolve the model id for a call to `provider`. AI_MODEL_OVERRIDE/QUALITY_MODEL only
+    apply to provider == "claude" (their values are Claude model ids, meaningless to other
+    SDKs); other providers use MODEL_OVERRIDES[provider] if set, else that backend's built-in
+    default. This is what lets AI_PROVIDER/FAST_PROVIDER/QUALITY_PROVIDER be switched to
+    gemini/codex/claude_code at any time without also having to edit a model field."""
+    tier = "quality" if quality else "fast"
+    override = getattr(_settings, "MODEL_OVERRIDES", {}).get(provider, {}).get(tier, "")
+    if override:
+        return override
+    if provider == "claude":
+        legacy = (QUALITY_MODEL if quality else AI_MODEL_OVERRIDE) or ""
+        if legacy:
+            return legacy
+    return _DEFAULTS.get(provider, _DEFAULTS["claude"])
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -96,15 +103,29 @@ async def _sdk_text(prompt: str, system: str, model: str) -> str:
     return (result if result else "".join(chunks)).strip()
 
 
+_USAGE_CAP_PATTERNS = ("usage limit", "usage cap", "rate limit reached", "5-hour limit", "session limit")
+
+
 def _chat_claude_code(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     """Route a single prompt->text call through the Claude Code subscription via the Agent
     SDK (no metered API key). The SDK spawns the `claude` CLI as its transport, so it uses
-    the logged-in subscription as long as ANTHROPIC_API_KEY is not in the environment.
+    the logged-in subscription (interactive login or CLAUDE_CODE_OAUTH_TOKEN for headless/CI
+    auth) as long as ANTHROPIC_API_KEY is not in the environment.
     Note: prompt caching is unavailable over this path; `max_tokens` has no SDK knob."""
     import asyncio
     os.environ.pop("ANTHROPIC_API_KEY", None)  # force subscription auth, never metered
     _find_claude_cli()  # fail fast with a clear message if the CLI is missing
-    return asyncio.run(_sdk_text(prompt, system, _resolve_model(quality)))
+    try:
+        return asyncio.run(_sdk_text(prompt, system, _resolve_model(quality, "claude_code")))
+    except Exception as e:
+        msg = str(e).lower()
+        if any(p in msg for p in _USAGE_CAP_PATTERNS):
+            raise RuntimeError(
+                f"Claude Code subscription usage cap hit: {e}. Wait for the usage window to "
+                "reset, or re-run with FAST_PROVIDER/QUALITY_PROVIDER=claude (metered) instead. "
+                "Re-running is safe — stages are idempotent via Notion status."
+            ) from e
+        raise
 
 
 def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
@@ -112,7 +133,7 @@ def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = Fals
     genai.configure(api_key=GEMINI_API_KEY)
     config = genai.types.GenerationConfig(max_output_tokens=max_tokens)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
-    model = genai.GenerativeModel(_resolve_model(quality))
+    model = genai.GenerativeModel(_resolve_model(quality, "gemini"))
     resp = model.generate_content(full_prompt, generation_config=config)
     return resp.text
 
@@ -120,7 +141,7 @@ def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = Fals
 def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
-    model = _resolve_model(quality)
+    model = _resolve_model(quality, "codex")
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -144,13 +165,20 @@ _BACKENDS = {
     "codex":       _chat_codex,
 }
 
-def _active_provider() -> str:
-    """Return STAGE_AI_PROVIDER if set, else AI_PROVIDER."""
+def _active_provider(quality: bool = False) -> str:
+    """Pick the provider for this call. FAST_PROVIDER/QUALITY_PROVIDER (per-tier) take
+    precedence when either differs from AI_PROVIDER (e.g. a nightly CI run splitting bulk
+    calls onto metered and low-volume calls onto the subscription); otherwise falls through
+    to STAGE_AI_PROVIDER or AI_PROVIDER, preserving today's single-provider behavior."""
     from config.settings import STAGE_AI_PROVIDER
+    fast    = getattr(_settings, "FAST_PROVIDER", "") or AI_PROVIDER
+    quality_provider = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
+    if fast != AI_PROVIDER or quality_provider != AI_PROVIDER:
+        return quality_provider if quality else fast
     return STAGE_AI_PROVIDER or AI_PROVIDER
 
 def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool = False) -> str:
-    provider = _active_provider()
+    provider = _active_provider(quality)
     backend = _BACKENDS.get(provider)
     if not backend:
         raise ValueError(f"Unknown provider '{provider}'. Choose: claude, claude_code, gemini, codex")
@@ -165,7 +193,7 @@ def ai_chat_blocks(blocks: list, system: str = "", max_tokens: int = 4096, quali
     Falls back to plain ai_chat for non-Claude providers (cache_control is ignored).
     Only the metered "claude" API provider uses the structured/cached path; "claude_code"
     (subscription CLI) joins blocks like gemini/codex since per-block caching is unsupported."""
-    if _active_provider() != "claude":
+    if _active_provider(quality) != "claude":
         text = "\n\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         return ai_chat(text, system=system, max_tokens=max_tokens, quality=quality)
     import anthropic
@@ -272,6 +300,45 @@ def _prop_select(props: dict, name: str):
     return sel.get("name") if sel else None
 
 
+# ── Company-name matching (word-boundary, not substring) ─────
+# Shared by stage1_scrape.py's SKIP_COMPANIES denylist and stage2_tailor.py's
+# RESTRICTED_SPONSORSHIP_COMPANIES gate — both need "UST" to not match "Customer.io".
+
+_LEGAL_SUFFIXES = {"inc", "incorporated", "llc", "corp", "corporation", "ltd", "co", "plc"}
+
+
+def _tokens(s: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (s or "").lower())
+
+
+def _strip_suffix(toks: list[str]) -> list[str]:
+    """Trim trailing legal suffixes so "BeaconFire Inc." still matches bare "BeaconFire"."""
+    while toks and toks[-1] in _LEGAL_SUFFIXES:
+        toks = toks[:-1]
+    return toks
+
+
+def _subseq(haystack: list[str], needle: list[str]) -> bool:
+    """True if `needle` appears as a contiguous, token-boundary-anchored sub-sequence of `haystack`."""
+    if not needle:
+        return False
+    n = len(needle)
+    return any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
+def matches_company_list(company: str, names: list[str]) -> bool:
+    """True if `company` word-boundary-matches any entry in `names` (not a raw substring
+    match — avoids false positives like "ust" matching "customer.io")."""
+    haystack = _strip_suffix(_tokens(company))
+    if not haystack:
+        return False
+    for name in names:
+        needle = _strip_suffix(_tokens(name))
+        if needle and _subseq(haystack, needle):
+            return True
+    return False
+
+
 def _page_to_job(page: dict) -> dict:
     """Map a Notion page to the job dict shape every stage/tool expects."""
     props = page.get("properties", {})
@@ -290,6 +357,7 @@ def _page_to_job(page: dict) -> dict:
         "hm_li":       _prop_url(props, "Hiring Manager LinkedIn"),
         "sponsorship":     _prop_select(props, "Sponsorship"),
         "scoring_attempts": _prop_number(props, "Scoring Attempts"),
+        "notes":       _notion_plain_text(props.get("Notes")),
     }
 
 
@@ -358,6 +426,7 @@ _EXTRA_TO_NOTION = {
     "date_applied":            lambda v: {"Date Applied": {"date": {"start": v}}},
     "hiring_manager":          lambda v: {"Hiring Manager": {"rich_text": [{"text": {"content": v}}]}},
     "hiring_manager_linkedin": lambda v: {"Hiring Manager LinkedIn": {"url": v}},
+    "notes":                   lambda v: {"Notes": {"rich_text": [{"text": {"content": v}}]}},
 }
 
 def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
@@ -488,13 +557,20 @@ def _query_db(filter_=None, sorts=None) -> list:
     return pages
 
 
-def db_find_job_by_url(url: str) -> str | None:
-    """Return the Notion page id if a job with this URL exists, else None."""
+def db_find_job_by_url(url: str, exclude_page_id: str = "") -> str | None:
+    """Return the Notion page id if a job with this URL exists, else None.
+
+    `exclude_page_id` skips a hit whose id matches it — needed when checking a manually-added
+    row against the rest of the DB, since that row already holds its own Job URL and would
+    otherwise match itself."""
     if not url:
         return None
     try:
         pages = _query_db(filter_={"property": "Job URL", "url": {"equals": url}})
-        return pages[0]["id"] if pages else None
+        for page in pages:
+            if page["id"] != exclude_page_id:
+                return page["id"]
+        return None
     except Exception as e:
         log(f"[db_find_job_by_url] warning: {e}")
         return None
