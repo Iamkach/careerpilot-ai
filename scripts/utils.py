@@ -267,6 +267,10 @@ def _prop_date(props: dict, name: str):
     d = (props.get(name) or {}).get("date")
     return d.get("start") if d else None
 
+def _prop_select(props: dict, name: str):
+    sel = (props.get(name) or {}).get("select")
+    return sel.get("name") if sel else None
+
 
 def _page_to_job(page: dict) -> dict:
     """Map a Notion page to the job dict shape every stage/tool expects."""
@@ -284,6 +288,8 @@ def _page_to_job(page: dict) -> dict:
         "resume_link": _prop_url(props, "Tailored Resume Link"),
         "hm":          _notion_plain_text(props.get("Hiring Manager")),
         "hm_li":       _prop_url(props, "Hiring Manager LinkedIn"),
+        "sponsorship":     _prop_select(props, "Sponsorship"),
+        "scoring_attempts": _prop_number(props, "Scoring Attempts"),
     }
 
 
@@ -314,14 +320,35 @@ def _notion_write_job(job: dict) -> str | None:
             "Company":      {"rich_text": [{"text": {"content": job.get("company", "")}}]},
             "Location":     {"rich_text": [{"text": {"content": job.get("location", "")}}]},
             "Job URL":      {"url": job.get("url") or None},
-            "Status":       {"select": {"name": "Scraped"}},
+            "Status":       {"select": {"name": job.get("status") or "Scraped"}},
             "Date Scraped": {"date": {"start": today()}},
         }
-        if job.get("ats_score"):
+        if job.get("ats_score") is not None:
             props["ATS Match Score"] = {"number": float(job["ats_score"])}
-        page = notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=props)
+        if job.get("sponsorship") is not None:
+            props["Sponsorship"] = {"select": {"name": job["sponsorship"]}}
+        if job.get("scoring_attempts") is not None:
+            props["Scoring Attempts"] = {"number": float(job["scoring_attempts"])}
+        if job.get("posted_date"):
+            props["Posted Date"] = {"date": {"start": job["posted_date"]}}
+        if job.get("source"):
+            props["Source"] = {"rich_text": [{"text": {"content": job["source"]}}]}
+        if job.get("applicant_count") is not None:
+            props["Applicant Count"] = {"number": float(job["applicant_count"])}
+        if job.get("salary_range"):
+            props["Salary Range"] = {"rich_text": [{"text": {"content": job["salary_range"]}}]}
+        try:
+            page = notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=props)
+        except Exception as e:
+            if "Sponsorship" in props and "Sponsorship" in str(e):
+                log(f"[_notion_write_job] warning: Sponsorship write failed ({e}); retrying without it")
+                del props["Sponsorship"]
+                page = notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=props)
+            else:
+                raise
         return page["id"]
-    except Exception:
+    except Exception as e:
+        log(f"[_notion_write_job] Notion page creation failed: {e}")
         return None
 
 
@@ -402,8 +429,8 @@ def get_notion_jobs_by_status(status: str) -> list[dict]:
     return jobs
 
 
-def _notion_promote_to_scraped(notion_page_id: str, job: dict):
-    """Update an EXISTING manually-added Notion page to Status='Scraped',
+def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Scraped"):
+    """Update an EXISTING manually-added Notion page to the given Status (default 'Scraped'),
     set ATS score + Date Scraped, and backfill Title/Company/Location if blank."""
     if not NOTION_API_KEY or not notion_page_id:
         return
@@ -411,11 +438,13 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict):
         from notion_client import Client as NotionClient
         notion = NotionClient(auth=NOTION_API_KEY)
         props = {
-            "Status":       {"select": {"name": "Scraped"}},
+            "Status":       {"select": {"name": status}},
             "Date Scraped": {"date": {"start": today()}},
         }
-        if job.get("ats_score"):
+        if job.get("ats_score") is not None:
             props["ATS Match Score"] = {"number": float(job["ats_score"])}
+        if job.get("sponsorship") is not None:
+            props["Sponsorship"] = {"select": {"name": job["sponsorship"]}}
         # Backfill text fields only when the user left them blank
         if job.get("title"):
             props["Job Title"] = {"title": [{"text": {"content": job["title"]}}]}
@@ -423,9 +452,17 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict):
             props["Company"] = {"rich_text": [{"text": {"content": job["company"]}}]}
         if job.get("location"):
             props["Location"] = {"rich_text": [{"text": {"content": job["location"]}}]}
-        notion.pages.update(page_id=notion_page_id, properties=props)
-    except Exception:
-        pass
+        try:
+            notion.pages.update(page_id=notion_page_id, properties=props)
+        except Exception as e:
+            if "Sponsorship" in props and "Sponsorship" in str(e):
+                log(f"[_notion_promote_to_scraped] warning: Sponsorship write failed ({e}); retrying without it")
+                del props["Sponsorship"]
+                notion.pages.update(page_id=notion_page_id, properties=props)
+            else:
+                raise
+    except Exception as e:
+        log(f"[_notion_promote_to_scraped] Notion update failed: {e}")
 
 
 # ── Public DB interface (Notion-backed) ───────────────────────
