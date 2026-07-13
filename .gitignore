@@ -26,3 +26,4 @@ output/
 # OS
 .DS_Store
 Thumbs.db
+docs/architecture/ai-analysis/
