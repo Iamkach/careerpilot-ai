@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **AI Job Search Pipeline** — Automated job search using Claude API (no N8N, no VPS required).
 
-Scrapes LinkedIn via Apify, tailors resumes per job, drafts cold/warm outreach emails, generates interview prep guides, and negotiates offers. Progress is tracked in **Notion** (the single source of truth — the job tracker database).
+Scrapes jobs from multiple sources (LinkedIn + Indeed via Apify, Greenhouse/Lever/Ashby directly), tailors resumes per job, drafts cold/warm outreach emails, generates interview prep guides, and negotiates offers. Progress is tracked in **Notion** (the single source of truth — the job tracker database).
 
 ### Key Dependencies
 - `anthropic` — Claude metered API (default provider `AI_PROVIDER="claude"`)
@@ -29,7 +29,7 @@ Scrapes LinkedIn via Apify, tailors resumes per job, drafts cold/warm outreach e
 
 | Stage | File | Purpose |
 |-------|------|---------|
-| 1 | `scripts/stage1_scrape.py` | Scrape LinkedIn via Apify (+ ingest Notion "Interested" jobs), score against resume (ATS 0–100), save to Notion as "Scraped" |
+| 1 | `scripts/stage1_scrape.py` | Scrape every source in `ENABLED_SOURCES` via `scripts/sources.py` (+ ingest Notion "Interested" jobs), score against resume (ATS 0–100), save to Notion as "Scraped" |
 | 2 | `scripts/stage2_tailor.py` | Fetch "Reviewed" jobs, apply targeted ATS keyword edits in-place to the base `.docx`, save to `output/resumes/` |
 | 3 | `scripts/stage3_outreach.py` | Draft cold/warm outreach emails, save to `output/outreach/` |
 | 4 | `scripts/stage4_digest.py` | Generate morning HTML digest of ready-to-apply jobs |
@@ -41,8 +41,42 @@ Scrapes LinkedIn via Apify, tailors resumes per job, drafts cold/warm outreach e
 ```
 Notion jobs database  ←→  all stages (primary, single source of truth)
        ↑
-Apify (LinkedIn scrape)  →  stage 1
+scripts/sources.py: Apify (LinkedIn, Indeed) + Greenhouse/Lever/Ashby (direct JSON APIs)  →  stage 1
 ```
+
+### Multi-source sourcing (`scripts/sources.py`)
+
+Stage 1 gathers from a registry rather than hardcoding two scrapers:
+- `KEYWORD_SOURCES = {"linkedin": ..., "indeed": ...}` — Apify actors, searched per `TARGET_ROLES`
+- `BOARD_SOURCES = {"greenhouse": ..., "lever": ..., "ashby": ...}` — free, keyless JSON APIs,
+  crawled per company (seeded from `TARGET_COMPANIES` ∪ every company already in Notion), filtered
+  to `TARGET_ROLES` matches by `title_matches_targets()`
+- `config/settings.py`'s `ENABLED_SOURCES` controls which registry entries actually run
+
+Every source function returns the same dict shape (`url, title, company, location, description,
+source, posted_date, applicant_count, salary_range`). `run()` does a **global gather → collapse →
+filter → score**, in that order:
+1. Gather raw listings from every enabled source across all roles/companies in one pass (a
+   duplicate can span both roles and sources, so per-role processing can't see it).
+2. `collapse_by_fingerprint()` merges same-company-same-title duplicates across sources —
+   `job_fingerprint(company, title)` normalizes both fields (strips legal suffixes/parentheticals,
+   keeps seniority tokens) — keeping the copy from the highest-priority source per
+   `SOURCE_PRIORITY` (ATS boards win over LinkedIn/Indeed: fuller JD, real date, direct-apply URL).
+3. `_pre_filter()` in `stage1_scrape.py` runs freshness (`_is_fresh()` vs `MAX_JOB_AGE_DAYS`/
+   `DROP_UNDATED_JOBS`) immediately after the seen-URL check, then the existing company/title/
+   location/sponsorship/duplicate checks (now also checking the fingerprint, not just the URL).
+4. Survivors are scored in one batched AI call as before.
+
+`discover_tokens()` probes each seed company's Greenhouse/Lever/Ashby board and caches hits **and**
+misses to `config/ats_tokens.json` (re-probes an all-null entry only after ~30 days). Greenhouse
+responses are verifiable (`company_name` field) and rejected on a mismatch; Lever/Ashby have no
+such field, so an auto-accepted token is logged loudly for the user to pin or veto by hand.
+
+**Backup plan if Apify sourcing (`valig`/`misceres`) stops being satisfactory:** adopt
+`python-jobspy` as a `KEYWORD_SOURCES` entry — see the "Backup plan" section in
+`docs/backlog/step-6-multi-source-phase1.md` for the concrete integration steps and the two known
+caveats (LinkedIn rate-limiting without a proxy; mixed library maintenance signal). Not adopted
+preemptively — only worth doing once the Apify pair is actually observed degrading.
 
 Status pipeline: `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
@@ -69,7 +103,7 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 - `ai_chat(prompt, system, max_tokens, quality)` — provider-agnostic chat; `claude_chat` is an alias
 - `ai_chat_blocks(blocks, ...)` — Claude-only structured content blocks with `cache_control`
 - `db_find_job_by_url()`, `db_add_job()`, `db_update_status()`, `db_get_jobs()`, `db_get_all_jobs()`, `db_get_ready_to_apply()`, `db_get_job_by_company()`, `db_get_job_description()` — Notion-backed CRUD (`page_id`/`id` is the Notion page id; the JD is cached in the page body via paragraph blocks)
-- `db_get_all_jobs()` — one unfiltered paginated read of every row (`page_id, title, company, location, url, status, ats_score`); backs Stage 1's in-memory dedup. Returns `[]` on failure
+- `db_get_all_jobs()` — one unfiltered paginated read of every row (`page_id, title, company, location, url, status, ats_score`); backs Stage 1's in-memory dedup (URL set + fingerprint set). **Raises `RuntimeError` on a failed read** — Stage 1 aborts the scrape rather than treating a failed read as an empty DB (which would mass-duplicate the tracker)
 - `db_add_job_linked(job, notion_page_id)` — promote an existing manually-added Notion page ("Interested" intake) to "Scraped" in place (no duplicate page); caches the JD in its body
 - `get_notion_jobs_by_status(status)` — read Notion rows by status. `sync_notion_to_supabase()` is now a no-op kept for compatibility (Notion is the store)
 - `load_resume()`, `ensure_dirs()`, `today()`, `parse_json_response()` — misc helpers
@@ -95,16 +129,20 @@ python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
 
 1. **Notion-first** — Notion is the single source of truth. All stages read/write the Notion jobs database via the `db_*` helpers; `NOTION_API_KEY` + DB sharing are required.
 2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/negotiation. Both set in `config/settings.py`.
-3. **Idempotent stages** — Duplicates skipped by exact Job URL match. Stage 1 reads every existing row once via `db_get_all_jobs()` and dedups against that in-memory URL set (spanning *all* statuses), rather than querying Notion per listing. `db_find_job_by_url()` remains for one-off lookups (e.g. "Interested" intake).
+3. **Idempotent stages** — Duplicates skipped by exact Job URL match **and** by company+title fingerprint (`job_fingerprint()` in `scripts/sources.py`, catching the same req posted to multiple sources). Stage 1 reads every existing row once via `db_get_all_jobs()` and dedups against that in-memory URL/fingerprint set (excluding the not-yet-settled `Interested` status), rather than querying Notion per listing. `db_find_job_by_url()` remains for one-off lookups (e.g. "Interested" intake).
 4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
 5. **Prompt caching** — `utils.py` `ai_chat_blocks()` caches structured blocks, but only on the metered `"claude"` provider; every other provider joins the blocks into plain text. On the `claude_code` path the CLI manages its own caching.
 6. **Adding a provider** — Add a `_chat_<name>` function to `_BACKENDS` dict in `scripts/utils.py`. No other changes needed.
 
 ## Stage 1 Filters
 
-Two settings in `config/settings.py` control what gets saved:
+Settings in `config/settings.py` control what gets saved:
 - `SKIP_COMPANIES` — word-boundary denylist for consulting/staffing firms; grows over time
 - `EXCLUDE_NO_SPONSORSHIP = True` — skips jobs that explicitly deny visa sponsorship
+- `ENABLED_SOURCES` — which `scripts/sources.py` registry entries run (`linkedin`, `indeed`,
+  `greenhouse`, `lever`, `ashby`)
+- `MAX_JOB_AGE_DAYS` / `DROP_UNDATED_JOBS` — freshness window applied to `posted_date`; a source
+  that doesn't expose a date is kept by default unless `DROP_UNDATED_JOBS = True`
 
 ## Stage 2 Sponsorship Gate
 
@@ -167,7 +205,7 @@ via Notion status.
 ## Development Notes
 
 - **Resume:** `config/resume.txt` must exist before any stage runs
-- **Notion database schema:** the tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select — 13 options: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, plus the manual-only Disregard, Blacklist, Archived, Rejected, Human Review), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The live DB also carries `Notes` (rich_text), `Referral Contact` (rich_text), and `Job ID` (unique_id), none of which any stage reads or writes. The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
+- **Notion database schema:** the tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select — 13 options: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, plus the manual-only Disregard, Blacklist, Archived, Rejected, Human Review), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The live DB also carries `Notes` (rich_text), `Referral Contact` (rich_text), and `Job ID` (unique_id), none of which any stage reads or writes. `_notion_write_job()` additionally writes `Posted Date` (date), `Source` (rich_text), `Applicant Count` (number), and `Salary Range` (rich_text) when present on the job dict — add these properties (exact names/types) for Step 6's multi-source fields to land; their absence doesn't break the write (each is only added to `props` when the job dict has a value), it just means those columns stay empty. The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
 - **Output dirs:** Auto-created by `ensure_dirs()` on first run
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
 - **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.

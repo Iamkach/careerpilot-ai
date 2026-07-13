@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-stage1_scrape.py — Scrape fresh LinkedIn + Indeed jobs & log to Notion
+stage1_scrape.py — Scrape fresh jobs from every enabled source & log to Notion
 ───────────────────────────────────────────────────────────────────────
 What it does:
-  1. Runs Apify LinkedIn scraper (valig~linkedin-jobs-scraper, 25/role)
-     + Indeed scraper (misceres~indeed-scraper, 25/role) for each target role
-  2. Applies a 3-layer pre-filter BEFORE scoring (saves API cost):
-       a. Company name exact denylist  (SKIP_COMPANIES)
-       b. Company name keyword filter  (SKIP_COMPANY_KEYWORDS)
-       c. Job title keyword filter     (SKIP_TITLE_KEYWORDS)
-       d. US-location check
-       e. Deterministic no-sponsorship regex on the full JD
-  3. Scores surviving candidates in one batched AI call (ATS + sponsorship)
-  4. Skips duplicates already in Notion
+  1. Gathers raw listings from every scripts/sources.py registry entry named in
+     ENABLED_SOURCES: keyword sources (LinkedIn, Indeed) per TARGET_ROLES, and board
+     sources (Greenhouse, Lever, Ashby) per discovered TARGET_COMPANIES token.
+  2. Collapses cross-source duplicates by (company, title) fingerprint — the same req
+     posted to LinkedIn AND a company's own Greenhouse board collapses to one row, with
+     the ATS-board copy winning (fuller JD, real date, direct-apply URL).
+  3. Applies a pre-filter BEFORE scoring (saves API cost):
+       a. Freshness (posted_date vs MAX_JOB_AGE_DAYS)
+       b. Company name exact denylist  (SKIP_COMPANIES)
+       c. Company name keyword filter  (SKIP_COMPANY_KEYWORDS)
+       d. Job title keyword filter     (SKIP_TITLE_KEYWORDS)
+       e. US-location check
+       f. Deterministic no-sponsorship regex on the full JD
+       g. Duplicate-of-existing-Notion-row (URL or fingerprint)
+  4. Scores surviving candidates in one batched AI call (ATS + sponsorship)
   5. Adds new jobs to the Notion tracker with Status = "Scraped"
 
 Run:  python scripts/stage1_scrape.py
 """
 
-import sys, time, re, requests, datetime
+import sys, time, re, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -28,167 +33,12 @@ from scripts.utils import (
     db_find_job_by_url, db_get_all_jobs, get_notion_jobs_by_status,
     _notion_promote_to_scraped, log, today, matches_company_list,
 )
+from scripts.sources import (
+    KEYWORD_SOURCES, BOARD_SOURCES, job_fingerprint, collapse_by_fingerprint,
+    _is_fresh, discover_tokens, _apify_run,
+)
 
 APIFY_BASE = "https://api.apify.com/v2"
-
-# ── Apify actors ─────────────────────────────────────────────
-# valig~linkedin-jobs-scraper: pay-per-event (~$0.0004/result), no cookie required,
-# returns applicationsCount + salary without a Premium session (see Step 1 spike:
-# docs/refinement-plans/sourcing/scraping-sources.md). Replaces bebity's $29.99/mo
-# rental, whose payload never matched its schema (see git history for the bug).
-LINKEDIN_ACTOR = "valig~linkedin-jobs-scraper"
-# misceres~indeed-scraper: maintained successor to the deprecated bebity Indeed actor.
-INDEED_ACTOR   = "misceres~indeed-scraper"
-
-# Per-role result caps (free Apify tier: ~5 CU/month, each run ~0.05–0.10 CU)
-LINKEDIN_MAX = 25
-INDEED_MAX   = 25
-
-
-# ── Generic Apify runner ─────────────────────────────────────
-
-def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
-    """Start an Apify actor run, poll until done, return dataset items."""
-    run_url = f"{APIFY_BASE}/acts/{actor}/runs"
-    r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN})
-    r.raise_for_status()
-    run_id = r.json()["data"]["id"]
-
-    for _ in range(poll):
-        time.sleep(10)
-        status_r = requests.get(
-            f"{APIFY_BASE}/actor-runs/{run_id}",
-            params={"token": APIFY_API_TOKEN},
-        )
-        status = status_r.json()["data"]["status"]
-        log(f"  Apify [{actor}] status: {status}")
-        if status == "SUCCEEDED":
-            break
-        if status in ("FAILED", "ABORTED"):
-            raise RuntimeError(f"Apify run {status}")
-
-    dataset_id = status_r.json()["data"]["defaultDatasetId"]
-    items_r = requests.get(
-        f"{APIFY_BASE}/datasets/{dataset_id}/items",
-        params={"token": APIFY_API_TOKEN},
-    )
-    return items_r.json() or []
-
-
-# ── 1a. LinkedIn scraper (bebity~linkedin-jobs-scraper) ──────
-
-def _linkedin_payload_base(role: str, max_results: int) -> dict:
-    """Build the valig~linkedin-jobs-scraper payload.
-    No cookie field exists in this actor's schema — applicationsCount and salary
-    come back without a Premium session (confirmed via live Step 1 spike run)."""
-    return {
-        "title":      role,
-        "location":   "United States",
-        "datePosted": "r86400",  # past 24 hours
-        "limit":      max_results,
-    }
-
-
-def _parse_salary(job: dict) -> str:
-    """Extract a human-readable salary string from any field the actor returns."""
-    for key in ("salaryRange", "salary", "compensationRange", "pay"):
-        val = job.get(key)
-        if val:
-            if isinstance(val, dict):
-                lo = val.get("min") or val.get("from") or val.get("low") or ""
-                hi = val.get("max") or val.get("to")   or val.get("high") or ""
-                if lo or hi:
-                    return f"{lo}–{hi}".strip("–")
-            return str(val)
-    return ""
-
-
-def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
-    """Scrape LinkedIn for `role` posted in the last 24 h.
-    With a Premium cookie, also captures applicant_count and salary_range."""
-    log(f"  [LinkedIn] Scraping: '{role}'")
-    payload = _linkedin_payload_base(role, max_results)
-    try:
-        items = _apify_run(LINKEDIN_ACTOR, payload)
-    except Exception as e:
-        log(f"  ✗ LinkedIn scrape failed for '{role}': {e}")
-        return []
-
-    results = []
-    for job in items:
-        url = (
-            job.get("jobUrl") or job.get("link") or
-            job.get("url")    or job.get("applyUrl") or ""
-        )
-        if not url:
-            continue
-
-        # Applicant count — valig returns a phrase like "Over 200 applicants", not a bare int
-        raw_count = (job.get("applicationsCount") or job.get("applicantCount")
-                    or job.get("applicantsCount")  or job.get("numApplicants"))
-        applicant_count = None
-        if raw_count:
-            m = re.search(r"\d[\d,]*", str(raw_count))
-            if m:
-                try:
-                    applicant_count = int(m.group(0).replace(",", ""))
-                except ValueError:
-                    applicant_count = None
-
-        results.append({
-            "url":             url,
-            "title":           job.get("title") or job.get("positionName") or role,
-            "company":         job.get("companyName") or job.get("company") or "",
-            "location":        (job.get("location") or job.get("formattedLocation")
-                                or job.get("jobLocation") or ""),
-            "description":     (job.get("description") or job.get("descriptionText")
-                                or job.get("descriptionHtml")  or job.get("jobDescription") or ""),
-            "applicant_count": applicant_count,
-            "salary_range":    _parse_salary(job),
-            "source":          "linkedin",
-        })
-    log(f"  [LinkedIn] Got {len(results)} listings for '{role}'")
-    return results
-
-
-# ── 1b. Indeed scraper (bebity~indeed-scraper) ───────────────
-
-def scrape_indeed(role: str, max_results: int = INDEED_MAX) -> list[dict]:
-    """Scrape Indeed for `role` in the US posted in the last day."""
-    log(f"  [Indeed] Scraping: '{role}'")
-    payload = {
-        "position":            role,
-        "country":             "US",  # misceres validates a strict uppercase enum
-        "location":            "",          # blank = nationwide
-        "maxItemsPerSearch":   max_results,
-        "parseCompanyDetails": False,
-        "saveOnlyUniqueItems": True,
-        "followApplyRedirects": False,
-    }
-    try:
-        items = _apify_run(INDEED_ACTOR, payload)
-    except Exception as e:
-        log(f"  ✗ Indeed scrape failed for '{role}': {e}")
-        return []
-
-    results = []
-    for job in items:
-        url = (
-            job.get("url") or job.get("jobUrl") or
-            job.get("externalApplyLink") or ""
-        )
-        if not url:
-            continue
-        results.append({
-            "url":         url,
-            "title":       job.get("positionName") or job.get("title") or role,
-            "company":     job.get("company") or "",
-            "location":    job.get("location") or "",
-            "description": job.get("description") or "",
-            "source":      "indeed",
-        })
-    log(f"  [Indeed] Got {len(results)} listings for '{role}'")
-    return results
 
 
 # ── 1c. Enrich individual LinkedIn job URLs (for Notion intake) ──
@@ -489,11 +339,13 @@ def _log_drop(fh, reason: str, job: dict) -> None:
 
 # ── 7. Pre-filter helper ─────────────────────────────────────
 
-def _pre_filter(job: dict, seen_urls: set, existing_urls: set, counters: dict, drop_fh) -> bool:
+def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set,
+                 counters: dict, drop_fh) -> bool:
     """Apply all pre-scoring filters. Returns True if job should be kept.
 
-    `seen_urls` dedups within this run; `existing_urls` is a one-shot snapshot of every
-    URL already in Notion, so the two together cover this run and all prior ones."""
+    `seen_urls`/`existing_fps` dedup within this run and against Notion respectively;
+    `existing_urls` is a one-shot snapshot of every URL already in Notion, so the two
+    together cover this run and all prior ones."""
     url             = job.get("url", "")
     title           = job.get("title", "")
     company         = job.get("company", "")
@@ -504,6 +356,11 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, counters: dict, d
     if not url:
         return False
     if url in seen_urls:
+        return False
+    if not _is_fresh(job.get("posted_date")):
+        counters["stale"] += 1
+        _log_drop(drop_fh, "stale", job)
+        log(f"  ⊘ [stale]         {company} — {title} (posted {job.get('posted_date')})")
         return False
     if is_skipped_company(company):
         counters["company"] += 1
@@ -530,7 +387,7 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, counters: dict, d
         _log_drop(drop_fh, "high-applicants", job)
         log(f"  ⊘ [high-applicants] {company} — {title} ({applicant_count} applicants)")
         return False
-    if url in existing_urls:
+    if url in existing_urls or job_fingerprint(company, title) in existing_fps:
         counters["duplicate"] += 1
         return False
     return True
@@ -543,7 +400,7 @@ def run():
     added    = 0
     ingested = 0
     counters = {
-        "company": 0, "title": 0, "location": 0,
+        "company": 0, "title": 0, "location": 0, "stale": 0,
         "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
     }
 
@@ -558,38 +415,71 @@ def run():
     # 8a-bis. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
     # Taken after ingestion so freshly-promoted "Interested" rows are included. Excludes
     # not-yet-settled statuses (Interested, and future Retry) so a queued row doesn't dedup
-    # against itself.
+    # against itself. A failed read means dedup state is unknown — abort rather than
+    # proceeding as if the DB were empty, which would mass-duplicate the tracker.
     UNSETTLED_STATUSES = {"Interested"}
-    existing_jobs = db_get_all_jobs()
+    try:
+        existing_jobs = db_get_all_jobs()
+    except RuntimeError as e:
+        log(f"  ✗ ABORTING scrape — Notion snapshot read failed, dedup state unknown: {e}")
+        drop_fh.write(f"\nABORTED: {e}\n")
+        drop_fh.close()
+        return
     existing_urls = {j["url"] for j in existing_jobs if j["url"] and j["status"] not in UNSETTLED_STATUSES}
-    log(f"  Notion snapshot: {len(existing_urls)} existing job URL(s)")
+    existing_fps  = {
+        job_fingerprint(j["company"], j["title"])
+        for j in existing_jobs if j["status"] not in UNSETTLED_STATUSES
+    }
+    log(f"  Notion snapshot: {len(existing_urls)} existing job URL(s), {len(existing_fps)} fingerprint(s)")
 
-    # 8b. Scrape LinkedIn + Indeed for each target role
-    seen_urls: set = set()
+    # 8b. Global gather — every enabled keyword source × TARGET_ROLES, plus every enabled
+    # board source × discovered TARGET_COMPANIES token. A duplicate can span both roles and
+    # sources, so this has to happen before any per-role filtering can see it.
+    raw_jobs: list[dict] = []
 
     for role in TARGET_ROLES:
         log(f"\n── Role: {role} ──────────────────────────────")
-        drop_fh.write(f"\n{'-'*60}\nROLE: {role}\n{'-'*60}\n\n")
-
-        raw_jobs = []
-        raw_jobs.extend(scrape_linkedin(role, LINKEDIN_MAX))
-        raw_jobs.extend(scrape_indeed(role, INDEED_MAX))
-        log(f"  Total raw listings: {len(raw_jobs)}")
-
-        candidates = []
-        for job in raw_jobs:
-            if job["url"] in seen_urls:
-                counters["duplicate"] += 1
+        for name in ENABLED_SOURCES:
+            fn = KEYWORD_SOURCES.get(name)
+            if not fn:
                 continue
-            if _pre_filter(job, seen_urls, existing_urls, counters, drop_fh):
-                seen_urls.add(job["url"])
-                candidates.append(job)
+            raw_jobs.extend(fn(role))
+        time.sleep(2)
 
-        if not candidates:
-            log(f"  No candidates survived pre-filter for '{role}'")
-            time.sleep(2)
+    enabled_boards = [n for n in ENABLED_SOURCES if n in BOARD_SOURCES]
+    if enabled_boards:
+        seed_companies = sorted(set(TARGET_COMPANIES) | {j["company"] for j in existing_jobs if j["company"]})
+        log(f"\n── ATS boards: {len(seed_companies)} seed compan(y/ies), sources {enabled_boards} ──")
+        tokens = discover_tokens(seed_companies)
+        for company, entry in tokens.items():
+            for board_name in enabled_boards:
+                token = entry.get(board_name)
+                if not token:
+                    continue
+                raw_jobs.extend(BOARD_SOURCES[board_name](company, token))
+
+    log(f"\nTotal raw listings across all sources: {len(raw_jobs)}")
+
+    # 8c. Collapse cross-source duplicates (company+title fingerprint) before filtering,
+    # so the sponsorship regex and freshness check run against the fullest JD available.
+    collapsed = collapse_by_fingerprint(raw_jobs)
+    log(f"After fingerprint collapse: {len(collapsed)} unique listing(s)")
+
+    # 8d. Filter
+    seen_urls: set = set()
+    candidates = []
+    for job in collapsed:
+        if job["url"] in seen_urls:
+            counters["duplicate"] += 1
             continue
+        if _pre_filter(job, seen_urls, existing_urls, existing_fps, counters, drop_fh):
+            seen_urls.add(job["url"])
+            candidates.append(job)
 
+    if not candidates:
+        log("  No candidates survived pre-filter")
+    else:
+        # 8e. Score
         log(f"  Scoring {len(candidates)} candidate(s)...")
         scores       = score_jobs_batch(candidates, resume)
         score_by_url = {s["url"]: s for s in scores}
@@ -611,8 +501,10 @@ def run():
                 log(f"  ⊘ [low-ats-score:{score}]  {job['company']} — {job['title']}")
                 continue
 
-            ac  = job.get("applicant_count")
-            sal = job.get("salary_range", "")
+            ac   = job.get("applicant_count")
+            sal  = job.get("salary_range", "")
+            posted = job.get("posted_date")
+            src  = job.get("source", "")
             db_add_job({
                 "title":           job["title"],
                 "company":         job["company"],
@@ -622,20 +514,19 @@ def run():
                 "description":     job["description"],
                 "applicant_count": ac,
                 "salary_range":    sal,
+                "posted_date":     posted,
+                "source":          src,
             })
             added  += 1
-            src     = job.get("source", "")
             ac_str  = f"  applicants:{ac}" if ac  is not None else ""
             sal_str = f"  salary:{sal}"     if sal             else ""
             log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}{ac_str}{sal_str}")
-
-        time.sleep(2)
 
     summary = (
         f"\n{'-'*60}\n"
         f"Done. Added {added} new job(s)  |  {ingested} ingested from Notion 'Interested'\n"
         f"Pre-filter drops -> "
-        f"company:{counters['company']}  title:{counters['title']}  "
+        f"stale:{counters['stale']}  company:{counters['company']}  title:{counters['title']}  "
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
         f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}  "
         f"low-ats-score:{counters['low_score']}\n"

@@ -1,0 +1,26 @@
+{
+  "Acme Nonexistent": {
+    "ashby": null,
+    "checked": "2026-07-13",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Figma": {
+    "ashby": null,
+    "checked": "2026-07-13",
+    "greenhouse": "figma",
+    "lever": null
+  },
+  "Notion": {
+    "ashby": "notion",
+    "checked": "2026-07-13",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Stripe": {
+    "ashby": null,
+    "checked": "2026-07-13",
+    "greenhouse": "stripe",
+    "lever": null
+  }
+}

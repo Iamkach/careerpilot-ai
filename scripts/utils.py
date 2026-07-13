@@ -659,12 +659,15 @@ def db_get_jobs(status: str, min_score: float = 0) -> list:
 def db_get_all_jobs() -> list[dict]:
     """Fetch ALL rows from the Notion jobs DB in a few paginated reads (no filter).
     Each dict: page_id, title, company, location, url, status, ats_score.
-    Returns [] on failure — dedup then falls back to per-run seen_urls only."""
+    Raises RuntimeError on a failed read — callers must treat that as "unknown state" and
+    abort rather than proceeding as if the DB were empty (a failure that fell through to []
+    used to look identical to a genuinely empty DB, which would silently mass-duplicate the
+    tracker on the next scrape)."""
     try:
         pages = _query_db()  # no filter → all rows, follows pagination
     except Exception as e:
-        log(f"[db_get_all_jobs] warning: {e}")
-        return []
+        log(f"[db_get_all_jobs] read failed: {e}")
+        raise RuntimeError(f"db_get_all_jobs() read failed: {e}") from e
     jobs = []
     for p in pages:
         props = p.get("properties", {})

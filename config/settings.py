@@ -12,7 +12,22 @@ YOUR_BIO         = "2-line professional bio used in outreach emails" #TODO: writ
 # --- Job search targets -------------------------------------
 TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
 # Search is always US-wide. Jobs are filtered to US locations post-scrape.
+# Seeds scripts/sources.py's discover_tokens() (Greenhouse/Lever/Ashby board-token probing) —
+# union'd at runtime with every distinct company already in the Notion DB.
 TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
+
+# --- Multi-source sourcing (stage 1, Step 6 Phase 1) ---------
+# Which scripts/sources.py registry entries run each scrape. Keyword sources
+# (linkedin, indeed) search TARGET_ROLES; board sources (greenhouse, lever, ashby) crawl
+# each TARGET_COMPANIES company's own board via config/ats_tokens.json.
+ENABLED_SOURCES = ["linkedin", "indeed", "greenhouse", "lever", "ashby"]
+
+# Jobs older than this (by posted_date) are dropped as "stale" in _pre_filter.
+MAX_JOB_AGE_DAYS = 14
+
+# A source that doesn't expose a post date (posted_date=None) is kept by default — flip to
+# True to drop undated listings instead of assuming they're fresh.
+DROP_UNDATED_JOBS = False
 
 # --- Company denylist (stage 1) -----------------------------
 # Two-layer filter:
