@@ -232,7 +232,12 @@ def ensure_dirs():
 
 def log(msg: str):
     ts = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}")
+    line = f"[{ts}] {msg}"
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        print(line.encode(encoding, errors="replace").decode(encoding))
 
 
 # ── Notion (primary data store) ──────────────────────────────
