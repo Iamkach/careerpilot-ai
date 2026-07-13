@@ -1,15 +1,14 @@
 ---
 name: run-local-n8n-engine
-description: Run, test, or drive the local-n8n-engine AI job search pipeline. Use when asked to run the pipeline, start a stage, smoke test, check setup, or verify the CLI works. Covers both run.py (legacy stage runner) and workflow.py (Claude agentic orchestrator).
+description: Run, test, or drive the local-n8n-engine AI job search pipeline. Use when asked to run the pipeline, start a stage, smoke test, check setup, or verify the CLI works.
 trigger: /run-local-n8n-engine
 ---
 
 # run-local-n8n-engine
 
-Python CLI pipeline with two entry points. Driven via smoke script for agent testing; no GUI, no server.
+Python CLI pipeline, single entry point. Driven via smoke script for agent testing; no GUI, no server.
 
-- **`run.py`** — direct stage runner (deterministic, no Claude API needed per-call)
-- **`workflow.py`** — Claude agentic orchestrator (Claude decides when to call each tool)
+- **`run.py`** — direct stage runner (deterministic; Claude is called as a subroutine for scoring/tailoring only)
 
 Driver: `.claude/skills/run-local-n8n-engine/smoke.py`
 
@@ -20,11 +19,11 @@ Driver: `.claude/skills/run-local-n8n-engine/smoke.py`
 Python 3.9+ with these packages (already installed if setup passed):
 
 ```
-pip install -r requirements.txt        # or: claude-agent-sdk notion-client requests docxtpl
+pip install -r requirements.txt        # or: anthropic notion-client requests docxtpl
 ```
 
 API keys set in `config/settings.py`:
-- Provider auth matching `AI_PROVIDER` — Claude Code subscription (`claude_code`, default; run `claude /login`), or `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini). The repo defaults to `AI_PROVIDER = "claude_code"`.
+- Provider auth matching `AI_PROVIDER` — `ANTHROPIC_API_KEY` (default, `"claude"`, metered API), or Claude Code subscription (`claude_code`; run `claude /login`), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini).
 - `APIFY_API_TOKEN` — LinkedIn scraper (apify.com, free tier works)
 - `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); **primary data store** (the DB must be shared with the integration)
 
@@ -38,17 +37,15 @@ Resume at `config/resume.txt` (plain text) and the base `config/Achyuth_Resume.d
 python .claude/skills/run-local-n8n-engine/smoke.py
 ```
 
-Tests: both CLIs parse correctly, `--setup` runs, bad stage exits 1, all 7 modules import, `workflow.py` imports. Output on a clean machine (keys not set):
+Tests: CLI parses correctly, `--setup` runs, bad stage exits 1, all 7 modules import. Output on a clean machine (keys not set):
 
 ```
 Smoke test — local-n8n-engine
 
   PASS  run.py --help
-  PASS  workflow.py --help
   PASS  run.py --setup (runs without crash)
   PASS  run.py --stage 99 exits 1
   PASS  all stage modules import cleanly
-  PASS  workflow.py imports cleanly
 
   PASS  All smoke tests passed
 ```
@@ -65,32 +62,9 @@ Checks API keys, resume file, Python packages. Reports exactly which items are m
 
 ---
 
-## Run: workflow.py (Claude agentic — recommended)
+## Run: run.py
 
-Claude orchestrates the full pipeline via tool calls. Stream output to terminal.
-
-```bash
-# Full morning run (stages 1–4)
-python workflow.py
-
-# Individual tasks
-python workflow.py --task scrape
-python workflow.py --task tailor --min-score 65
-python workflow.py --task outreach --company "Stripe"
-python workflow.py --task outreach --company "Google" --contact "Jane Doe" --contact-role "PM"
-python workflow.py --task digest
-python workflow.py --task digest --send
-python workflow.py --task interview --company "Meta" --role "Senior PM"
-python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 185000
-```
-
-Requires all three API keys (Anthropic, Apify, Notion) to do real work.
-
----
-
-## Run: run.py (legacy stage runner)
-
-Direct Python calls to each stage script — no Claude agentic loop:
+Direct Python calls to each stage script:
 
 ```bash
 python run.py --setup
@@ -143,7 +117,6 @@ job (ingested on the next scrape); `Reviewed` approves a scraped job for `--eval
 ## Gotchas
 
 - **Stage 3 `input()` gate (direct `--stage 3` only)** — running stage 3 directly prompts before writing outreach status (manual review by design). In a non-interactive context this blocks — pipe a newline: `echo "" | python run.py --stage 3 --company "X"`. Note: `python run.py --evaluate` runs stage 3 with `no_confirm=True`, so it does **not** prompt.
-- **`workflow.py` streams thinking blocks** — output includes `[thinking]` lines from Claude's extended thinking. Normal. `stop_reason=end_turn` means Claude finished cleanly.
 - **Apify scraper waits 30×10s** — the LinkedIn scrape polls up to 5 minutes. Don't kill early; the run ID is lost and you'd need to restart stage 1.
 - **`config/resume.txt` must be non-empty** — `--setup` checks existence but not content. A 0-byte file passes the check but fails at runtime when the resume is injected into the prompt.
 - **Windows encoding** — both CLIs call `sys.stdout.reconfigure(encoding="utf-8")` at startup. If you see `UnicodeEncodeError` in a shell that doesn't support UTF-8, run with `PYTHONIOENCODING=utf-8`.

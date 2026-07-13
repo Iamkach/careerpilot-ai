@@ -132,7 +132,6 @@ filter={"property": "Job URL", "url": {"equals": url}}
 2. Update `db_add_job()` (and the `_notion_write_job()` props dict) in `utils.py` to set it on creation
 3. Update `db_update_status()` / the `_EXTRA_TO_NOTION` map if it's set on a later transition
 4. Update `_page_to_job()` (and `db_get_jobs()` / `db_get_ready_to_apply()`) if it needs to be returned
-5. Add to workflow.py tool schemas if Claude needs to read/write it
 
 ## API reference shortcuts
 - `notion.databases.query(database_id, filter, sorts)` → paginated results

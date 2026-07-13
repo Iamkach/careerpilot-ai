@@ -2,12 +2,8 @@
 
 How to configure and run the **AI Job Search Pipeline** from a clean checkout.
 
-There are two entry points that share the same config and stages:
-
-- `run.py` — legacy stage runner (explicit CLI flags per stage)
-- `workflow.py` — Claude-native agentic orchestrator (Claude decides which tools/stages to call)
-
-Both read everything from `config/settings.py`.
+`run.py` is the single entry point — a deterministic stage runner (explicit CLI flags per
+stage). It reads everything from `config/settings.py`.
 
 ---
 
@@ -15,7 +11,7 @@ Both read everything from `config/settings.py`.
 
 - **Python 3.9+**
 - Accounts / keys (only the ones for the features you use):
-  - A Claude Code subscription (default provider `claude_code`) **or** an AI provider key — Anthropic **or** Gemini **or** OpenAI
+  - An AI provider key — Anthropic (default) **or** Gemini **or** OpenAI **or** a Claude Code subscription
   - **Apify** token (LinkedIn scraping) — free tier works
   - **Notion** integration key (primary data store — the job tracker database)
   - **Gmail** OAuth credentials (optional — emailed digest)
@@ -29,8 +25,8 @@ expects `notion_client` and `requests` in addition to the provider SDK. Or just
 `pip install -r requirements.txt`.
 
 ```bash
-# Claude Code subscription (default provider: claude_code)
-pip install claude-agent-sdk notion-client requests docxtpl
+# Claude metered API (default provider: claude)
+pip install anthropic notion-client requests docxtpl
 
 # Gemini
 pip install google-generativeai notion-client requests docxtpl
@@ -41,8 +37,10 @@ pip install openai notion-client requests docxtpl
 
 > `docxtpl` powers the stage-2 `.docx` resume rendering (see step 3b).
 
-> `workflow.py` runs on the **Agent SDK** (`claude-agent-sdk`) over your Claude Code
-> subscription, so install it if you plan to use the agentic orchestrator.
+> `AI_PROVIDER="claude_code"` is also supported (runs on the **Agent SDK**,
+> `claude-agent-sdk`, over your Claude Code subscription instead of metered billing) —
+> install `claude-agent-sdk` if you switch to it. Its trade-off is no prompt caching and
+> a subscription session-window limit on long runs.
 
 ---
 
@@ -101,33 +99,33 @@ TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 
 ### AI provider
 ```python
-AI_PROVIDER       = "claude_code"   # "claude_code" | "claude" | "gemini" | "codex"
+AI_PROVIDER       = "claude"        # "claude" | "claude_code" | "gemini" | "codex"
 AI_MODEL_OVERRIDE = ""              # leave blank to use the provider default
 ```
 
 | `AI_PROVIDER`  | Default model       | Key to set                             |
 |----------------|---------------------|----------------------------------------|
-| `claude_code`  | `sonnet`            | Claude Code subscription (`claude /login`) |
 | `claude`       | `claude-opus-4-6`   | `ANTHROPIC_API_KEY`                    |
+| `claude_code`  | `sonnet`            | Claude Code subscription (`claude /login`) |
 | `gemini`       | `gemini-2.0-flash`  | `GEMINI_API_KEY`                       |
 | `codex`        | `gpt-4o`            | `OPENAI_API_KEY`                       |
 
-> **`claude_code` (default)** routes all AI through your logged-in Claude Code
-> subscription via the Agent SDK — no metered API key is used. Prerequisites: install
-> the Claude Code CLI, run `claude /login`, and `pip install claude-agent-sdk`.
-> **`ANTHROPIC_API_KEY` must NOT be present in the environment** or the SDK/CLI would
-> prefer it and bill metered.
+> **`claude` (default)** calls the metered Anthropic API directly — requires
+> `ANTHROPIC_API_KEY`, and unlike `claude_code` has no Claude Code CLI/login or
+> subscription session-window limit, plus it's the only path with prompt caching.
+> **`claude_code`** instead routes AI through your logged-in Claude Code subscription
+> via the Agent SDK — no metered API key is used, but `ANTHROPIC_API_KEY` must NOT be
+> present in the environment or the SDK/CLI would prefer it and bill metered.
 
 ### API keys
 ```python
-ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com        (provider: claude only)
+ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com        (provider: claude, default)
 GEMINI_API_KEY    = "..."   # https://aistudio.google.com/apikey   (provider: gemini)
 OPENAI_API_KEY    = "***REMOVED-SECRET***"   # https://platform.openai.com/api-keys (provider: codex)
 APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com (free token)
 NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrations (PRIMARY data store)
 ```
-Under the default `claude_code` provider, no AI key is needed. Otherwise set only the
-key matching `AI_PROVIDER`.
+Set only the key matching `AI_PROVIDER`. Under `claude_code`, no AI key is needed.
 
 ### Notion (primary data store — required)
 ```python
@@ -210,7 +208,6 @@ before running. Output dirs under `output/` are auto-created on first run.
 
 ## 8. Run it
 
-### Legacy stage runner — `run.py`
 ```bash
 python run.py                                   # Step 1: scrape + review digest (stages 1, 4) — then review in Notion
 python run.py --ingest                          # ingest only Notion "Interested" jobs → "Scraped"
@@ -222,17 +219,6 @@ python run.py --stage 3 --company "Google" --contact "Jane Doe"   # warm referra
 python run.py --stage 4 --send                   # digest, emailed via Gmail
 python run.py --stage 5 --company "Meta" --role "Senior PM"       # interview prep
 python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000   # negotiation
-```
-
-### Claude agentic orchestrator — `workflow.py`
-```bash
-python workflow.py                               # morning pipeline (stages 1-4)
-python workflow.py --task scrape
-python workflow.py --task tailor --min-score 65
-python workflow.py --task outreach --company "Stripe"
-python workflow.py --task digest --send
-python workflow.py --task interview --company "Meta" --role "Senior PM"
-python workflow.py --task negotiate --company "Stripe" --role "PM" --offer 185000
 ```
 
 ---
@@ -261,7 +247,7 @@ seen by dedup, so it will not be re-scraped.
 | Symptom | Fix |
 |---------|-----|
 | `Resume not found` | Add `config/resume.txt` |
-| Provider key ✗ | Set the key matching `AI_PROVIDER`, or use `claude_code` (`claude /login`) |
+| Provider key ✗ | Set `ANTHROPIC_API_KEY` (default provider `claude`), or switch `AI_PROVIDER` to `claude_code` and run `claude /login` instead |
 | Notion errors / empty results | Set `NOTION_API_KEY`, share the DB with the integration, and match the schema in step 5 |
 | `notion-client` version error | Pin `notion-client>=2.2.1,<2.6` (2.6+/3.x dropped `databases.query`) |
 | Apify timeouts | Scraper retries 30×10s; retry on network errors |

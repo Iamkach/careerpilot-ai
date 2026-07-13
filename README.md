@@ -70,8 +70,7 @@ flowchart TD
 
 ```
 local-n8n-engine/
-├── workflow.py                  # Claude-native agentic orchestrator (preferred)
-├── run.py                       # Legacy stage runner
+├── run.py                       # Stage runner (single entry point)
 ├── requirements.txt
 │
 ├── config/
@@ -113,8 +112,8 @@ local-n8n-engine/
 Install the SDK for your chosen AI provider plus the shared dependencies:
 
 ```bash
-# Claude Code subscription (default provider: claude_code)
-pip install claude-agent-sdk notion-client requests docxtpl
+# Claude metered API (default provider: claude)
+pip install anthropic notion-client requests docxtpl
 
 # Gemini
 pip install google-generativeai notion-client requests docxtpl

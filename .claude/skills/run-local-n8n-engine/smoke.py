@@ -6,11 +6,10 @@ Run from the project root:
   python .claude/skills/run-local-n8n-engine/smoke.py
 
 What it tests (no API keys required):
-  1. Both CLIs parse and respond to --help
+  1. run.py parses and responds to --help
   2. --setup runs and reports which keys are missing vs. present
   3. Bad --stage value exits non-zero with a useful message
   4. All stage modules import without error
-  5. workflow.py imports cleanly (tools, task map, argparse)
 """
 
 import subprocess, sys
@@ -52,22 +51,18 @@ def main():
     ok, r = run(["run.py", "--help"])
     failures += not test("run.py --help", ok and "AI Job Search Pipeline" in r.stdout)
 
-    # 2. workflow.py --help
-    ok, r = run(["workflow.py", "--help"])
-    failures += not test("workflow.py --help", ok and "--task" in r.stdout)
-
-    # 3. run.py --setup (exits 0 even when keys are missing)
+    # 2. run.py --setup (exits 0 even when keys are missing)
     ok, r = run(["run.py", "--setup"])
     failures += not test("run.py --setup (runs without crash)", ok, r)
     # Show the setup summary
     for line in r.stdout.strip().splitlines():
         print(f"       {line}")
 
-    # 4. Bad stage value → non-zero exit
+    # 3. Bad stage value → non-zero exit
     ok, r = run(["run.py", "--stage", "99"], expect_exit=1)
     failures += not test("run.py --stage 99 exits 1", ok, r)
 
-    # 5. Stage module imports
+    # 4. Stage module imports
     stage_modules = [
         "scripts.stage1_scrape",
         "scripts.stage2_tailor",
@@ -80,10 +75,6 @@ def main():
     import_script = "; ".join(f"import {m}" for m in stage_modules)
     ok, r = run(["-c", import_script], check=True)
     failures += not test("all stage modules import cleanly", ok, r)
-
-    # 6. workflow.py imports (heavier — has tool definitions)
-    ok, r = run(["-c", "import workflow"], check=True)
-    failures += not test("workflow.py imports cleanly", ok, r)
 
     print()
     if failures:

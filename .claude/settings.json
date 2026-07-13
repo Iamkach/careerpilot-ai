@@ -4,7 +4,6 @@
     "allow": [
       "Bash(python:*)",
       "Bash(python run.py:*)",
-      "Bash(python workflow.py:*)",
       "Bash(python scripts/*:*)",
       "Bash(pip install:*)",
       "Bash(pip list:*)"

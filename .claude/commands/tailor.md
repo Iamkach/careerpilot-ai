@@ -1,21 +1,20 @@
-Tailor your resume for all "Scraped" jobs in Notion that meet the minimum ATS score threshold.
+Tailor your resume for all "Reviewed" jobs in Notion that meet the minimum ATS score threshold.
 
 ```bash
-python workflow.py --task tailor $ARGUMENTS
+python run.py --stage 2 $ARGUMENTS
 ```
 
 Common usage:
-- `/tailor` — tailor all scraped jobs (no score filter)
+- `/tailor` — tailor all reviewed jobs (no score filter)
 - `/tailor --min-score 65` — only tailor jobs with ATS ≥ 65
-- `/tailor --company "Stripe"` — tailor only Stripe jobs
+
+(Stage 2 filters only by `--min-score`; there's no per-company filter — it always runs against every "Reviewed" job above the threshold.)
 
 What this does:
-- Fetches all Notion jobs with Status="Scraped" (filtered by min-score if set)
-- Fetches the actual job description via HTTP (not Claude browsing — real fetch)
+- Fetches all Notion jobs with Status="Reviewed" (filtered by min-score if set)
+- Fetches the actual job description via HTTP (real fetch, not Claude browsing)
 - Rewrites your resume to match each JD using Claude (ATS keyword optimization)
-- Saves tailored resume as `.txt` to `output/resumes/`
+- Saves tailored resume as `.docx` + `.txt` to `output/resumes/`
 - Updates Notion: Status → "Resume Tailored"
 
 Check `output/resumes/` for generated files. Review before applying.
-
-To run with legacy CLI: `python run.py --stage 2 --min-score 65`

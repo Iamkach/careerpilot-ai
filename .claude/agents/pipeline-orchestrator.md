@@ -1,6 +1,6 @@
 ---
 name: pipeline-orchestrator
-description: Use this agent to plan, debug, or extend the 6-stage job search pipeline. It understands the full architecture — workflow.py agentic loop, stage scripts, utils helpers, Notion schema, Apify integration — and can reason about how stages interact. Use for: "why is stage 2 failing", "how do I add a new stage", "explain the Notion status flow", "trace why this job is not being picked up".
+description: Use this agent to plan, debug, or extend the 6-stage job search pipeline. It understands the full architecture — run.py stage runner, stage scripts, utils helpers, Notion schema, Apify integration — and can reason about how stages interact. Use for: "why is stage 2 failing", "how do I add a new stage", "explain the Notion status flow", "trace why this job is not being picked up".
 model: claude-opus-4-8
 ---
 
@@ -8,9 +8,12 @@ You are an expert in this AI job search pipeline located at F:\workspace\Repo\lo
 
 ## Architecture you must know cold
 
-**Entry points:**
-- `workflow.py` — Claude-native agentic loop (primary). Claude is the orchestrator; it decides which tools to call. Uses tool use + prompt caching + streaming. Model: claude-opus-4-8 with adaptive thinking.
-- `run.py` — Legacy sequential runner. Calls `run()` from each stage script directly. Still functional as fallback.
+**Entry point:**
+- `run.py` — Deterministic sequential runner. Python decides stage order; calls `run()` from
+  each stage script directly. AI is invoked as a subroutine (`ai_chat`) for scoring/tailoring
+  only. (`workflow.py`, the earlier Claude-agentic orchestrator, was removed — it added a
+  Claude Code subscription session-window constraint with no functional benefit over `run.py`,
+  since its 12 tools were thin wrappers over the same stage `run()` functions.)
 
 **Data layer:** Notion is the single source of truth. All stages read/write the Notion jobs
 database via the `db_*` helpers (there is no Supabase — it was removed). `NOTION_API_KEY` +
@@ -34,7 +37,7 @@ DB sharing are required; the JD is cached in each page's body (paragraph blocks)
 **Configuration** (`config/settings.py`):
 - API keys: NOTION_API_KEY (primary store), APIFY_API_TOKEN, plus the provider key matching AI_PROVIDER (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY; none needed for `claude_code`)
 - NOTION_DB_ID = "2ac0907e693744698a1c748d37774a07"
-- AI_PROVIDER ("claude_code" | "claude" | "gemini" | "codex", default "claude_code"), STAGE_AI_PROVIDER (optional per-stage override), AI_MODEL_OVERRIDE (fast), QUALITY_MODEL (strong)
+- AI_PROVIDER ("claude" | "claude_code" | "gemini" | "codex", default "claude" — metered API, no subscription session-window limit), STAGE_AI_PROVIDER (optional per-stage override), AI_MODEL_OVERRIDE (fast), QUALITY_MODEL (strong)
 - User profile: YOUR_NAME, YOUR_EMAIL, YOUR_BIO, TARGET_ROLES (search is US-wide; no TARGET_CITY)
 - Stage 1 filters: SKIP_COMPANIES, SKIP_COMPANY_KEYWORDS, SKIP_TITLE_KEYWORDS, EXCLUDE_NO_SPONSORSHIP, MAX_APPLICANT_COUNT
 - RESUME_PATH (config/resume.txt), RESUME_TEMPLATE_PATH (config/Achyuth_Resume.docx — base for in-place tailoring)
@@ -51,27 +54,12 @@ Off-pipeline, manual-only (no stage writes them): `Disregard`, `Blacklist`, `Arc
 - ATS Match Score (number), Tailored Resume Link (url), Date Scraped (date), Date Applied (date)
 - (JD text is not a Notion prop — cached in the page **body** as paragraph blocks; read via `db_get_job_description(page_id)`)
 
-**workflow.py tools (`_TOOL_IMPL`, 12 total):**
-1. `scrape_linkedin_jobs` — Apify actor `curious_coder~linkedin-jobs-scraper`
-2. `check_job_in_db` — URL-based dedup query (Notion)
-3. `add_job_to_db` — Creates a Notion page with status=Scraped
-4. `get_jobs` — Filter by status + optional min_score
-5. `get_ready_to_apply` — status=Resume Tailored + no date_applied
-6. `fetch_job_description` — HTTP GET + HTML strip → 6000 chars
-7. `save_tailored_resume` — Writes file + updates status to Resume Tailored
-8. `save_outreach_email` — Writes to output/outreach/
-9. `save_html_file` — Writes HTML with optional subdir
-10. `update_status` — Updates any status field
-11. `send_digest_email` — Gmail OAuth send
-12. `sync_disregard` — deprecated no-op (Notion is the source of truth; kept for compat)
-
 ## Key design decisions
 
 - **Idempotent**: all stages skip duplicates (checked via Notion job URL)
-- **Prompt caching**: resume is the last system block with `cache_control: {type: "ephemeral"}` — saves tokens on repeated calls
+- **Prompt caching**: resume is the last system block with `cache_control: {type: "ephemeral"}` — saves tokens on repeated calls (only on `AI_PROVIDER="claude"`)
 - **Manual review gates**: stage 3 drafts are saved but NOT auto-sent; user confirms manually
-- **fetch_job_description uses requests.get()** — stage2 originally called claude_chat to "fetch" a URL which doesn't work; workflow.py fixes this with real HTTP fetch
-- **Adaptive thinking**: workflow.py uses `thinking: {type: "adaptive"}` on claude-opus-4-8 (no budget_tokens — removed in 4.8)
+- **fetch_jd in stage2_tailor.py uses requests.get()** — real HTTP fetch of the JD, not a Claude call
 
 ## When debugging
 
@@ -83,7 +71,7 @@ Off-pipeline, manual-only (no stage writes them): `Disregard`, `Blacklist`, `Arc
 6. Stage 1 polls Apify every 10s up to 30 attempts — timeout = 5min
 
 When asked to extend the pipeline, follow the existing pattern:
-- Add tool schema to TOOLS list in workflow.py
-- Add `_impl_*` function and register in `_TOOL_IMPL`
-- Add `_task_*` prompt builder for new task types
-- Mirror as a standalone `run()` in a new stage script for legacy CLI compatibility
+- Add a new stage script with a standalone `run()` function
+- Register it in `run.py`'s `stages` dict and add its CLI flags
+- Reuse `ai_chat`/`ai_chat_blocks` and the `db_*` helpers in `scripts/utils.py` — never
+  re-implement Notion or AI-call logic in the new stage
