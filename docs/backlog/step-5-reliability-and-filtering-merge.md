@@ -1,5 +1,24 @@
 # Step 5 — Merge reliability (Plan 2) + filtering AI classification (Plan 1b)
 
+> **⚠ Superseded (partially) — 2026-07-13.** The AI-provider tiering half of this plan
+> (`AI_ROUTING`, fast tier on metered/quality tier on subscription, and everything in
+> `workflow.py` §4 below) was **not implemented**. Instead `ab97add` ("Switch default AI
+> provider from Claude Code subscription to metered API") moved *all* stages to
+> `AI_PROVIDER = "claude"` (metered API, no tiering), and `cc7b6d8` deleted `workflow.py`
+> outright, making `run.py` the sole entry point. The all-metered choice was deliberate: this
+> pipeline's workload is bulk/unattended (stage 1 scoring, stage 3 outreach), which is exactly
+> where metered pricing + prompt caching beats a subscription's shared 5-hour usage window, and
+> the subscription path had no caching to begin with. See the cost comparison recorded in this
+> session's conversation history for the full tradeoff.
+>
+> **Still live and not superseded:** the reliability half of this plan — killing the fabricated
+> `score=50`, adding retry/backoff, the `Retry` Notion status, `Scoring Attempts` cap, and the
+> `company_type` AI classification — is unrelated to which provider runs the calls and still
+> needs to be implemented against the current all-metered `ai_chat()`. Sections 1 (routing table)
+> and 4 (`workflow.py`) below are dead; sections 2 (retries/typed errors, minus route resolution),
+> 3 (scoring contract, retry queue, classification), and the acceptance criteria not tied to
+> `workflow.py`/tiering still apply.
+
 **Priority:** P1 — resolves Conflicts C1/C2/C3; kills the most-cited defect in the whole analysis
 (fabricated `score=50`).
 **Depends on:** Step 4

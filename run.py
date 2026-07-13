@@ -40,13 +40,16 @@ _PROVIDER_PKGS = {"claude": "anthropic", "claude_code": "anthropic", "gemini": "
 
 def _get_required():
     from config.settings import AI_PROVIDER
-    provider_pkg = _PROVIDER_PKGS.get(AI_PROVIDER, "anthropic")
-    return [provider_pkg, "notion_client", "requests"]
+    import config.settings as _settings
+    fast    = getattr(_settings, "FAST_PROVIDER", "") or AI_PROVIDER
+    quality = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
+    pkgs = {_PROVIDER_PKGS.get(p, "anthropic") for p in (fast, quality)}
+    return sorted(pkgs) + ["notion_client", "requests"]
 
 def check_setup():
     print("=== Setup Check ===\n")
     from config.settings import (
-        AI_PROVIDER, AI_MODEL_OVERRIDE,
+        AI_PROVIDER,
         APIFY_API_TOKEN, NOTION_API_KEY, NOTION_DB_ID,
         RESUME_PATH
     )
@@ -55,31 +58,42 @@ def check_setup():
     ANTHROPIC_API_KEY = getattr(_settings, "ANTHROPIC_API_KEY", "")
     GEMINI_API_KEY    = getattr(_settings, "GEMINI_API_KEY", "")
     OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
+    FAST_PROVIDER      = getattr(_settings, "FAST_PROVIDER", "") or AI_PROVIDER
+    QUALITY_PROVIDER   = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
 
     import shutil
     _cli_found = bool(shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe"))
     _provider_key = {
         "claude":      ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in config/settings.py"),
-        "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login`"),
+        "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login` (or set CLAUDE_CODE_OAUTH_TOKEN for headless/CI auth)"),
         "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in config/settings.py"),
         "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in config/settings.py"),
     }
-    _defaults = {"claude": "claude-opus-4-6", "claude_code": "sonnet", "gemini": "gemini-2.0-flash", "codex": "gpt-4o"}
-    active_model = AI_MODEL_OVERRIDE or _defaults.get(AI_PROVIDER, "?")
-    print(f"  AI provider : {AI_PROVIDER}  (model: {active_model})\n")
+    from scripts.utils import _resolve_model
+    fast_model    = _resolve_model(False, FAST_PROVIDER)
+    quality_model = _resolve_model(True, QUALITY_PROVIDER)
 
-    key_label, key_val, key_fix = _provider_key.get(
-        AI_PROVIDER,
-        ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex in config/settings.py")
-    )
+    if FAST_PROVIDER == QUALITY_PROVIDER:
+        # Same provider — model may still differ between tiers (e.g. Haiku vs Sonnet).
+        # Use the resolved tier provider (not the raw AI_PROVIDER default) so a
+        # FAST_PROVIDER/QUALITY_PROVIDER env override is reflected accurately.
+        print(f"  AI provider : {FAST_PROVIDER}  (fast: {fast_model}, quality: {quality_model})\n")
+    else:
+        print(f"  AI routing  : fast={FAST_PROVIDER} ({fast_model}, stages 1,3)  |  "
+              f"quality={QUALITY_PROVIDER} ({quality_model}, stages 2,5,6)\n")
 
     checks = [
-        (key_label,    bool(key_val),              key_fix),
         ("Apify token",     bool(APIFY_API_TOKEN), "Set APIFY_API_TOKEN in config/settings.py"),
         ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in config/settings.py (PRIMARY data store)"),
         ("Notion DB ID",    bool(NOTION_DB_ID),    "Already set — your tracker DB"),
         ("Resume file",     (ROOT / RESUME_PATH).exists(), f"Add your resume to {RESUME_PATH}"),
     ]
+    for tier_provider in dict.fromkeys((FAST_PROVIDER, QUALITY_PROVIDER)):  # dedup, keep order
+        key_label, key_val, key_fix = _provider_key.get(
+            tier_provider,
+            ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex in config/settings.py")
+        )
+        checks.insert(0, (key_label, bool(key_val), key_fix))
 
     all_ok = True
     for label, ok, fix in checks:
