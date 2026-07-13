@@ -15,8 +15,13 @@ TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend En
 TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 
 # --- Company denylist (stage 1) -----------------------------
-# Two-layer filter: exact-name list + keyword patterns.
-# Both are matched case-insensitively as substrings of the company name.
+# Two-layer filter:
+#   SKIP_COMPANIES — word-boundary token sub-sequence match (case-insensitive), not a
+#     raw substring match. "UST" won't match "Customer.io"; "Tata Consultancy" still
+#     matches "Tata Consultancy Services". Trailing legal suffixes (Inc/LLC/Corp/...)
+#     are ignored, so "BeaconFire Inc." matches bare "BeaconFire".
+#   SKIP_COMPANY_KEYWORDS — loose substring/phrase match, on purpose (catches unnamed
+#     firms via generic patterns like "solutions llc").
 # Grow SKIP_COMPANIES over time as you spot new offenders.
 
 SKIP_COMPANIES = [
@@ -40,7 +45,7 @@ SKIP_COMPANIES = [
     "Precision Technologies", "CapTech", "UST", "UST Global",
     "Veteran Benefits Guide", "Numero", "Haveron James", "Penn State ARL",
     "Accenture Federal Services", "Togetherwork", "Winaxis LLC", "Iron EagleX",
-    "BeaconFire Inc.", "Reflexive Concepts", "Qualcomm",
+    "BeaconFire Inc.", "Reflexive Concepts",
 ]
 
 # Keyword patterns — any company whose name contains one of these words/phrases
@@ -102,6 +107,21 @@ MAX_APPLICANT_COUNT = 200
 # Jobs that say they sponsor OR are silent on the topic are kept.
 EXCLUDE_NO_SPONSORSHIP = True
 
+# --- Sponsorship gate (stage 2) ------------------------------
+# Product companies known (from your own research/contacts) to sponsor only EXISTING
+# employees (e.g. H-1B transfers), not new external hires -- even when the JD reads as
+# sponsorship-friendly or says nothing. Unlike SKIP_COMPANIES, these are NOT excluded in
+# stage 1 -- still scraped, scored, tracked normally. Stage 2 instead moves a matching
+# "Reviewed" job to "Human Review" instead of tailoring a resume for it. Once you've
+# personally confirmed the company will sponsor a NEW hire, add SPONSORSHIP_CONFIRMED_MARKER
+# to that job's Notion "Notes" field and move Status back to "Reviewed" to release it.
+# Matched using the same word-boundary token matching as SKIP_COMPANIES.
+RESTRICTED_SPONSORSHIP_COMPANIES = [
+    # e.g. "Example Corp",   # sponsors H-1B transfers only, per recruiter YYYY-MM-DD
+]
+
+SPONSORSHIP_CONFIRMED_MARKER = "sponsorship confirmed"
+
 # --- ATS score filter (stage 1) ------------------------------
 # Jobs scoring below this are scored but not saved to Notion.
 # Set to 0 to disable the filter.
@@ -129,18 +149,44 @@ AI_PROVIDER = "claude"
 # Leave blank to fall through to AI_PROVIDER above (default behavior).
 STAGE_AI_PROVIDER = ""
 
-# Model overrides — leave blank to use the defaults below
-#   claude default      : claude-opus-4-6
-#   claude_code default : sonnet  (accepts aliases: haiku | sonnet | opus, or full claude-* ids)
-#   gemini default      : gemini-2.0-flash
-#   codex  default      : gpt-4o
-AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3
-QUALITY_MODEL     = "claude-sonnet-5"             # strong — stages 2, 5, 6
+# Optional two-tier hybrid routing (e.g. for an unattended nightly GitHub Actions run, where
+# a subscription's usage-window cost no longer competes with interactive daytime use).
+# FAST_PROVIDER handles many small calls (stage 1 scoring, stage 3 outreach) — keep this on
+# "claude" (metered) so prompt caching applies and the run isn't bounded by a session window.
+# QUALITY_PROVIDER handles few, larger calls (stage 2 tailor, stage 5/6) — can be switched to
+# "claude_code" (subscription) once ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN + `claude
+# setup-token` are set up for headless auth. Both default to AI_PROVIDER's value, matching
+# today's all-metered behavior for local/manual runs; only overridden when the env vars below
+# are set (e.g. in the GitHub Actions workflow env).
+FAST_PROVIDER    = os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER
+QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
+
+# Model overrides for the "claude" provider only — leave blank to use claude-opus-4-6.
+# NOTE: these are NOT applied to gemini/codex/claude_code — a Claude model id (e.g.
+# "claude-sonnet-5") is meaningless to those SDKs. If you switch AI_PROVIDER (or
+# FAST_PROVIDER/QUALITY_PROVIDER) to "gemini" or "codex", that provider automatically falls
+# back to its own built-in default (gemini-2.0-flash / gpt-4o) unless you add an entry to
+# MODEL_OVERRIDES below — you do NOT need to touch these two fields when switching providers.
+AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3 (claude only)
+QUALITY_MODEL     = "claude-sonnet-5"             # strong — stages 2, 5, 6 (claude only)
+
+# Per-provider model overrides for gemini/codex/claude_code — keyed by provider, each with
+# "fast" (stages 1/3) and "quality" (stages 2/5/6) entries. Blank/missing falls back to that
+# backend's built-in default (see _DEFAULTS in scripts/utils.py). This is what makes switching
+# AI_PROVIDER (or a single tier via FAST_PROVIDER/QUALITY_PROVIDER) to gemini/codex safe to do
+# at any time — the right model comes along with the provider instead of being a separate,
+# easy-to-forget field.
+MODEL_OVERRIDES = {
+    # "gemini": {"fast": "gemini-2.0-flash", "quality": "gemini-1.5-pro"},
+    # "codex":  {"fast": "gpt-4o-mini",      "quality": "gpt-4o"},
+}
 
 # --- API Keys -----------------------------------------------
 APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com  (free token)
 NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (the integration token; DB is shared & working)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
+GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")   # set in your env (required for AI_PROVIDER="gemini")
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")   # set in your env (required for AI_PROVIDER="codex")
 
 # --- Notion IDs (already created for you) -------------------
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker

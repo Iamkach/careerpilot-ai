@@ -26,7 +26,7 @@ from config.settings import *
 from scripts.utils import (
     claude_chat, parse_json_response, load_resume, db_add_job, db_add_job_linked,
     db_find_job_by_url, db_get_all_jobs, get_notion_jobs_by_status,
-    _notion_promote_to_scraped, log, today,
+    _notion_promote_to_scraped, log, today, matches_company_list,
 )
 
 APIFY_BASE = "https://api.apify.com/v2"
@@ -206,9 +206,11 @@ def _linkedin_job_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
+def scrape_job_urls(urls: list[str]) -> dict[str, dict] | None:
     """Enrich individual LinkedIn job-view URLs via one Apify run.
-    Returns a map: original URL → {title, company, location, description}."""
+    Returns a map: original URL → {title, company, location, description}.
+    Returns None if the Apify call itself failed (distinct from a successful call that
+    enriched zero URLs, which returns {})."""
     if not urls:
         return {}
     payload = {
@@ -221,7 +223,7 @@ def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
         items = _apify_run("curious_coder~linkedin-jobs-scraper", payload)
     except Exception as e:
         log(f"  ✗ Apify enrichment failed: {e}")
-        return {}
+        return None
 
     by_id = {}
     for job in items:
@@ -243,6 +245,8 @@ def scrape_job_urls(urls: list[str]) -> dict[str, dict]:
             "description": (job.get("descriptionText") or job.get("descriptionHtml")
                             or job.get("description") or job.get("jobDescription") or ""),
         }
+    if not enriched:
+        log(f"  ⚠ Apify call succeeded but matched 0 of {len(urls)} URL(s) to results")
     return enriched
 
 
@@ -266,14 +270,16 @@ def is_us_location(location: str) -> bool:
 
 def is_skipped_company(company: str) -> bool:
     """Two-layer check:
-    1. Exact-name match against SKIP_COMPANIES
-    2. Keyword match against SKIP_COMPANY_KEYWORDS (catches unnamed firms)
+    1. Word-boundary token sub-sequence match against SKIP_COMPANIES — not a substring
+       match, so short entries (e.g. "UST", "Dice") can't false-positive inside unrelated
+       names ("Customer.io", "Indices").
+    2. Substring/phrase match against SKIP_COMPANY_KEYWORDS (catches unnamed firms)
     """
     name = (company or "").lower().strip()
     if not name:
         return False
     # Layer 1 — named denylist
-    if any(bad.lower() in name for bad in SKIP_COMPANIES):
+    if matches_company_list(name, SKIP_COMPANIES):
         return True
     # Layer 2 — keyword patterns
     if any(kw.lower() in name for kw in SKIP_COMPANY_KEYWORDS):
@@ -321,6 +327,15 @@ def jd_says_no_sponsorship(description: str) -> bool:
 
 # ── 4. AI scoring (batched) ───────────────────────────────────
 
+def _jd_excerpt(desc: str, head: int = 1200, tail: int = 800) -> str:
+    """Keep the head AND tail of a long JD instead of truncating from the top only —
+    work-authorization/EEO boilerplate typically lives in the legal block at the bottom."""
+    desc = desc or ""
+    if len(desc) <= head + tail:
+        return desc
+    return f"{desc[:head]}\n…[trimmed]…\n{desc[-tail:]}"
+
+
 def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
     """Score all jobs in a single AI call → [{url, score, missing_keywords, sponsorship}].
     Sponsorship classification here is a second-pass safety net; the deterministic
@@ -332,7 +347,7 @@ def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
         f"{i+1}. URL: {j['url']}\n"
         f"   Title: {j.get('title','')}\n"
         f"   Company: {j.get('company','')}\n"
-        f"   Description: {j.get('description','')[:1500]}"
+        f"   Description: {_jd_excerpt(j.get('description',''))}"
         for i, j in enumerate(jobs)
     )
 
@@ -396,7 +411,7 @@ def ingest_interested_from_notion(resume: str) -> int:
 
     fresh = []
     for page in pages:
-        if db_find_job_by_url(page["url"]):
+        if db_find_job_by_url(page["url"], exclude_page_id=page["notion_page_id"]):
             log(f"  ⊘ Already in DB, retiring Notion row: {page['url']}")
             _notion_promote_to_scraped(page["notion_page_id"], page)
             continue
@@ -406,6 +421,9 @@ def ingest_interested_from_notion(resume: str) -> int:
         return 0
 
     enriched = scrape_job_urls([p["url"] for p in fresh])
+    if enriched is None:
+        log("  ✗ Enrichment failed for all Interested jobs this run — leaving them as-is for the next run")
+        return 0
 
     candidates = []
     for page in fresh:
@@ -538,9 +556,12 @@ def run():
         log(f"  ✗ Notion ingestion failed: {e}")
 
     # 8a-bis. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
-    # Taken after ingestion so freshly-promoted "Interested" rows are included.
+    # Taken after ingestion so freshly-promoted "Interested" rows are included. Excludes
+    # not-yet-settled statuses (Interested, and future Retry) so a queued row doesn't dedup
+    # against itself.
+    UNSETTLED_STATUSES = {"Interested"}
     existing_jobs = db_get_all_jobs()
-    existing_urls = {j["url"] for j in existing_jobs if j["url"]}
+    existing_urls = {j["url"] for j in existing_jobs if j["url"] and j["status"] not in UNSETTLED_STATUSES}
     log(f"  Notion snapshot: {len(existing_urls)} existing job URL(s)")
 
     # 8b. Scrape LinkedIn + Indeed for each target role

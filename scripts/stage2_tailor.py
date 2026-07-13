@@ -22,7 +22,7 @@ from config.settings import *
 from scripts.utils import (
     ai_chat_blocks, parse_json_response,
     db_update_status, db_get_jobs, db_get_job_description,
-    log, today, ensure_dirs, ROOT,
+    log, today, ensure_dirs, ROOT, matches_company_list,
 )
 from scripts.render_docx import extract_docx_text, apply_docx_edits
 
@@ -52,6 +52,40 @@ def load_base_resume_text() -> str:
 
 def get_reviewed_jobs(min_score: int = 0) -> list:
     return db_get_jobs(status="Reviewed", min_score=min_score)
+
+
+# ── Sponsorship gate ──────────────────────────────────────────
+
+def _sponsorship_gate(jobs: list[dict]) -> list[dict]:
+    """Hold back jobs at RESTRICTED_SPONSORSHIP_COMPANIES (companies known to sponsor only
+    existing employees, not new hires) instead of tailoring a resume for them. A held job is
+    moved to Notion Status='Human Review' with a guidance note. It's released once the user
+    personally confirms sponsorship, adds SPONSORSHIP_CONFIRMED_MARKER to that job's Notion
+    Notes, and moves Status back to 'Reviewed' by hand — without the marker check, a job
+    moved back to 'Reviewed' would just get re-gated into 'Human Review' forever."""
+    cleared = []
+    for job in jobs:
+        if not matches_company_list(job["company"], RESTRICTED_SPONSORSHIP_COMPANIES):
+            cleared.append(job)
+            continue
+        notes = job.get("notes") or ""
+        if SPONSORSHIP_CONFIRMED_MARKER.lower() in notes.lower():
+            cleared.append(job)
+            continue
+        log(f"  ⚠ Holding back {job['company']} — known to sponsor existing employees only, not new hires.")
+        log(f"    Moved to 'Human Review'. Confirm sponsorship for a new hire, add "
+            f"\"{SPONSORSHIP_CONFIRMED_MARKER}\" to this job's Notion Notes, then set Status "
+            f"back to 'Reviewed' to release it for tailoring.")
+        guidance = (
+            f"⚠ {job['company']} is known to sponsor only existing employees, not new hires. "
+            f"Confirm sponsorship eligibility for a new hire, then add "
+            f"\"{SPONSORSHIP_CONFIRMED_MARKER}\" here and move Status back to 'Reviewed' to "
+            f"release it for tailoring."
+        )
+        db_update_status(job["page_id"], "Human Review", {
+            "notes": f"{notes}\n{guidance}" if notes else guidance,
+        })
+    return cleared
 
 
 # ── Fetch job description from URL ───────────────────────────
@@ -261,9 +295,11 @@ def save_resume(edits: list, job: dict) -> str:
 def run(min_score: int = 0):
     resume_text = load_base_resume_text()
     jobs = get_reviewed_jobs(min_score=min_score)
+    jobs = _sponsorship_gate(jobs)
 
     if not jobs:
-        log("No 'Reviewed' jobs found. Mark jobs as Reviewed in Notion, then run: python run.py --evaluate")
+        log("No 'Reviewed' jobs found (or all held pending sponsorship confirmation — see 'Human Review'). "
+            "Mark jobs as Reviewed in Notion, then run: python run.py --evaluate")
         return
 
     log(f"Tailoring resumes for {len(jobs)} jobs (min ATS score: {min_score})")
