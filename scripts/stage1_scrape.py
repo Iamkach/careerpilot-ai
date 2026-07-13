@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import *
 from scripts.utils import (
     claude_chat, parse_json_response, load_resume, db_add_job, db_add_job_linked,
-    db_find_job_by_url, db_get_all_jobs, get_notion_jobs_by_status,
+    db_find_job_by_url, db_get_all_jobs, db_get_jobs, db_get_job_description,
+    db_update_status, get_notion_jobs_by_status,
     _notion_promote_to_scraped, log, today, matches_company_list,
 )
 from scripts.sources import (
@@ -186,10 +187,31 @@ def _jd_excerpt(desc: str, head: int = 1200, tail: int = 800) -> str:
     return f"{desc[:head]}\n…[trimmed]…\n{desc[-tail:]}"
 
 
+_COMPANY_TYPES = ("product", "staffing_or_consulting", "agency", "unknown")
+
+
+def _unscored(job: dict) -> dict:
+    """The scoring contract's failure shape — used both when the whole batch call fails
+    (after ai_chat's own retries) and when a specific URL is missing from a successful
+    response. Never fabricate a numeric score here (that was the old score=50 bug)."""
+    return {
+        "url":              job["url"],
+        "score":            None,
+        "scored":           False,
+        "missing_keywords": [],
+        "sponsorship":      "unknown",
+        "company_type":     "unknown",
+    }
+
+
 def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
-    """Score all jobs in a single AI call → [{url, score, missing_keywords, sponsorship}].
+    """Score all jobs in a single AI call →
+    [{url, score, scored, missing_keywords, sponsorship, company_type}].
     Sponsorship classification here is a second-pass safety net; the deterministic
-    regex catches the clear cases before we even reach scoring."""
+    regex catches the clear cases before we even reach scoring.
+    On a call that fails outright (ai_chat exhausts its own retries) or a malformed
+    response, every job comes back `scored: False` — callers must queue those for retry,
+    never treat a missing/failed score as a real 0-100 value."""
     if not jobs:
         return []
 
@@ -209,6 +231,13 @@ Also classify visa sponsorship:
   "yes"     — JD explicitly offers or mentions sponsorship
   "unknown" — JD is silent on work authorization
 
+Also classify the hiring company itself:
+  "product"                — the company builds/owns its own product(s); this JD is a direct-hire role
+  "staffing_or_consulting" — a staffing agency, IT consultancy, or body-shop placing candidates at
+                              OTHER companies (e.g. "our client is seeking...", generic bench roles)
+  "agency"                 — a recruiting/talent agency filling a role on behalf of a named employer
+  "unknown"                — can't tell from the JD
+
 RESUME:
 {resume[:3000]}
 
@@ -217,7 +246,8 @@ JOBS TO SCORE:
 
 Reply with ONLY a JSON array, one entry per job, in the same order:
 [
-  {{"url": "...", "score": <0-100>, "missing_keywords": ["kw1", "kw2"], "sponsorship": "yes|no|unknown"}},
+  {{"url": "...", "score": <0-100>, "missing_keywords": ["kw1", "kw2"], "sponsorship": "yes|no|unknown",
+    "company_type": "product|staffing_or_consulting|agency|unknown"}},
   ...
 ]"""
     try:
@@ -233,19 +263,30 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
         by_url = {entry.get("url", ""): entry for entry in data if isinstance(entry, dict)}
         results = []
         for job in jobs:
-            entry = by_url.get(job["url"], {})
+            entry = by_url.get(job["url"])
+            if entry is None:
+                # Batch call succeeded but this URL wasn't in the response — treat it the
+                # same as a scoring failure, not a fabricated score.
+                results.append(_unscored(job))
+                continue
             sponsorship = str(entry.get("sponsorship", "unknown")).strip().lower()
             if sponsorship not in ("yes", "no", "unknown"):
                 sponsorship = "unknown"
+            company_type = str(entry.get("company_type", "unknown")).strip().lower()
+            if company_type not in _COMPANY_TYPES:
+                company_type = "unknown"
             results.append({
                 "url":              job["url"],
-                "score":            int(entry.get("score", 50)),
+                "score":            int(entry.get("score", 0)),
+                "scored":           True,
                 "missing_keywords": entry.get("missing_keywords", []),
                 "sponsorship":      sponsorship,
+                "company_type":     company_type,
             })
         return results
-    except Exception:
-        return [{"url": j["url"], "score": 50, "missing_keywords": [], "sponsorship": "unknown"} for j in jobs]
+    except Exception as e:
+        log(f"  ✗ score_jobs_batch failed for {len(jobs)} job(s), queuing for retry: {e}")
+        return [_unscored(j) for j in jobs]
 
 
 # ── 5. Ingest manually-added "Interested" jobs from Notion ───
@@ -294,19 +335,80 @@ def ingest_interested_from_notion(resume: str) -> int:
 
     ingested = 0
     for job in candidates:
-        s = score_by_url.get(job["url"], {"score": 50})
+        s = score_by_url.get(job["url"]) or _unscored(job)
+        if not s["scored"]:
+            # Leave as "Retry" (not "Interested" — it's already enriched/JD-cached, so the
+            # top-of-run rescore_retry_jobs() picks it up without a repeat Apify call).
+            db_add_job_linked({
+                "title":            job["title"],
+                "company":          job["company"],
+                "location":         job["location"],
+                "description":      job["description"],
+                "sponsorship":      "unknown",
+                "scoring_attempts": 1,
+            }, job["notion_page_id"], status="Retry")
+            log(f"  ⏳ Queued for retry (scoring failed): {job['company']} — {job['title']}")
+            continue
         db_add_job_linked({
             "title":       job["title"],
             "company":     job["company"],
             "location":    job["location"],
             "url":         job["url"],
             "ats_score":   s["score"],
+            "sponsorship": s["sponsorship"],
             "description": job["description"],
         }, job["notion_page_id"])
         ingested += 1
         log(f"  ✓ Ingested: {job['company']} — {job['title']} (ATS: {s['score']})")
 
     return ingested
+
+
+# ── 5b. Re-score jobs stuck in "Retry" from a prior failed scoring pass ──
+
+def rescore_retry_jobs(resume: str) -> dict:
+    """Re-score every Status='Retry' job from its already-cached JD (no Apify call).
+    Returns {"recovered": n, "given_up": n, "still_retrying": n}."""
+    counters = {"recovered": 0, "given_up": 0, "still_retrying": 0}
+    pages = db_get_jobs(status="Retry")
+    if not pages:
+        return counters
+
+    log(f"  Re-scoring {len(pages)} job(s) stuck in 'Retry'...")
+    candidates = []
+    for page in pages:
+        desc = db_get_job_description(page["page_id"])
+        candidates.append({**page, "description": desc})
+
+    score_by_url = {s["url"]: s for s in score_jobs_batch(candidates, resume)}
+
+    for job in candidates:
+        s = score_by_url.get(job["url"]) or _unscored(job)
+        if s["scored"]:
+            db_update_status(job["page_id"], "Scraped", {
+                "ats_score":        s["score"],
+                "sponsorship":      s["sponsorship"],
+                "scoring_attempts": (job.get("scoring_attempts") or 0) + 1,
+            })
+            counters["recovered"] += 1
+            log(f"  ✓ Recovered from Retry: {job['company']} — {job['title']} (ATS: {s['score']})")
+            continue
+
+        attempts = (job.get("scoring_attempts") or 0) + 1
+        if attempts > MAX_SCORING_ATTEMPTS:
+            db_update_status(job["page_id"], "Scraped", {
+                "scoring_attempts": attempts,
+            })
+            counters["given_up"] += 1
+            log(f"  ⚠ giving up on scoring after {attempts} attempts: "
+                f"{job['company']} — {job['title']}")
+        else:
+            db_update_status(job["page_id"], "Retry", {
+                "scoring_attempts": attempts,
+            })
+            counters["still_retrying"] += 1
+
+    return counters
 
 
 # ── 6. Drop-log writer ───────────────────────────────────────
@@ -402,6 +504,7 @@ def run():
     counters = {
         "company": 0, "title": 0, "location": 0, "stale": 0,
         "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
+        "staffing_ai": 0, "retry": 0,
     }
 
     drop_log_path, drop_fh = _open_drop_log()
@@ -412,12 +515,22 @@ def run():
     except Exception as e:
         log(f"  ✗ Notion ingestion failed: {e}")
 
-    # 8a-bis. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
+    # 8a-bis. Re-score anything still stuck in "Retry" from a prior failed scoring pass,
+    # from its already-cached JD — no repeat Apify call.
+    try:
+        retry_counters = rescore_retry_jobs(resume)
+        log(f"  Retry queue: {retry_counters['recovered']} recovered, "
+            f"{retry_counters['given_up']} given up, "
+            f"{retry_counters['still_retrying']} still retrying")
+    except Exception as e:
+        log(f"  ✗ Retry-queue rescoring failed: {e}")
+
+    # 8a-ter. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
     # Taken after ingestion so freshly-promoted "Interested" rows are included. Excludes
-    # not-yet-settled statuses (Interested, and future Retry) so a queued row doesn't dedup
+    # not-yet-settled statuses (Interested, Retry) so a queued row doesn't dedup
     # against itself. A failed read means dedup state is unknown — abort rather than
     # proceeding as if the DB were empty, which would mass-duplicate the tracker.
-    UNSETTLED_STATUSES = {"Interested"}
+    UNSETTLED_STATUSES = {"Interested", "Retry"}
     try:
         existing_jobs = db_get_all_jobs()
     except RuntimeError as e:
@@ -485,14 +598,47 @@ def run():
         score_by_url = {s["url"]: s for s in scores}
 
         for job in candidates:
-            s           = score_by_url.get(job["url"], {"score": 50, "missing_keywords": [], "sponsorship": "unknown"})
-            score       = s["score"]
-            sponsorship = s["sponsorship"]
+            s = score_by_url.get(job["url"]) or _unscored(job)
+
+            if not s["scored"]:
+                # Scoring failed even after ai_chat's own retries — queue for the next
+                # run's rescore_retry_jobs() pass instead of fabricating a score.
+                ac     = job.get("applicant_count")
+                sal    = job.get("salary_range", "")
+                posted = job.get("posted_date")
+                src    = job.get("source", "")
+                db_add_job({
+                    "title":            job["title"],
+                    "company":          job["company"],
+                    "location":         job["location"],
+                    "url":              job["url"],
+                    "status":           "Retry",
+                    "sponsorship":      "unknown",
+                    "scoring_attempts": 1,
+                    "description":      job["description"],
+                    "applicant_count":  ac,
+                    "salary_range":     sal,
+                    "posted_date":      posted,
+                    "source":           src,
+                })
+                counters["retry"] += 1
+                log(f"  ⏳ [retry]         {job['company']} — {job['title']} (scoring failed)")
+                continue
+
+            score        = s["score"]
+            sponsorship  = s["sponsorship"]
+            company_type = s["company_type"]
 
             if EXCLUDE_NO_SPONSORSHIP and sponsorship == "no":
                 counters["sponsorship"] += 1
                 _log_drop(drop_fh, "no-sponsor/AI", job)
                 log(f"  ⊘ [no-sponsor/AI]  {job['company']} — {job['title']}")
+                continue
+
+            if company_type in SKIP_COMPANY_TYPES:
+                counters["staffing_ai"] += 1
+                _log_drop(drop_fh, "staffing/AI", job)
+                log(f"  ⊘ [STAFFING/AI]    {job['company']} — {job['title']}")
                 continue
 
             if MIN_ATS_SCORE and score < MIN_ATS_SCORE:
@@ -511,6 +657,7 @@ def run():
                 "location":        job["location"],
                 "url":             job["url"],
                 "ats_score":       score,
+                "sponsorship":     sponsorship,
                 "description":     job["description"],
                 "applicant_count": ac,
                 "salary_range":    sal,
@@ -524,10 +671,12 @@ def run():
 
     summary = (
         f"\n{'-'*60}\n"
-        f"Done. Added {added} new job(s)  |  {ingested} ingested from Notion 'Interested'\n"
+        f"Done. Added {added} new job(s)  |  {ingested} ingested from Notion 'Interested'  |  "
+        f"{counters['retry']} queued for retry (scoring failed)\n"
         f"Pre-filter drops -> "
         f"stale:{counters['stale']}  company:{counters['company']}  title:{counters['title']}  "
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
+        f"staffing/AI:{counters['staffing_ai']}  "
         f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}  "
         f"low-ats-score:{counters['low_score']}\n"
         f"Drop log saved -> {drop_log_path}"

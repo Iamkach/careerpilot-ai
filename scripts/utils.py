@@ -1,7 +1,7 @@
 """
 utils.py — Shared helpers used across all job search scripts
 """
-import os, json, re, sys, datetime
+import os, json, re, sys, time, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -165,6 +165,58 @@ _BACKENDS = {
     "codex":       _chat_codex,
 }
 
+
+class AIChatError(RuntimeError):
+    """Raised when an ai_chat()/ai_chat_blocks() call exhausts its retry budget.
+    Callers (e.g. stage1_scrape.score_jobs_batch) must treat this as "unscored", never
+    fabricate a placeholder result."""
+
+
+class AIUsageCapError(AIChatError):
+    """Raised immediately (no blind retry) when the Claude Code subscription's usage cap
+    is hit — retrying a capped session just burns more of the same exhausted window."""
+
+
+_RETRY_DELAYS = (2, 8)  # seconds; len(_RETRY_DELAYS) + 1 total attempts
+
+_TRANSIENT_ERROR_PATTERNS = (
+    "timeout", "timed out", "connection", "temporarily unavailable", "overloaded",
+    "429", "500", "502", "503", "504", "rate limit",
+)
+
+
+def _is_usage_cap_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return any(p in msg for p in _USAGE_CAP_PATTERNS)
+
+
+def _is_transient_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return any(p in msg for p in _TRANSIENT_ERROR_PATTERNS)
+
+
+def _call_with_retry(call):
+    """Run `call()`, retrying transient failures with exponential backoff. A usage-cap
+    error is never retried (raised immediately as AIUsageCapError); a non-transient error
+    (bad request, auth failure, etc.) is also not worth retrying and raises on first miss.
+    Exhausting the retry budget on transient errors raises AIChatError."""
+    last_err = None
+    for attempt in range(1 + len(_RETRY_DELAYS)):
+        try:
+            return call()
+        except Exception as e:
+            if _is_usage_cap_error(e):
+                raise AIUsageCapError(str(e)) from e
+            last_err = e
+            if not _is_transient_error(e) or attempt == len(_RETRY_DELAYS):
+                break
+            delay = _RETRY_DELAYS[attempt]
+            log(f"[ai_chat] transient error ({e}); retrying in {delay}s "
+                f"(attempt {attempt + 2}/{1 + len(_RETRY_DELAYS)})")
+            time.sleep(delay)
+    raise AIChatError(f"AI call failed after retries: {last_err}") from last_err
+
+
 def _active_provider(quality: bool = False) -> str:
     """Pick the provider for this call. FAST_PROVIDER/QUALITY_PROVIDER (per-tier) take
     precedence when either differs from AI_PROVIDER (e.g. a nightly CI run splitting bulk
@@ -182,7 +234,7 @@ def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool
     backend = _BACKENDS.get(provider)
     if not backend:
         raise ValueError(f"Unknown provider '{provider}'. Choose: claude, claude_code, gemini, codex")
-    return backend(prompt, system, max_tokens, quality)
+    return _call_with_retry(lambda: backend(prompt, system, max_tokens, quality))
 
 # Alias so all existing stage scripts continue to work without changes
 claude_chat = ai_chat
@@ -207,8 +259,7 @@ def ai_chat_blocks(blocks: list, system: str = "", max_tokens: int = 4096, quali
         kwargs["system"] = [
             {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
         ]
-    resp = client.messages.create(**kwargs)
-    return resp.content[0].text
+    return _call_with_retry(lambda: client.messages.create(**kwargs).content[0].text)
 
 
 # ── Legacy helper (kept for backward compat) ─────────────────
@@ -427,6 +478,9 @@ _EXTRA_TO_NOTION = {
     "hiring_manager":          lambda v: {"Hiring Manager": {"rich_text": [{"text": {"content": v}}]}},
     "hiring_manager_linkedin": lambda v: {"Hiring Manager LinkedIn": {"url": v}},
     "notes":                   lambda v: {"Notes": {"rich_text": [{"text": {"content": v}}]}},
+    "ats_score":               lambda v: {"ATS Match Score": {"number": float(v)}},
+    "sponsorship":             lambda v: {"Sponsorship": {"select": {"name": v}}},
+    "scoring_attempts":        lambda v: {"Scoring Attempts": {"number": float(v)}},
 }
 
 def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
@@ -514,6 +568,8 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Sc
             props["ATS Match Score"] = {"number": float(job["ats_score"])}
         if job.get("sponsorship") is not None:
             props["Sponsorship"] = {"select": {"name": job["sponsorship"]}}
+        if job.get("scoring_attempts") is not None:
+            props["Scoring Attempts"] = {"number": float(job["scoring_attempts"])}
         # Backfill text fields only when the user left them blank
         if job.get("title"):
             props["Job Title"] = {"title": [{"text": {"content": job["title"]}}]}
@@ -591,10 +647,11 @@ def db_add_job(job: dict) -> str:
     return page_id
 
 
-def db_add_job_linked(job: dict, notion_page_id: str) -> str:
-    """Promote a manually-added 'Interested' Notion page to 'Scraped' (set ATS/date,
-    backfill fields) and cache the JD in its body. Returns the same page id."""
-    _notion_promote_to_scraped(notion_page_id, job)
+def db_add_job_linked(job: dict, notion_page_id: str, status: str = "Scraped") -> str:
+    """Promote a manually-added 'Interested' Notion page to `status` (default 'Scraped';
+    pass 'Retry' when scoring failed) — sets ATS/date, backfills fields — and caches the JD
+    in its body. Returns the same page id."""
+    _notion_promote_to_scraped(notion_page_id, job, status=status)
     desc = job.get("description", "") or ""
     if desc:
         try:
