@@ -118,6 +118,14 @@ def check_setup():
         print(f"\nInstall missing packages:")
         print(f"  pip install {' '.join(missing)}")
 
+    if NOTION_API_KEY and NOTION_DB_ID:
+        try:
+            from scripts.utils import db_get_jobs
+            retry_count = len(db_get_jobs(status="Retry"))
+            print(f"\n  Retry queue: {retry_count} job(s) awaiting re-score")
+        except Exception as e:
+            print(f"\n  Retry queue: could not check ({e})")
+
     if all_ok and not missing:
         print("\n✅ All good — you're ready to run!")
     else:

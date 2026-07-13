@@ -142,6 +142,20 @@ SPONSORSHIP_CONFIRMED_MARKER = "sponsorship confirmed"
 # Set to 0 to disable the filter.
 MIN_ATS_SCORE = 30
 
+# --- Scoring reliability (stage 1) ----------------------------
+# A job whose AI scoring call fails (after ai_chat's internal retries) is written to Notion
+# with Status="Retry" and an empty ATS score instead of the old fabricated score=50. It is
+# re-scored from its already-cached JD (no repeat Apify call) at the top of every stage 1 run
+# via rescore_retry_jobs(). After this many failed scoring passes, it's given up on and
+# promoted to "Scraped" with an empty score rather than retried forever.
+MAX_SCORING_ATTEMPTS = 3
+
+# Company types the scoring call classifies via `company_type` (in addition to score/
+# sponsorship) that should be dropped like a SKIP_COMPANIES hit. Deliberately does NOT
+# include "agency" (recruiting agencies sometimes post real product-company roles) — only
+# "staffing_or_consulting" firms, which SKIP_COMPANIES can't catch by name alone.
+SKIP_COMPANY_TYPES = {"staffing_or_consulting"}
+
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"
