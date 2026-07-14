@@ -496,8 +496,8 @@ def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
             if converter:
                 props.update(converter(v))
         notion.pages.update(page_id=notion_page_id, properties=props)
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"[_notion_update] Notion update failed: {e}")
 
 
 # ── Notion is now the single source of truth ─────────────────

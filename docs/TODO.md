@@ -6,14 +6,6 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
 
 ## Small, standalone fixes
 
-- **`APIFY_API_TOKEN` still a plaintext literal** — `config/settings.py:185`. Every other key
-  (Notion/Anthropic/Gemini/OpenAI) is already `os.environ.get(...)`-sourced; this one was
-  missed. Rotate the token in the Apify console, then move it to env. Full story:
-  `docs/backlog/step-0-rotate-apify-token.md`.
-- **`save_draft()` missing `encoding="utf-8"`** — `scripts/stage3_outreach.py:140`. Latent
-  Windows cp1252 crash on non-ASCII contact names (e.g. "José García"). One-line fix.
-- **`_notion_update()` bare `except: pass`** — `scripts/utils.py:432`. Should log the real
-  Notion exception like `_notion_write_job()` now does, instead of failing silently.
 - **Step 3 manual QA never run** — add a real `Interested` row with a live LinkedIn URL, run
   `python run.py --ingest`, confirm it lands on `Scraped` with a real score and cached JD (not
   silently retired). Re-run ingest twice to confirm the `existing_urls` snapshot doesn't treat
