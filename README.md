@@ -72,7 +72,7 @@ flowchart TD
 ## File structure
 
 ```
-local-n8n-engine/
+careerpilot-ai/
 ├── run.py                       # Stage runner (single entry point)
 ├── requirements.txt
 │
@@ -114,7 +114,7 @@ local-n8n-engine/
 └── .claude/
     ├── agents/                  # Specialized sub-agents (notion-tracker, resume-tailor, …)
     ├── commands/                # Slash commands (/scrape, /tailor, /outreach, …)
-    └── skills/                  # run-local-n8n-engine smoke test skill
+    └── skills/                  # careerpilot-ai smoke test skill
 ```
 
 ---

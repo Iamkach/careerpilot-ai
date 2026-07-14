@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-smoke.py — Drive the local-n8n-engine pipeline from a clean state.
+smoke.py — Drive the careerpilot-ai pipeline from a clean state.
 
 Run from the project root:
-  python .claude/skills/run-local-n8n-engine/smoke.py
+  python .claude/skills/careerpilot-ai/smoke.py
 
 What it tests (no API keys required):
   1. run.py parses and responds to --help

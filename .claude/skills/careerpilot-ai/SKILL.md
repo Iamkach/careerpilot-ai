@@ -1,16 +1,16 @@
 ---
-name: run-local-n8n-engine
-description: Run, test, or drive the local-n8n-engine AI job search pipeline. Use when asked to run the pipeline, start a stage, smoke test, check setup, or verify the CLI works.
-trigger: /run-local-n8n-engine
+name: careerpilot-ai
+description: Run, test, or drive the careerpilot-ai AI job search pipeline. Use when asked to run the pipeline, start a stage, smoke test, check setup, or verify the CLI works.
+trigger: /careerpilot-ai
 ---
 
-# run-local-n8n-engine
+# careerpilot-ai
 
 Python CLI pipeline, single entry point. Driven via smoke script for agent testing; no GUI, no server.
 
 - **`run.py`** — direct stage runner (deterministic; Claude is called as a subroutine for scoring/tailoring only)
 
-Driver: `.claude/skills/run-local-n8n-engine/smoke.py`
+Driver: `.claude/skills/careerpilot-ai/smoke.py`
 
 ---
 
@@ -35,13 +35,13 @@ Resume at `config/resume.txt` (plain text) and the base `config/Achyuth_Resume.d
 ## Smoke test (agent path — no API keys needed)
 
 ```
-python .claude/skills/run-local-n8n-engine/smoke.py
+python .claude/skills/careerpilot-ai/smoke.py
 ```
 
 Tests: CLI parses correctly, `--setup` runs, bad stage exits 1, all 7 modules import. Output on a clean machine (keys not set):
 
 ```
-Smoke test — local-n8n-engine
+Smoke test — careerpilot-ai
 
   PASS  run.py --help
   PASS  run.py --setup (runs without crash)
