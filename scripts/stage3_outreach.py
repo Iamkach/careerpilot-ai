@@ -137,7 +137,7 @@ def save_draft(content: str, job: dict, kind: str) -> str:
     path.mkdir(parents=True, exist_ok=True)
     safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").strip().replace(" ", "_")
     filename = f"{today()}_{kind}_{safe(job['company'])}_{safe(job['title'])}.txt"
-    (path / filename).write_text(content)
+    (path / filename).write_text(content, encoding="utf-8")
     return str(path / filename)
 
 
