@@ -1,7 +1,8 @@
 # 🤖 AI Job Search Pipeline
 
 Automated job search system using Claude API — no N8N, no VPS required.
-Scrapes LinkedIn, tailors resumes, drafts outreach, preps interviews, and negotiates offers.
+Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, tailors
+resumes, drafts outreach, preps interviews, and negotiates offers.
 Progress is tracked in **Notion** (the single source of truth — the job tracker database).
 
 ---
@@ -13,9 +14,11 @@ flowchart TD
     A([Your Resume\nconfig/resume.txt]) --> S1
     CFG([config/settings.py\nAI_PROVIDER + API keys]) --> S1
 
-    subgraph S1["Stage 1 — Scrape (+ ingest Notion 'Interested')"]
-        L1[Apify LinkedIn Scraper] --> L2[AI: ATS score vs resume]
+    subgraph S1["Stage 1 — Scrape (+ ingest Notion 'Interested', retry queue)"]
+        L1[LinkedIn/Indeed via Apify\n+ Greenhouse/Lever/Ashby boards] --> L1b[Dedup by URL + fingerprint]
+        L1b --> L2[AI: ATS score + sponsorship + company_type]
         L2 --> L3[Notion: Status = Scraped]
+        L2 -.failed scoring.-> LR[Notion: Status = Retry]
     end
 
     S1 --> RG{Review in Notion\nStatus = Reviewed}
@@ -74,21 +77,24 @@ local-n8n-engine/
 ├── requirements.txt
 │
 ├── config/
-│   ├── settings.py              # API keys, user profile, target roles, AI models
+│   ├── settings.py              # API keys (env-sourced), user profile, target roles, AI models, source/filter config
+│   ├── ats_tokens.json          # Cached Greenhouse/Lever/Ashby board-token discovery (auto-maintained)
 │   ├── resume.txt               # Your resume (plain text, required)
 │   ├── Achyuth_Resume.docx      # Master resume template (edited in-place by stage 2)
 │   └── resume_template.docx     # DOCX scaffold for render_docx.py
 │
 ├── scripts/
 │   ├── utils.py                 # Shared helpers: ai_chat(), Notion-backed CRUD
-│   ├── stage1_scrape.py         # Scrape LinkedIn via Apify, ATS score, save to Notion
-│   ├── stage2_tailor.py         # Rewrite resume per JD, save to output/resumes/
+│   ├── sources.py                # Source registry: LinkedIn/Indeed (Apify) + Greenhouse/Lever/Ashby, dedup, board-token discovery
+│   ├── stage1_scrape.py         # Gather all ENABLED_SOURCES, ATS score + retry queue, save to Notion
+│   ├── stage2_tailor.py         # Rewrite resume per JD (+ sponsorship gate), save to output/resumes/
 │   ├── stage3_outreach.py       # Draft cold/warm outreach emails
 │   ├── stage4_digest.py         # Generate HTML morning digest
 │   ├── stage5_interview_prep.py # Generate HTML interview prep guide
 │   ├── stage6_negotiate.py      # Research salary benchmarks + negotiation script
 │   ├── render_docx.py           # Render tailored resume as .docx
-│   └── make_resume_template.py  # Scaffold a new DOCX template
+│   ├── make_resume_template.py  # Scaffold a new DOCX template
+│   └── spike_phase0_leads.py    # Step 7 spike: LinkedIn recruiter/poster lead discovery (Hunter.io) — not part of the core pipeline
 │
 ├── output/
 │   ├── resumes/                 # Tailored resumes (.docx + .txt) per job
@@ -96,6 +102,14 @@ local-n8n-engine/
 │   ├── prep_guides/             # Interview prep guides (.html)
 │   ├── negotiation/             # Negotiation briefs (.html)
 │   └── digest_YYYY-MM-DD.html   # Daily digest
+│
+├── .github/workflows/
+│   └── nightly-pipeline.yml     # Optional unattended off-hours run (hybrid AI provider routing)
+│
+├── docs/
+│   ├── TODO.md                  # Open work, verified against code
+│   ├── CHANGELOG.md             # What's landed from the refinement-plans/backlog roadmap
+│   └── backlog/                 # Per-story specs for open/landed roadmap items
 │
 └── .claude/
     ├── agents/                  # Specialized sub-agents (notion-tracker, resume-tailor, …)
@@ -129,18 +143,27 @@ pip install openai notion-client requests docxtpl
 Create `config/resume.txt` and paste your full resume as plain text.
 
 ### 3. Fill in config
-Open `config/settings.py` and fill in:
-- `AI_PROVIDER`       — `"claude"` (default), `"gemini"`, or `"codex"`
+Open `config/settings.py` and fill in. **All API keys are read from the environment**
+(`os.environ.get(...)`) — set them in your shell/`.env`, never as a literal in the file:
+- `AI_PROVIDER`       — `"claude"` (default), `"claude_code"`, `"gemini"`, or `"codex"`
 - `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` — matching your provider
-- `APIFY_API_TOKEN`   — from https://apify.com (free)
+- `APIFY_API_TOKEN`   — from https://apify.com (free) — powers the `linkedin`/`indeed` sources
 - `NOTION_API_KEY`    — from https://www.notion.so/my-integrations
   - Create an integration, give it access to your Job Search Tracker database
-- Your name, email, bio, target roles, and city
+- `HUNTER_API_KEY`    — optional, only used by the Step 7 spike script, not the core pipeline
+- `ENABLED_SOURCES`   — which sources stage 1 crawls (`linkedin`, `indeed`, `greenhouse`,
+  `lever`, `ashby`); the board sources are free/keyless and crawl `TARGET_COMPANIES`
+- Your name, email, bio, and target roles (search is always US-wide)
+
+See [SETUP.md](SETUP.md) for the full walkthrough, including the Notion schema and the
+one-time Greenhouse/Lever/Ashby board-token discovery step.
 
 ### 4. Verify setup
 ```bash
 python run.py --setup
 ```
+Also prints the current `Retry` queue size (jobs whose AI scoring failed and will be
+automatically re-scored on the next stage 1 run).
 
 ---
 
@@ -192,12 +215,15 @@ the auto-scraped jobs.
 Intake (manual): Notion row Status="Interested" → ingested on next scrape → "Scraped"
 
 Stage 1: Scrape
-  LinkedIn (via Apify) → AI scores ATS match → Notion "Scraped"
+  LinkedIn/Indeed (Apify) + Greenhouse/Lever/Ashby (direct) → dedup (URL + fingerprint) →
+  freshness filter → AI scores ATS match + sponsorship + company_type → Notion "Scraped"
+  (failed scoring → Notion "Retry", auto re-scored on next run)
                                     ↓
                   Review gate: set Status="Reviewed" in Notion
 
 Stage 2: Tailor (--evaluate)
-  "Reviewed" → AI applies ATS edits to base .docx → output/resumes/ → "Resume Tailored"
+  "Reviewed" → sponsorship gate (holds RESTRICTED_SPONSORSHIP_COMPANIES as "Human Review") →
+  AI applies ATS edits to base .docx → output/resumes/ → "Resume Tailored"
 
 Stage 3: Outreach
   "Resume Tailored" → AI drafts email → saved to output/outreach/ → "Outreach Sent"
@@ -238,8 +264,15 @@ Scripts update status automatically at each stage. **You** set two of them by ha
 Notion: `Interested` (to queue a job you found) and `Reviewed` (to approve a scraped
 job for tailoring).
 
+`Retry` is a side queue, not a pipeline step — a job lands there only when its AI scoring
+call fails; stage 1 automatically re-scores it (from the cached JD, no repeat Apify call)
+on every subsequent run, up to `MAX_SCORING_ATTEMPTS`. You must add `Retry` as a `Status`
+select option in Notion once (the API can't create select options on a write).
+
 Five more options exist for parking a job outside the pipeline — `Disregard`, `Blacklist`,
-`Archived`, `Rejected`, `Human Review`. No stage ever writes these; they're yours. A parked job
+`Archived`, `Rejected`, `Human Review`. No stage ever writes these except one exception:
+stage 2's sponsorship gate moves a `Reviewed` job at a company in
+`RESTRICTED_SPONSORSHIP_COMPANIES` to `Human Review` instead of tailoring it. A parked job
 stops moving through the stages but still counts as a duplicate, so it won't come back on the
 next scrape.
 
@@ -254,10 +287,19 @@ To send the digest via email:
 
 ---
 
+## Optional: unattended nightly runs
+
+`.github/workflows/nightly-pipeline.yml` can run the pipeline off-hours on a cron schedule
+using hybrid AI provider routing (`FAST_PROVIDER=claude` metered + `QUALITY_PROVIDER=claude_code`
+subscription). See [SETUP.md](SETUP.md) §6 for the required repo secrets.
+
+---
+
 ## Tips
 
-- Run Stage 1 daily for fresh <24h postings (highest conversion)
+- Run Stage 1 daily for fresh postings (`MAX_JOB_AGE_DAYS`, default 14) — highest conversion
 - Use `--min-score 65` on Stage 2 to only tailor high-match jobs
 - Stage 3 outreach files need your review before sending — never auto-sent
 - Prep guides open as HTML — works in any browser, no install needed
-- All scripts are idempotent — safe to re-run, duplicates are skipped
+- All scripts are idempotent — safe to re-run, duplicates are skipped by URL and by
+  company+title fingerprint (catches the same job posted to multiple sources)

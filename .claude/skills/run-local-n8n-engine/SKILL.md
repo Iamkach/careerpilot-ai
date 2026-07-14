@@ -22,10 +22,11 @@ Python 3.9+ with these packages (already installed if setup passed):
 pip install -r requirements.txt        # or: anthropic notion-client requests docxtpl
 ```
 
-API keys set in `config/settings.py`:
-- Provider auth matching `AI_PROVIDER` — `ANTHROPIC_API_KEY` (default, `"claude"`, metered API), or Claude Code subscription (`claude_code`; run `claude /login`), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini).
-- `APIFY_API_TOKEN` — LinkedIn scraper (apify.com, free tier works)
+API keys, all read from the environment in `config/settings.py` (`os.environ.get(...)` — never a literal in the file):
+- Provider auth matching `AI_PROVIDER` (or `FAST_PROVIDER`/`QUALITY_PROVIDER` if split) — `ANTHROPIC_API_KEY` (default, `"claude"`, metered API), or Claude Code subscription (`claude_code`; run `claude /login`), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini).
+- `APIFY_API_TOKEN` — LinkedIn + Indeed scraping via Apify (apify.com, free tier works); not needed if `ENABLED_SOURCES` only has `greenhouse`/`lever`/`ashby`
 - `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); **primary data store** (the DB must be shared with the integration)
+- `HUNTER_API_KEY` — optional, only used by `scripts/spike_phase0_leads.py` (Step 7 spike), not the core pipeline
 
 Resume at `config/resume.txt` (plain text) and the base `config/Achyuth_Resume.docx` for stage-2 in-place tailoring.
 

@@ -21,10 +21,21 @@ entirely when `NOTION_API_KEY` is unset.
 ```
 Interested → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received
 ```
-Off-pipeline options, set by hand and written by no stage:
+`Retry` is a side queue, not a pipeline step: a job whose stage-1 AI scoring call fails is
+written here with an empty ATS score instead of a fabricated one. `rescore_retry_jobs()`
+retries it from the already-cached JD (no repeat Apify call) at the top of every stage 1
+run, incrementing `Scoring Attempts` each pass; past `MAX_SCORING_ATTEMPTS` it's promoted to
+`Scraped` with an empty score rather than retried forever. **Not auto-created by the Notion
+API** — add it to the `Status` select's options by hand once, or writes to it silently drop
+that property.
+
+Off-pipeline options, set by hand and written by no stage (with one exception — see below):
 `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review`.
 `db_get_jobs()` matches an exact status, so parked rows are never picked up — but
 `db_get_all_jobs()` (dedup) spans every status, so they are never re-scraped either.
+Exception: stage 2's sponsorship gate (`_sponsorship_gate()` in `stage2_tailor.py`) moves a
+`Reviewed` job at a `RESTRICTED_SPONSORSHIP_COMPANIES` company to `Human Review` on its own,
+instead of tailoring a resume for it.
 Most transitions are written by the stages. **Two are set by the user in Notion:**
 - `Interested` — a job added by hand (Title + Company + Job URL). The next Stage 1 run (or
   `python run.py --ingest`) calls `ingest_interested_from_notion()`: enrich via Apify, score,
@@ -45,6 +56,15 @@ Most transitions are written by the stages. **Two are set by the user in Notion:
 | Date Scraped | date | Stage 1 |
 | Tailored Resume Link | url | Stage 2 |
 | Date Applied | date | Manual / Stage 2 |
+| Sponsorship | select (`yes`/`no`/`unknown`) | Stage 1 scoring |
+| Scoring Attempts | number | `rescore_retry_jobs()` |
+| Posted Date | date | Stage 1 (multi-source) — only when the source provides one |
+| Source | rich_text | Stage 1 — `linkedin`/`indeed`/`greenhouse`/`lever`/`ashby` |
+| Applicant Count | number | Stage 1 — only when the source provides one |
+| Salary Range | rich_text | Stage 1 — only when the source provides one |
+
+> The last six properties are each written only when the job dict has that value — a missing
+> column doesn't break anything, it just stays empty until added to the Notion DB.
 
 > The full job description is **not** a Notion property — it's cached in the page **body**
 > (paragraph blocks) by `db_add_job` / `db_add_job_linked`, and read back via

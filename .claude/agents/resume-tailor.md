@@ -12,10 +12,11 @@ You are an expert resume writer and ATS optimization specialist working on an au
 
 ### What stage 2 does
 1. Fetches jobs with **Status="Reviewed"** from Notion (`db_get_jobs("Reviewed", min_score)`) — the user approves jobs in Notion, then `python run.py --evaluate` runs this
-2. Loads the **base resume `.docx`** (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) as text via `extract_docx_text()`
-3. For each job: reads the cached JD (`db_get_job_description(job_id)`) and asks the AI for **targeted `{old, new}` ATS keyword edits** (JSON, not a full rewrite)
-4. Copies the base `.docx` and applies the edits **in-place** via `apply_docx_edits()` (preserves formatting) → `output/resumes/*.docx` + a `.txt` mirror
-5. Updates Notion: Status → "Resume Tailored", sets `Tailored Resume Link`
+2. **Sponsorship gate** (`_sponsorship_gate()`): if the job's company matches `RESTRICTED_SPONSORSHIP_COMPANIES` in `config/settings.py` (companies known to sponsor only existing employees, not new hires) and the Notion `Notes` field doesn't contain `SPONSORSHIP_CONFIRMED_MARKER` ("sponsorship confirmed"), the job is moved to `Status="Human Review"` with a guidance note and **skipped** — no resume is tailored. To release it: confirm sponsorship yourself, add the marker to `Notes`, and set `Status` back to `Reviewed` by hand.
+3. Loads the **base resume `.docx`** (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) as text via `extract_docx_text()`
+4. For each remaining job: reads the cached JD (`db_get_job_description(job_id)`) and asks the AI for **targeted `{old, new}` ATS keyword edits** (JSON, not a full rewrite)
+5. Copies the base `.docx` and applies the edits **in-place** via `apply_docx_edits()` (preserves formatting) → `output/resumes/*.docx` + a `.txt` mirror
+6. Updates Notion: Status → "Resume Tailored", sets `Tailored Resume Link`
 
 ### ATS scoring (Stage 1 output, feeds Stage 2)
 Stage 1 scores all new jobs in a single batched call — `score_jobs_batch()` in
@@ -37,6 +38,7 @@ Instructs the model to:
 - Never invent experience, titles, or dates — only weave in missing ATS keywords
 
 ### Common issues and fixes
+- **Job stuck at "Human Review" instead of tailoring**: it hit the sponsorship gate — check `RESTRICTED_SPONSORSHIP_COMPANIES` for a match on that company.
 - **Edit not applied**: `apply_docx_edits()` matches `old` verbatim. If the model paraphrases `old`, the replacement silently no-ops — tighten the prompt to copy exact substrings.
 - **No JD available**: JD is cached in the Notion page body at scrape time (read via `db_get_job_description(page_id)`). Manually-added "Interested" jobs may have an empty JD if Apify couldn't fetch it. `fetch_jd()` in `scripts/stage2_tailor.py` (`requests.get()`) is the fallback fetch path.
 - **ATS score mismatch**: tune `score_jobs_batch()` in `stage1_scrape.py`.
