@@ -64,10 +64,10 @@ def check_setup():
     import shutil
     _cli_found = bool(shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe"))
     _provider_key = {
-        "claude":      ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in config/settings.py"),
+        "claude":      ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in .env (copy .env.example) or your environment"),
         "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login` (or set CLAUDE_CODE_OAUTH_TOKEN for headless/CI auth)"),
-        "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in config/settings.py"),
-        "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in config/settings.py"),
+        "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in .env (copy .env.example) or your environment"),
+        "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in .env (copy .env.example) or your environment"),
     }
     from scripts.utils import _resolve_model
     fast_model    = _resolve_model(False, FAST_PROVIDER)
@@ -83,8 +83,8 @@ def check_setup():
               f"quality={QUALITY_PROVIDER} ({quality_model}, stages 2,5,6)\n")
 
     checks = [
-        ("Apify token",     bool(APIFY_API_TOKEN), "Set APIFY_API_TOKEN in config/settings.py"),
-        ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in config/settings.py (PRIMARY data store)"),
+        ("Apify token",     bool(APIFY_API_TOKEN), "Set APIFY_API_TOKEN in .env (copy .env.example) or your environment"),
+        ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in .env (copy .env.example) or your environment (PRIMARY data store)"),
         ("Notion DB ID",    bool(NOTION_DB_ID),    "Already set — your tracker DB"),
         ("Resume file",     (ROOT / RESUME_PATH).exists(), f"Add your resume to {RESUME_PATH}"),
     ]

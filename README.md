@@ -144,7 +144,10 @@ Create `config/resume.txt` and paste your full resume as plain text.
 
 ### 3. Fill in config
 Open `config/settings.py` and fill in. **All API keys are read from the environment**
-(`os.environ.get(...)`) — set them in your shell/`.env`, never as a literal in the file:
+(`os.environ.get(...)`), never as a literal in the file. Locally, copy `.env.example` to
+`.env` and fill it in — `config/settings.py` loads it automatically on every run
+(`.env` is git-ignored). In GitHub Actions, the same keys come from repo secrets instead
+(see `.github/workflows/nightly-pipeline.yml`); `.env` has no effect there.
 - `AI_PROVIDER`       — `"claude"` (default), `"claude_code"`, `"gemini"`, or `"codex"`
 - `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` — matching your provider
 - `APIFY_API_TOKEN`   — from https://apify.com (free) — powers the `linkedin`/`indeed` sources

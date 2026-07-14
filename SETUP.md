@@ -15,6 +15,9 @@ stage). It reads everything from `config/settings.py`.
   - **Apify** token (LinkedIn + Indeed scraping) — free tier works. **Set it via environment
     variable only** (`APIFY_API_TOKEN`) — `config/settings.py` reads it with `os.environ.get(...)`,
     same as every other key; never paste a live token into the file itself.
+  - Locally, the easiest way to set all of these is: `cp .env.example .env`, fill in the
+    values, done — `config/settings.py` loads `.env` automatically on every run (it's
+    git-ignored, and has no effect in CI where secrets come from GitHub Actions instead).
   - **Notion** integration key (primary data store — the job tracker database)
   - **Gmail** OAuth credentials (optional — emailed digest)
   - **Hunter.io** API key (optional — only needed for the Step 7 communications-subsystem

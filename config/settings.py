@@ -3,6 +3,24 @@
 # ============================================================
 
 import os
+from pathlib import Path
+
+
+def _load_local_env(path=Path(__file__).resolve().parent.parent / ".env"):
+    # Local-only convenience: GitHub Actions supplies secrets via `secrets.*` env vars
+    # (see .github/workflows/nightly-pipeline.yml), so this is a no-op in CI even if a
+    # stray .env exists. setdefault() means a real env var always wins over the file.
+    if os.environ.get("GITHUB_ACTIONS") or not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_local_env()
 
 # --- Your profile -------------------------------------------
 YOUR_NAME        = "Krishna Achyuth"
