@@ -211,7 +211,7 @@ MODEL_OVERRIDES = {
 }
 
 # --- API Keys -----------------------------------------------
-APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com  (free token)
+APIFY_API_TOKEN   = os.environ.get("APIFY_API_TOKEN", "")   # set in your env — https://apify.com (free token)
 NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (the integration token; DB is shared & working)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")   # set in your env (required for AI_PROVIDER="gemini")

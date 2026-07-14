@@ -12,9 +12,14 @@ stage). It reads everything from `config/settings.py`.
 - **Python 3.9+**
 - Accounts / keys (only the ones for the features you use):
   - An AI provider key — Anthropic (default) **or** Gemini **or** OpenAI **or** a Claude Code subscription
-  - **Apify** token (LinkedIn scraping) — free tier works
+  - **Apify** token (LinkedIn + Indeed scraping) — free tier works. **Set it via environment
+    variable only** (`APIFY_API_TOKEN`) — `config/settings.py` reads it with `os.environ.get(...)`,
+    same as every other key; never paste a live token into the file itself.
   - **Notion** integration key (primary data store — the job tracker database)
   - **Gmail** OAuth credentials (optional — emailed digest)
+  - **Hunter.io** API key (optional — only needed for the Step 7 communications-subsystem
+    spike script, `scripts/spike_phase0_leads.py`; not required for the core 6-stage pipeline)
+  - No key needed for Greenhouse/Lever/Ashby board sourcing — those are free, keyless JSON APIs
 
 ---
 
@@ -96,6 +101,34 @@ TARGET_ROLES     = ["Product Manager", "Senior Product Manager", "Group PM"]
 # Search is always US-wide. Jobs are filtered to US locations post-scrape.
 TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
 ```
+`TARGET_COMPANIES` seeds two things: Apify keyword searches and — via
+`scripts/sources.py`'s `discover_tokens()` — a one-time probe of each company's
+Greenhouse/Lever/Ashby board (see "Multi-source sourcing" below). It's unioned at runtime
+with every distinct company already in your Notion DB, so it grows on its own as you scrape.
+
+### Multi-source sourcing (stage 1)
+```python
+ENABLED_SOURCES   = ["linkedin", "indeed", "greenhouse", "lever", "ashby"]
+MAX_JOB_AGE_DAYS  = 14      # drop postings older than this (by posted_date)
+DROP_UNDATED_JOBS = False   # keep sources that don't expose a date, by default
+```
+Stage 1 pulls from a registry of sources instead of just LinkedIn:
+- `linkedin`, `indeed` — Apify actors, searched per `TARGET_ROLES` (need `APIFY_API_TOKEN`)
+- `greenhouse`, `lever`, `ashby` — free, keyless JSON APIs, crawled per company in
+  `TARGET_COMPANIES` (no token needed)
+
+**One-time pre-processing the first time you enable a board source:** on its first run,
+`discover_tokens()` probes each seed company's Greenhouse/Lever/Ashby board and caches the
+result (hit or miss) to `config/ats_tokens.json`, so later runs don't re-probe (a null entry
+is retried after ~30 days). Greenhouse hits are self-verified against the company name in the
+response; **Lever/Ashby auto-accepted tokens are logged loudly** the first time they're
+found — skim that log output once and remove any mismatched entry from
+`config/ats_tokens.json` by hand if a token was auto-accepted for the wrong company. No
+action needed if you only run `ENABLED_SOURCES = ["linkedin", "indeed"]`.
+
+Same-job duplicates posted to multiple sources (e.g. Greenhouse + LinkedIn) are collapsed by
+`job_fingerprint()`, keeping the ATS-board copy (fuller JD, real date, direct-apply URL) over
+the LinkedIn/Indeed copy — see `SOURCE_PRIORITY` in `scripts/sources.py`.
 
 ### AI provider
 ```python
@@ -117,15 +150,36 @@ AI_MODEL_OVERRIDE = ""              # leave blank to use the provider default
 > via the Agent SDK — no metered API key is used, but `ANTHROPIC_API_KEY` must NOT be
 > present in the environment or the SDK/CLI would prefer it and bill metered.
 
-### API keys
+### Hybrid provider tiering (optional — unattended/nightly runs only)
 ```python
-ANTHROPIC_API_KEY = "***REMOVED-SECRET***"   # https://console.anthropic.com        (provider: claude, default)
-GEMINI_API_KEY    = "..."   # https://aistudio.google.com/apikey   (provider: gemini)
-OPENAI_API_KEY    = "***REMOVED-SECRET***"   # https://platform.openai.com/api-keys (provider: codex)
-APIFY_API_TOKEN   = "***REMOVED-SECRET***"   # https://apify.com (free token)
-NOTION_API_KEY    = "***REMOVED-SECRET***"   # https://www.notion.so/my-integrations (PRIMARY data store)
+FAST_PROVIDER    = os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER
+QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
 ```
-Set only the key matching `AI_PROVIDER`. Under `claude_code`, no AI key is needed.
+Both default to `AI_PROVIDER`, so this is a no-op for interactive/local runs — leave it
+alone unless you're setting up unattended scheduling. `FAST_PROVIDER` covers stage 1
+scoring + stage 3 outreach (many small calls); `QUALITY_PROVIDER` covers stage 2 tailor +
+stage 5/6 (few, larger calls). The repo's `.github/workflows/nightly-pipeline.yml` sets
+`FAST_PROVIDER=claude` (metered, cheap, prompt-cached) and `QUALITY_PROVIDER=claude_code`
+(subscription — free marginal capacity off-hours, when nothing else is using the session
+window). For headless subscription auth in CI, run `claude setup-token` locally once
+(requires Claude Pro/Max) and store the result as the `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
+
+### API keys
+All keys are read from the environment (`os.environ.get(...)`) in `config/settings.py` —
+**never hardcode a live key into the file itself**, even locally; set them in your shell
+profile, a local `.env` you source yourself, or your CI secrets store.
+```
+ANTHROPIC_API_KEY = ...   # https://console.anthropic.com        (provider: claude, default)
+GEMINI_API_KEY    = ...   # https://aistudio.google.com/apikey   (provider: gemini)
+OPENAI_API_KEY    = ...   # https://platform.openai.com/api-keys (provider: codex)
+APIFY_API_TOKEN   = ...   # https://apify.com (free token) — LinkedIn + Indeed sourcing
+NOTION_API_KEY    = ...   # https://www.notion.so/my-integrations (PRIMARY data store)
+HUNTER_API_KEY    = ...   # https://hunter.io (optional — Step 7 spike script only)
+```
+Set only the AI key matching `AI_PROVIDER` (or `FAST_PROVIDER`/`QUALITY_PROVIDER` if you've
+split them). Under `claude_code`, no AI key is needed. `HUNTER_API_KEY` is only consumed by
+`scripts/spike_phase0_leads.py` (see `docs/backlog/step-7-communications-subsystem.md`) — the
+core pipeline never reads it.
 
 ### Notion (primary data store — required)
 ```python
@@ -157,20 +211,38 @@ silently breaks queries/writes):
 | `Company` | rich_text | |
 | `Location` | rich_text | |
 | `Job URL` | url | used for URL-based dedup |
-| `Status` | select | pipeline: `Interested`, `Scraped`, `Reviewed`, `Resume Tailored`, `Applied`, `Outreach Sent`, `Interview Scheduled`, `Offer Received`<br>manual-only: `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` |
+| `Status` | select | pipeline: `Interested`, `Scraped`, `Reviewed`, `Resume Tailored`, `Applied`, `Outreach Sent`, `Interview Scheduled`, `Offer Received`, **`Retry`**<br>manual-only: `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` |
 | `ATS Match Score` | number | |
 | `Date Scraped` | date | |
 | `Tailored Resume Link` | url | |
 | `Date Applied` | date | |
 | `Hiring Manager` | rich_text | |
 | `Hiring Manager LinkedIn` | url | |
+| `Sponsorship` | select — `yes`/`no`/`unknown` | written by stage 1 scoring |
+| `Scoring Attempts` | number | incremented by `rescore_retry_jobs()` each retry pass |
+| `Posted Date` | date | multi-source; only written when the source provides one |
+| `Source` | rich_text | which registry entry found it (`linkedin`/`indeed`/`greenhouse`/`lever`/`ashby`) |
+| `Applicant Count` | number | only written when the source provides one |
+| `Salary Range` | rich_text | only written when the source provides one |
 
 > The full **job description is not a property** — it is cached in the page **body**
 > (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by
 > `db_get_job_description()`.
 
+> The last six properties above (`Sponsorship` onward) are each written **only when the job
+> dict has that value** — their absence from your DB doesn't break anything, those columns
+> just stay empty until you add them. **`Retry` is not auto-created by the Notion API** — a
+> write to it will silently drop that property unless you add it to the `Status` select's
+> options by hand once, same as any other status.
+
 Create each `Status` select option once (type it into the select to create it), and
 make sure the Notion integration is **shared with the database**.
+
+### Retry status (scoring reliability queue)
+A job whose AI scoring call fails is written as `Status = Retry` (empty ATS score) instead of
+a fabricated score. Every stage 1 run automatically re-scores the `Retry` queue first, from
+the already-cached JD (no repeat Apify call) — you don't need to do anything by hand beyond
+creating the `Retry` select option once. `python run.py --setup` prints the current queue size.
 
 ### Notion intake & review statuses
 
@@ -185,7 +257,25 @@ once into the select to create them).
 
 ---
 
-## 6. (Optional) Gmail digest setup
+## 6. (Optional) Unattended nightly runs via GitHub Actions
+
+`.github/workflows/nightly-pipeline.yml` runs the pipeline off-hours on a cron schedule
+(default `0 7 * * *` UTC — adjust the hour for your timezone/DST). It uses the hybrid
+provider split from step 4 above. Set these as **repo secrets** (Settings → Secrets and
+variables → Actions):
+
+| Secret | Required for |
+|---|---|
+| `NOTION_API_KEY` | always |
+| `ANTHROPIC_API_KEY` | `FAST_PROVIDER=claude` (metered, stage 1/3) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `QUALITY_PROVIDER=claude_code` (subscription, stage 2/5/6) — mint with `claude setup-token` locally (Pro/Max required) |
+
+`APIFY_API_TOKEN` isn't in that workflow's `env:` block yet — add it as a secret and wire it
+in the same way if you enable `ENABLED_SOURCES` entries that need Apify (`linkedin`,
+`indeed`). You can also trigger it manually via `workflow_dispatch` with a `mode` input
+(`full`, `scrape`, `evaluate`, `ingest`, or a single `stageN`).
+
+## 7. (Optional) Gmail digest setup
 
 1. Create a Google Cloud project and enable the **Gmail API**.
 2. Create OAuth client credentials and download the JSON.
@@ -194,25 +284,26 @@ once into the select to create them).
 
 ---
 
-## 7. Verify the setup
+## 8. Verify the setup
 
 ```bash
 python run.py --setup
 ```
 
-This prints a ✓/✗ checklist for the active provider key, Apify token, Notion API key
-(primary data store), Notion DB ID, resume file, and installed packages. Fix any ✗
-before running. Output dirs under `output/` are auto-created on first run.
+This prints a ✓/✗ checklist for the active provider key(s) (fast + quality tier if split),
+Apify token, Notion API key (primary data store), Notion DB ID, resume file, and installed
+packages, plus the current `Retry` queue size. Fix any ✗ before running. Output dirs under
+`output/` are auto-created on first run.
 
 ---
 
-## 8. Run it
+## 9. Run it
 
 ```bash
 python run.py                                   # Step 1: scrape + review digest (stages 1, 4) — then review in Notion
 python run.py --ingest                          # ingest only Notion "Interested" jobs → "Scraped"
 python run.py --evaluate                        # Step 2: sync "Reviewed", then tailor + outreach + digest
-python run.py --stage 1                          # scrape LinkedIn → store
+python run.py --stage 1                          # scrape all ENABLED_SOURCES → store
 python run.py --stage 2 --min-score 65           # tailor Reviewed resumes (≥65 ATS only)
 python run.py --stage 3 --company "Stripe"       # cold outreach
 python run.py --stage 3 --company "Google" --contact "Jane Doe"   # warm referral
@@ -223,7 +314,7 @@ python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000   # negoti
 
 ---
 
-## 9. Outputs
+## 10. Outputs
 
 | Path | Contents |
 |------|----------|
@@ -235,6 +326,9 @@ python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000   # negoti
 
 Status pipeline (tracked in Notion, the single source of truth):
 `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
+
+`Retry` is a side queue, not a pipeline step — a job lands there only when its AI scoring
+call fails, and stage 1 automatically re-scores it on the next run.
 
 Five further options — `Disregard`, `Blacklist`, `Archived`, `Rejected`, `Human Review` — are set
 by hand and written by no stage. A row parked in one of them drops out of the pipeline but is still
@@ -252,4 +346,6 @@ seen by dedup, so it will not be re-scraped.
 | `notion-client` version error | Pin `notion-client>=2.2.1,<2.6` (2.6+/3.x dropped `databases.query`) |
 | Apify timeouts | Scraper retries 30×10s; retry on network errors |
 | Gmail send fails | Ensure `config/gmail_credentials.json` exists (OAuth) |
-| Duplicate jobs | Dedup is by job URL; check the `Job URL` property for trailing slashes / query params |
+| Duplicate jobs | Dedup is by job URL **and** by company+title fingerprint (`job_fingerprint()`); check the `Job URL` property for trailing slashes / query params |
+| A Lever/Ashby board resolves to the wrong company | Check `config/ats_tokens.json` — auto-accepted tokens are logged loudly on discovery; delete/fix the bad entry by hand |
+| Jobs stuck in `Retry` past `MAX_SCORING_ATTEMPTS` | They're promoted to `Scraped` with an empty score rather than retried forever — score them manually or re-run once the underlying AI error is fixed |
