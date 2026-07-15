@@ -409,6 +409,7 @@ def _page_to_job(page: dict) -> dict:
         "sponsorship":     _prop_select(props, "Sponsorship"),
         "scoring_attempts": _prop_number(props, "Scoring Attempts"),
         "notes":       _notion_plain_text(props.get("Notes")),
+        "missing_keywords": [k.strip() for k in _notion_plain_text(props.get("Missing Keywords")).split(",") if k.strip()],
     }
 
 
@@ -456,6 +457,8 @@ def _notion_write_job(job: dict) -> str | None:
             props["Applicant Count"] = {"number": float(job["applicant_count"])}
         if job.get("salary_range"):
             props["Salary Range"] = {"rich_text": [{"text": {"content": job["salary_range"]}}]}
+        if job.get("missing_keywords"):
+            props["Missing Keywords"] = {"rich_text": [{"text": {"content": ", ".join(job["missing_keywords"])}}]}
         try:
             page = notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=props)
         except Exception as e:
@@ -481,6 +484,7 @@ _EXTRA_TO_NOTION = {
     "ats_score":               lambda v: {"ATS Match Score": {"number": float(v)}},
     "sponsorship":             lambda v: {"Sponsorship": {"select": {"name": v}}},
     "scoring_attempts":        lambda v: {"Scoring Attempts": {"number": float(v)}},
+    "missing_keywords":        lambda v: {"Missing Keywords": {"rich_text": [{"text": {"content": ", ".join(v)}}]}},
 }
 
 def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
@@ -570,6 +574,8 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Sc
             props["Sponsorship"] = {"select": {"name": job["sponsorship"]}}
         if job.get("scoring_attempts") is not None:
             props["Scoring Attempts"] = {"number": float(job["scoring_attempts"])}
+        if job.get("missing_keywords"):
+            props["Missing Keywords"] = {"rich_text": [{"text": {"content": ", ".join(job["missing_keywords"])}}]}
         # Backfill text fields only when the user left them blank
         if job.get("title"):
             props["Job Title"] = {"title": [{"text": {"content": job["title"]}}]}

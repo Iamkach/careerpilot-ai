@@ -25,6 +25,7 @@ from scripts.utils import (
     log, today, ensure_dirs, ROOT, matches_company_list,
 )
 from scripts.render_docx import extract_docx_text, apply_docx_edits
+from scripts.stage1_scrape import score_jobs_batch
 
 SYSTEM_PROMPT = """You are a senior technical recruiter and ATS optimization expert.
 Your task: maximize the ATS match score between a candidate's resume and a target job description.
@@ -124,6 +125,12 @@ def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, l
         "text": f"Here is my current resume:\n\n<resume>\n{resume_text}\n</resume>",
         "cache_control": {"type": "ephemeral"},
     }
+    hint_kws = job.get("missing_keywords") or []
+    hint_line = (
+        f"\nStage 1 flagged these as likely gaps (verify against the JD below before using — "
+        f"not a checklist, and find additional ones it may have missed): {', '.join(hint_kws)}\n"
+        if hint_kws else ""
+    )
     jd_block = {
         "type": "text",
         "text": f"""Target job:
@@ -131,7 +138,7 @@ def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, l
 <job_description>
 Company: {job['company']}
 Role: {job['title']}
-
+{hint_line}
 {jd}
 </job_description>
 
@@ -188,9 +195,16 @@ def tailor_resumes_batch(
         "cache_control": {"type": "ephemeral"},
     }
 
+    def _hint_line(job: dict) -> str:
+        kws = job.get("missing_keywords") or []
+        if not kws:
+            return ""
+        return f"\n   Stage 1 flagged these as likely gaps (verify against the JD below before using — not a checklist): {', '.join(kws)}"
+
     job_entries = "\n\n".join(
         f"{i+1}. Company: {job['company']}\n"
-        f"   Role: {job['title']}\n"
+        f"   Role: {job['title']}"
+        f"{_hint_line(job)}\n"
         f"   <job_description>\n{jd[:2000]}\n   </job_description>"
         for i, (job, jd) in enumerate(jobs_and_jds)
     )
@@ -198,6 +212,10 @@ def tailor_resumes_batch(
     prompt_block = {
         "type": "text",
         "text": f"""For EACH numbered job, produce one JSON entry with targeted resume edits.
+
+Where a job lists "Stage 1 flagged these as likely gaps," treat it as a starting point only —
+confirm each one is actually supported by the full job description before injecting it, and feel
+free to find additional missing keywords the flagged list didn't catch.
 
 Edit priority (highest impact first):
   1. TITLE LINE: Replace header title with exact role title from JD if different. REQUIRED unless identical.
@@ -290,6 +308,20 @@ def save_resume(edits: list, job: dict) -> str:
     return docx_path
 
 
+# ── Post-tailor verification ──────────────────────────────────
+
+def verify_tailored_score(tailored_resume_text: str, jd: str, job: dict) -> dict:
+    """Re-score the tailored resume against the same JD, reusing stage 1's exact scoring
+    contract (score_jobs_batch) so "score" means the same thing before and after tailoring.
+    Returns {url, score, scored, missing_keywords, sponsorship, company_type} — score/scored
+    follow the same "never fabricate a score" contract as stage 1."""
+    results = score_jobs_batch(
+        [{"url": job["url"], "title": job["title"], "company": job["company"], "description": jd}],
+        tailored_resume_text,
+    )
+    return results[0] if results else {"url": job["url"], "score": None, "scored": False}
+
+
 # ── Main pipeline ─────────────────────────────────────────────
 
 def run(min_score: int = 0):
@@ -335,17 +367,35 @@ def run(min_score: int = 0):
             pid = job.get("page_id") or job.get("id")
             batch_results[pid] = (edits, keywords)
 
-    # Phase 3: Apply edits + update Notion (no AI)
-    for job, _ in jobs_and_jds:
+    # Phase 3: Apply edits + verify + update Notion
+    for job, jd in jobs_and_jds:
         pid = job.get("page_id") or job.get("id")
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
         edits, keywords = batch_results.get(pid, ([], []))
         log(f"  ↳ {len(edits)} edit(s) suggested")
         if keywords:
             log(f"  ↳ Keywords injected: {', '.join(keywords)}")
+        stage1_hints = job.get("missing_keywords") or []
+        if stage1_hints:
+            injected_lower = {k.lower() for k in keywords}
+            dropped = [k for k in stage1_hints if k.lower() not in injected_lower]
+            if dropped:
+                log(f"  ↳ Stage 1 flagged but not injected: {', '.join(dropped)}")
 
         file_path = save_resume(edits, job)
         log(f"  ✓ Saved: {file_path}")
+
+        tailored_text = extract_docx_text(file_path)
+        verify = verify_tailored_score(tailored_text, jd, job)
+        before = job["ats_score"]
+        if verify["scored"]:
+            after = verify["score"]
+            log(f"  ↳ ATS: {before} → {after}")
+            if after < MIN_TAILORED_ATS_SCORE:
+                log(f"  ⚠ Tailored resume for {job['company']} — {job['title']} scored {after}, "
+                    f"below MIN_TAILORED_ATS_SCORE={MIN_TAILORED_ATS_SCORE} — worth a manual look.")
+        else:
+            log(f"  ⚠ Post-tailor verification scoring failed for {job['company']} — leaving as-is.")
 
         # NOTE: do NOT set date_applied here — tailoring is not applying.
         db_update_status(job["page_id"], "Resume Tailored", {

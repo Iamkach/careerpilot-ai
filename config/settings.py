@@ -174,6 +174,12 @@ MAX_SCORING_ATTEMPTS = 3
 # "staffing_or_consulting" firms, which SKIP_COMPANIES can't catch by name alone.
 SKIP_COMPANY_TYPES = {"staffing_or_consulting"}
 
+# --- Tailoring verification (stage 2) -------------------------
+# After applying edits, stage 2 re-scores the tailored resume against the same JD (reusing
+# stage 1's scoring contract) and logs a warning if it lands below this. Non-blocking —
+# does not change Notion status or retry tailoring, just surfaces a weak result in the logs.
+MIN_TAILORED_ATS_SCORE = 75
+
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"

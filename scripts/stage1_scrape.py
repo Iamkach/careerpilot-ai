@@ -350,13 +350,14 @@ def ingest_interested_from_notion(resume: str) -> int:
             log(f"  ⏳ Queued for retry (scoring failed): {job['company']} — {job['title']}")
             continue
         db_add_job_linked({
-            "title":       job["title"],
-            "company":     job["company"],
-            "location":    job["location"],
-            "url":         job["url"],
-            "ats_score":   s["score"],
-            "sponsorship": s["sponsorship"],
-            "description": job["description"],
+            "title":            job["title"],
+            "company":          job["company"],
+            "location":         job["location"],
+            "url":              job["url"],
+            "ats_score":        s["score"],
+            "sponsorship":      s["sponsorship"],
+            "description":      job["description"],
+            "missing_keywords": s["missing_keywords"],
         }, job["notion_page_id"])
         ingested += 1
         log(f"  ✓ Ingested: {job['company']} — {job['title']} (ATS: {s['score']})")
@@ -389,6 +390,7 @@ def rescore_retry_jobs(resume: str) -> dict:
                 "ats_score":        s["score"],
                 "sponsorship":      s["sponsorship"],
                 "scoring_attempts": (job.get("scoring_attempts") or 0) + 1,
+                "missing_keywords": s["missing_keywords"],
             })
             counters["recovered"] += 1
             log(f"  ✓ Recovered from Retry: {job['company']} — {job['title']} (ATS: {s['score']})")
@@ -659,6 +661,7 @@ def run():
                 "ats_score":       score,
                 "sponsorship":     sponsorship,
                 "description":     job["description"],
+                "missing_keywords": s["missing_keywords"],
                 "applicant_count": ac,
                 "salary_range":    sal,
                 "posted_date":     posted,
