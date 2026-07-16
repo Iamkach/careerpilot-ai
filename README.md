@@ -1,20 +1,42 @@
 # 🤖 AI Job Search Pipeline
 
-Automated job search system using Claude API — no N8N, no VPS required.
-Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, tailors
-resumes, drafts outreach, preps interviews, and negotiates offers.
-Progress is tracked in **Notion** (the single source of truth — the job tracker database).
+[![Nightly Pipeline](https://github.com/Iamkach/careerpilot-ai/actions/workflows/nightly-pipeline.yml/badge.svg)](https://github.com/Iamkach/careerpilot-ai/actions/workflows/nightly-pipeline.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![AI Provider](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20OpenRouter-8a2be2.svg)](#switching-ai-provider)
+[![Data store](https://img.shields.io/badge/data%20store-Notion-black.svg)](https://www.notion.so/)
+[![Last commit](https://img.shields.io/github/last-commit/Iamkach/careerpilot-ai.svg)](https://github.com/Iamkach/careerpilot-ai/commits)
+[![Issues](https://img.shields.io/github/issues/Iamkach/careerpilot-ai.svg)](https://github.com/Iamkach/careerpilot-ai/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Iamkach/careerpilot-ai/pulls)
+
+Automated job search system using the Claude API — no N8N, no VPS required.
+Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, scores
+them against your resume, tailors resumes, drafts outreach, preps interviews, and
+negotiates offers. Progress is tracked in **Notion** — the single source of truth.
+
+> 📐 A full architecture deep-dive (LLD, ERD, component diagrams across three change
+> horizons) lives in [`docs/architecture/`](docs/architecture/README.md) — open
+> [`architecture-analysis.html`](docs/architecture/architecture-analysis.html) in a
+> browser for the rendered version.
 
 ---
 
-## Workflow
+## Why this exists
+
+Job searching is a pipeline problem: gather leads, filter noise, personalize per role,
+track state, follow up. This project treats it that way — a **deterministic Python stage
+runner** (`run.py`) drives Claude as a subroutine for scoring and writing, not as an
+open-ended agent, so there's no session-window limit on how much you run.
+
+---
+
+## Architecture at a glance
 
 ```mermaid
 flowchart TD
     A([Your Resume\nconfig/resume.txt]) --> S1
     CFG([config/settings.py\nAI_PROVIDER + API keys]) --> S1
 
-    subgraph S1["Stage 1 — Scrape (+ ingest Notion 'Interested', retry queue)"]
+    subgraph S1["Stage 1 — Scrape (multi-source + ingest 'Interested' + retry queue)"]
         L1[LinkedIn/Indeed via Apify\n+ Greenhouse/Lever/Ashby boards] --> L1b[Dedup by URL + fingerprint]
         L1b --> L2[AI: ATS score + sponsorship + company_type]
         L2 --> L3[Notion: Status = Scraped]
@@ -65,7 +87,9 @@ flowchart TD
     style S6 fill:#e8fce8,stroke:#27ae60
 ```
 
-**Provider swap:** change `AI_PROVIDER` in `config/settings.py` to `"claude"` / `"gemini"` / `"codex"` — all stages use the same `ai_chat()` dispatcher with no other changes needed.
+**Provider swap:** change `AI_PROVIDER` in `config/settings.py` — `"claude"` / `"claude_code"`
+/ `"gemini"` / `"codex"` / `"openrouter"`. All stages call the same `ai_chat()` dispatcher, so
+no other code changes are needed. See [Switching AI provider](#switching-ai-provider).
 
 ---
 
@@ -85,15 +109,15 @@ careerpilot-ai/
 │
 ├── scripts/
 │   ├── utils.py                 # Shared helpers: ai_chat(), Notion-backed CRUD
-│   ├── sources.py                # Source registry: LinkedIn/Indeed (Apify) + Greenhouse/Lever/Ashby, dedup, board-token discovery
+│   ├── sources.py               # Source registry: LinkedIn/Indeed (Apify) + Greenhouse/Lever/Ashby, dedup, board-token discovery
 │   ├── stage1_scrape.py         # Gather all ENABLED_SOURCES, ATS score + retry queue, save to Notion
-│   ├── stage2_tailor.py         # Rewrite resume per JD (+ sponsorship gate), save to output/resumes/
+│   ├── stage2_tailor.py         # Rewrite resume per JD (+ sponsorship gate + post-tailor score verification), save to output/resumes/
 │   ├── stage3_outreach.py       # Draft cold/warm outreach emails
 │   ├── stage4_digest.py         # Generate HTML morning digest
 │   ├── stage5_interview_prep.py # Generate HTML interview prep guide
 │   ├── stage6_negotiate.py      # Research salary benchmarks + negotiation script
-│   ├── render_docx.py           # Render tailored resume as .docx
-│   ├── make_resume_template.py  # Scaffold a new DOCX template
+│   ├── render_docx.py           # Extract/apply targeted docx text edits
+│   ├── make_resume_template.py  # Scaffold a new DOCX template (legacy Jinja2 path)
 │   └── spike_phase0_leads.py    # Step 7 spike: LinkedIn recruiter/poster lead discovery (Hunter.io) — not part of the core pipeline
 │
 ├── output/
@@ -107,14 +131,16 @@ careerpilot-ai/
 │   └── nightly-pipeline.yml     # Optional unattended off-hours run (hybrid AI provider routing)
 │
 ├── docs/
+│   ├── architecture/            # LLD + ERD + component-design analysis (Mermaid + self-contained HTML report)
+│   ├── backlog/                 # Per-story specs for open/landed roadmap items
+│   ├── refinement-plans/        # Proposed future subsystem reworks
 │   ├── TODO.md                  # Open work, verified against code
-│   ├── CHANGELOG.md             # What's landed from the refinement-plans/backlog roadmap
-│   └── backlog/                 # Per-story specs for open/landed roadmap items
+│   └── CHANGELOG.md             # What's landed from the roadmap
 │
 └── .claude/
     ├── agents/                  # Specialized sub-agents (notion-tracker, resume-tailor, …)
     ├── commands/                # Slash commands (/scrape, /tailor, /outreach, …)
-    └── skills/                  # careerpilot-ai smoke test skill
+    └── skills/                  # careerpilot-ai smoke test + workflow skills
 ```
 
 ---
@@ -123,21 +149,13 @@ careerpilot-ai/
 
 ### 1. Install dependencies
 
-Install the SDK for your chosen AI provider plus the shared dependencies:
-
 ```bash
-# Claude metered API (default provider: claude)
-pip install anthropic notion-client requests docxtpl
-
-# Gemini
-pip install google-generativeai notion-client requests docxtpl
-
-# OpenAI / Codex
-pip install openai notion-client requests docxtpl
+pip install -r requirements.txt
 ```
 
-> `notion-client` is the primary data store (required); `docxtpl` backs the stage-2 `.docx`
-> resumes. Or just `pip install -r requirements.txt`.
+This installs the Claude metered API client (default provider) plus the shared
+dependencies (`notion-client`, `requests`, `docxtpl`). Swap in `google-generativeai`
+(Gemini) or `openai` (Codex / OpenRouter) only if you change `AI_PROVIDER`.
 
 ### 2. Add your resume
 Create `config/resume.txt` and paste your full resume as plain text.
@@ -148,14 +166,16 @@ Open `config/settings.py` and fill in. **All API keys are read from the environm
 `.env` and fill it in — `config/settings.py` loads it automatically on every run
 (`.env` is git-ignored). In GitHub Actions, the same keys come from repo secrets instead
 (see `.github/workflows/nightly-pipeline.yml`); `.env` has no effect there.
-- `AI_PROVIDER`       — `"claude"` (default), `"claude_code"`, `"gemini"`, or `"codex"`
-- `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` — matching your provider
-- `APIFY_API_TOKEN`   — from https://apify.com (free) — powers the `linkedin`/`indeed` sources
+
+- `AI_PROVIDER`       — `"claude"` (default), `"claude_code"`, `"gemini"`, `"codex"`, or `"openrouter"`
+- `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — matching your provider
+- `APIFY_API_TOKEN`   — from https://apify.com (free tier) — powers the `linkedin`/`indeed` sources
 - `NOTION_API_KEY`    — from https://www.notion.so/my-integrations
   - Create an integration, give it access to your Job Search Tracker database
 - `HUNTER_API_KEY`    — optional, only used by the Step 7 spike script, not the core pipeline
 - `ENABLED_SOURCES`   — which sources stage 1 crawls (`linkedin`, `indeed`, `greenhouse`,
-  `lever`, `ashby`); the board sources are free/keyless and crawl `TARGET_COMPANIES`
+  `lever`, `ashby`); the board sources are free/keyless and crawl `TARGET_COMPANIES` ∪
+  every company already in Notion
 - Your name, email, bio, and target roles (search is always US-wide)
 
 See [SETUP.md](SETUP.md) for the full walkthrough, including the Notion schema and the
@@ -178,9 +198,9 @@ The pipeline is a **two-step flow** with a human review gate in the middle.
 ```bash
 python run.py
 ```
-Runs stages 1 + 4: scrape LinkedIn, ATS-score, and produce a review digest of new
-"Scraped" jobs. **Then open Notion and set `Status = Reviewed`** on the jobs you want
-to apply to.
+Runs stages 1 + 4: scrape every enabled source, ATS-score, and produce a review digest
+of new "Scraped" jobs. **Then open Notion and set `Status = Reviewed`** on the jobs you
+want to apply to.
 
 ### Step 2 — Evaluate the reviewed jobs
 ```bash
@@ -200,15 +220,19 @@ the auto-scraped jobs.
 
 | Stage | Command | What it does |
 |-------|---------|--------------|
-| 1 | `python run.py --stage 1` | Scrape fresh LinkedIn jobs (+ ingest "Interested") → Notion |
+| 1 | `python run.py --stage 1` | Scrape all `ENABLED_SOURCES` (+ ingest "Interested", rescore `Retry` queue) → Notion |
 | — | `python run.py --ingest` | Ingest only Notion "Interested" jobs → "Scraped" |
-| 2 | `python run.py --stage 2 --min-score 60` | AI-tailor resume per Reviewed job |
+| 2 | `python run.py --stage 2 --min-score 60` | AI-tailor resume per Reviewed job (+ sponsorship gate) |
 | 3 | `python run.py --stage 3 --company "Stripe"` | Draft cold outreach email |
 | 3 | `python run.py --stage 3 --company "Google" --contact "Jane Doe"` | Draft warm referral |
 | 4 | `python run.py --stage 4` | Print morning digest to terminal |
 | 4 | `python run.py --stage 4 --send` | Also email digest via Gmail |
 | 5 | `python run.py --stage 5 --company "Meta" --role "Senior PM"` | Interview prep guide |
 | 6 | `python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000` | Negotiation brief |
+
+Every command also accepts `--ai-mode {metered,hybrid,subscription}` and
+`--metered-provider {claude,codex,gemini,openrouter}` to override the AI routing for
+that single run — see [Switching AI provider](#switching-ai-provider).
 
 ---
 
@@ -218,15 +242,18 @@ the auto-scraped jobs.
 Intake (manual): Notion row Status="Interested" → ingested on next scrape → "Scraped"
 
 Stage 1: Scrape
-  LinkedIn/Indeed (Apify) + Greenhouse/Lever/Ashby (direct) → dedup (URL + fingerprint) →
-  freshness filter → AI scores ATS match + sponsorship + company_type → Notion "Scraped"
-  (failed scoring → Notion "Retry", auto re-scored on next run)
+  Gather every ENABLED_SOURCES entry (LinkedIn/Indeed via Apify + Greenhouse/Lever/Ashby
+  direct JSON APIs) → collapse cross-source duplicates by company+title fingerprint →
+  freshness + company/title/location/sponsorship filter → AI scores ATS match +
+  sponsorship + company_type → Notion "Scraped"
+  (failed scoring → Notion "Retry", auto re-scored on next run, capped by MAX_SCORING_ATTEMPTS)
                                     ↓
                   Review gate: set Status="Reviewed" in Notion
 
 Stage 2: Tailor (--evaluate)
   "Reviewed" → sponsorship gate (holds RESTRICTED_SPONSORSHIP_COMPANIES as "Human Review") →
-  AI applies ATS edits to base .docx → output/resumes/ → "Resume Tailored"
+  AI applies targeted {old→new} ATS edits to base .docx → output/resumes/ →
+  post-tailor score verification (logged) → "Resume Tailored"
 
 Stage 3: Outreach
   "Resume Tailored" → AI drafts email → saved to output/outreach/ → "Outreach Sent"
@@ -257,9 +284,6 @@ Stage 6: Negotiate
 
 ## Notion tracker
 
-Your tracker is already live:
-https://www.notion.so/2ac0907e693744698a1c748d37774a07
-
 Status pipeline:
 `Interested (manual intake) → Scraped → Reviewed → Resume Tailored → Applied → Outreach Sent → Interview Scheduled → Offer Received`
 
@@ -279,6 +303,8 @@ stage 2's sponsorship gate moves a `Reviewed` job at a company in
 stops moving through the stages but still counts as a duplicate, so it won't come back on the
 next scrape.
 
+See [CLAUDE.md](CLAUDE.md) for the full property-by-property Notion schema.
+
 ---
 
 ## Gmail digest (optional)
@@ -287,6 +313,27 @@ To send the digest via email:
 1. Create a Google Cloud project and enable the Gmail API
 2. Download `credentials.json` and place it at `config/gmail_credentials.json`
 3. Run `python run.py --stage 4 --send`
+
+---
+
+## Switching AI provider
+
+Set `AI_PROVIDER` in `config/settings.py`, or override a single run with
+`python run.py --ai-mode {metered,hybrid,subscription} --metered-provider {claude,codex,gemini,openrouter}`.
+
+| `AI_PROVIDER` | Key setting | Notes |
+|---|---|---|
+| `"claude"` (default) | `ANTHROPIC_API_KEY` | Metered API, only path with prompt caching |
+| `"claude_code"` | Claude Code subscription (`claude /login`) | Via Agent SDK, no per-call billing, shares your 5h session window |
+| `"gemini"` | `GEMINI_API_KEY` | |
+| `"codex"` | `OPENAI_API_KEY` | |
+| `"openrouter"` | `OPENROUTER_API_KEY` | OpenAI-compatible endpoint fronting many vendors — set the model per tier in `MODEL_OVERRIDES["openrouter"]` |
+
+`FAST_PROVIDER` / `QUALITY_PROVIDER` let you split routing per tier (fast: stage 1
+scoring + stage 3 outreach; quality: stage 2 tailor + stages 5/6) — both default to
+`AI_PROVIDER`, so this is a no-op unless explicitly set. See
+[`.github/workflows/nightly-pipeline.yml`](.github/workflows/nightly-pipeline.yml) for the
+hybrid pattern used on unattended off-hours runs.
 
 ---
 
@@ -306,3 +353,14 @@ subscription). See [SETUP.md](SETUP.md) §6 for the required repo secrets.
 - Prep guides open as HTML — works in any browser, no install needed
 - All scripts are idempotent — safe to re-run, duplicates are skipped by URL and by
   company+title fingerprint (catches the same job posted to multiple sources)
+
+---
+
+## Further reading
+
+- [`docs/architecture/README.md`](docs/architecture/README.md) — full LLD/ERD/component-design analysis, with a rendered HTML report
+- [`docs/TODO.md`](docs/TODO.md) — open work, verified against code
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — what's landed
+- [`docs/backlog/`](docs/backlog/README.md) — per-story specs for roadmap items
+- [`SETUP.md`](SETUP.md) — full setup walkthrough
+- [`CLAUDE.md`](CLAUDE.md) — architecture reference for Claude Code / contributors
