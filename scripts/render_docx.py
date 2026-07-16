@@ -34,6 +34,8 @@ Template placeholders (Jinja2 syntax inside the .docx):
 import shutil
 from pathlib import Path
 
+from config.settings import YOUR_NAME
+
 # Human-readable reference of the placeholders a template must use.
 RESUME_SCHEMA_DOC = """\
 Your config/resume_template.docx should contain these docxtpl (Jinja2) tags:
@@ -143,11 +145,15 @@ def _replace_para_text(para, old: str, new: str) -> None:
         para.add_run(full)
 
 
-def apply_docx_edits(base_path: str, edits: list, out_path: str) -> tuple[str, list]:
+def apply_docx_edits(base_path: str, edits: list, out_path: str, job: dict | None = None) -> tuple[str, list]:
     """Copy base_path to out_path and apply targeted text replacements.
 
     edits: list of {"old": <exact existing text>, "new": <replacement text>}
     Each edit matches the first paragraph whose text contains the "old" string.
+
+    job: optional {"title": str, "company": str} used to set per-resume docx
+    core metadata (title/subject/keywords) below. When omitted, metadata still
+    gets author/last_modified_by but falls back to a generic title/subject.
 
     Returns (out_path, unmatched_edits) — unmatched_edits lists any edit whose
     "old" text wasn't found in any paragraph, so the caller can surface it
@@ -179,6 +185,17 @@ def apply_docx_edits(base_path: str, edits: list, out_path: str) -> tuple[str, l
                 break
         else:
             unmatched.append(edit)
+
+    job_title = (job or {}).get("title") or ""
+    job_company = (job or {}).get("company") or ""
+    props = doc.core_properties
+    props.author = YOUR_NAME
+    props.last_modified_by = YOUR_NAME
+    props.category = "Resume"
+    props.comments = ""
+    props.title = f"{YOUR_NAME} - Resume" + (f" - {job_title}" if job_title else "")
+    props.subject = job_title
+    props.keywords = ", ".join(filter(None, [job_title, job_company]))
 
     doc.save(out_path)
     return out_path, unmatched

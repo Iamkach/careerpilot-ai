@@ -317,7 +317,7 @@ def save_resume(edits: list, job: dict, resume_text: str) -> str:
         final_edits = [e for e in final_edits if (e.get("old") or "").strip() != title_line]
         final_edits.insert(0, {"old": title_line, "new": job_title})
 
-    docx_path, unmatched = apply_docx_edits(base, final_edits, docx_path)
+    docx_path, unmatched = apply_docx_edits(base, final_edits, docx_path, job=job)
     if unmatched:
         for e in unmatched:
             log(f"  ⚠ Edit did not match any paragraph, skipped: {e.get('old', '')[:80]!r}")
