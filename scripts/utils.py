@@ -10,9 +10,10 @@ from config.settings import *
 import config.settings as _settings
 # Alternate-provider keys are optional under the default claude_code provider. Ensure the
 # names are always defined so `import *` users don't NameError when they're absent.
-ANTHROPIC_API_KEY = getattr(_settings, "ANTHROPIC_API_KEY", "")
-GEMINI_API_KEY    = getattr(_settings, "GEMINI_API_KEY", "")
-OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY  = getattr(_settings, "ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY     = getattr(_settings, "GEMINI_API_KEY", "")
+OPENAI_API_KEY     = getattr(_settings, "OPENAI_API_KEY", "")
+OPENROUTER_API_KEY = getattr(_settings, "OPENROUTER_API_KEY", "")
 
 # ── Default models per provider ─────────────────────────────
 _DEFAULTS = {
@@ -20,6 +21,7 @@ _DEFAULTS = {
     "claude_code": "sonnet",
     "gemini":      "gemini-2.0-flash",
     "codex":       "gpt-4o",
+    "openrouter":  "openrouter/auto",
 }
 
 # ── Provider backends ────────────────────────────────────────
@@ -29,7 +31,7 @@ def _resolve_model(quality: bool, provider: str = "claude") -> str:
     apply to provider == "claude" (their values are Claude model ids, meaningless to other
     SDKs); other providers use MODEL_OVERRIDES[provider] if set, else that backend's built-in
     default. This is what lets AI_PROVIDER/FAST_PROVIDER/QUALITY_PROVIDER be switched to
-    gemini/codex/claude_code at any time without also having to edit a model field."""
+    gemini/codex/openrouter/claude_code at any time without also having to edit a model field."""
     tier = "quality" if quality else "fast"
     override = getattr(_settings, "MODEL_OVERRIDES", {}).get(provider, {}).get(tier, "")
     if override:
@@ -156,6 +158,26 @@ def _chat_codex(prompt: str, system: str, max_tokens: int, quality: bool = False
     return resp.choices[0].message.content
 
 
+def _chat_openrouter(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
+    """OpenRouter exposes an OpenAI-compatible Chat Completions API in front of many model
+    providers (Anthropic, OpenAI, Google, Meta, ...) behind one key/endpoint — set the actual
+    model via MODEL_OVERRIDES["openrouter"] (e.g. "anthropic/claude-3.5-sonnet",
+    "openai/gpt-4o-mini"); default is OpenRouter's own "openrouter/auto" router."""
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+    model = _resolve_model(quality, "openrouter")
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    return resp.choices[0].message.content
+
+
 # ── Public chat interface ────────────────────────────────────
 
 _BACKENDS = {
@@ -163,6 +185,7 @@ _BACKENDS = {
     "claude_code": _chat_claude_code,
     "gemini":      _chat_gemini,
     "codex":       _chat_codex,
+    "openrouter":  _chat_openrouter,
 }
 
 
@@ -233,7 +256,7 @@ def ai_chat(prompt: str, system: str = "", max_tokens: int = 4096, quality: bool
     provider = _active_provider(quality)
     backend = _BACKENDS.get(provider)
     if not backend:
-        raise ValueError(f"Unknown provider '{provider}'. Choose: claude, claude_code, gemini, codex")
+        raise ValueError(f"Unknown provider '{provider}'. Choose: claude, claude_code, gemini, codex, openrouter")
     return _call_with_retry(lambda: backend(prompt, system, max_tokens, quality))
 
 # Alias so all existing stage scripts continue to work without changes

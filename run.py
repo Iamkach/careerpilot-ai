@@ -21,7 +21,7 @@ Two-step daily flow:
     python run.py --setup                  # Check config & install deps
 """
 
-import sys, argparse, subprocess
+import os, sys, argparse, subprocess
 from pathlib import Path
 
 # Windows terminals default to cp1252; force UTF-8 so emoji/check marks render
@@ -36,7 +36,13 @@ ROOT = Path(__file__).parent
 # ── Dependency check ──────────────────────────────────────────
 
 # Only the active provider's SDK is required; the others are optional
-_PROVIDER_PKGS = {"claude": "anthropic", "claude_code": "anthropic", "gemini": "google-generativeai", "codex": "openai"}
+_PROVIDER_PKGS = {
+    "claude":      "anthropic",
+    "claude_code": "anthropic",
+    "gemini":      "google-generativeai",
+    "codex":       "openai",
+    "openrouter":  "openai",  # OpenRouter speaks the OpenAI-compatible Chat Completions API
+}
 
 def _get_required():
     from config.settings import AI_PROVIDER
@@ -55,9 +61,10 @@ def check_setup():
     )
     import config.settings as _settings
     # Alternate-provider keys are optional under the default claude_code provider.
-    ANTHROPIC_API_KEY = getattr(_settings, "ANTHROPIC_API_KEY", "")
-    GEMINI_API_KEY    = getattr(_settings, "GEMINI_API_KEY", "")
-    OPENAI_API_KEY    = getattr(_settings, "OPENAI_API_KEY", "")
+    ANTHROPIC_API_KEY  = getattr(_settings, "ANTHROPIC_API_KEY", "")
+    GEMINI_API_KEY     = getattr(_settings, "GEMINI_API_KEY", "")
+    OPENAI_API_KEY     = getattr(_settings, "OPENAI_API_KEY", "")
+    OPENROUTER_API_KEY = getattr(_settings, "OPENROUTER_API_KEY", "")
     FAST_PROVIDER      = getattr(_settings, "FAST_PROVIDER", "") or AI_PROVIDER
     QUALITY_PROVIDER   = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
 
@@ -68,6 +75,7 @@ def check_setup():
         "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login` (or set CLAUDE_CODE_OAUTH_TOKEN for headless/CI auth)"),
         "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in .env (copy .env.example) or your environment"),
         "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in .env (copy .env.example) or your environment"),
+        "openrouter":  ("OpenRouter API key", OPENROUTER_API_KEY, "Set OPENROUTER_API_KEY in .env (copy .env.example) or your environment"),
     }
     from scripts.utils import _resolve_model
     fast_model    = _resolve_model(False, FAST_PROVIDER)
@@ -91,7 +99,7 @@ def check_setup():
     for tier_provider in dict.fromkeys((FAST_PROVIDER, QUALITY_PROVIDER)):  # dedup, keep order
         key_label, key_val, key_fix = _provider_key.get(
             tier_provider,
-            ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex in config/settings.py")
+            ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex/openrouter in config/settings.py")
         )
         checks.insert(0, (key_label, bool(key_val), key_fix))
 
@@ -235,7 +243,34 @@ def main():
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
     parser.add_argument("--evaluate",     action="store_true",       help="Sync Reviewed jobs from Notion then tailor + outreach + digest")
     parser.add_argument("--ingest",       action="store_true",       help="Ingest only Notion 'Interested' jobs (score + promote to Scraped)")
+    parser.add_argument(
+        "--ai-mode", type=str, default=None,
+        choices=["metered", "hybrid", "subscription"],
+        help="Override AI provider routing for this run: "
+             "metered = the --metered-provider backend everywhere, "
+             "hybrid = the --metered-provider backend for fast/bulk calls + claude_code "
+             "(subscription) for quality calls, "
+             "subscription = claude_code everywhere",
+    )
+    parser.add_argument(
+        "--metered-provider", type=str, default="claude", dest="metered_provider",
+        choices=["claude", "codex", "gemini", "openrouter"],
+        help="Which metered API backend --ai-mode metered/hybrid uses for their non-subscription "
+             "tier(s): claude=Anthropic API, codex=OpenAI, gemini=Google Gemini, "
+             "openrouter=OpenRouter (any model behind one key). Defaults to claude; ignored "
+             "without --ai-mode and ignored by --ai-mode subscription.",
+    )
     args = parser.parse_args()
+
+    if args.ai_mode:
+        _AI_MODE_PROVIDERS = {
+            "metered":      (args.metered_provider, args.metered_provider),
+            "hybrid":       (args.metered_provider, "claude_code"),
+            "subscription": ("claude_code",          "claude_code"),
+        }
+        fast, quality = _AI_MODE_PROVIDERS[args.ai_mode]
+        os.environ["FAST_PROVIDER"] = fast
+        os.environ["QUALITY_PROVIDER"] = quality
 
     sys.path.insert(0, str(ROOT))
 

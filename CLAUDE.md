@@ -123,6 +123,7 @@ python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
 python run.py --stage 4 --send
 python run.py --stage 5 --company "Meta" --role "Senior PM"
 python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
+python run.py --ai-mode {metered,hybrid,subscription} --metered-provider {claude,codex,gemini,openrouter}  # Per-run override
 ```
 
 ## Key Design Patterns
@@ -167,6 +168,7 @@ Set `AI_PROVIDER` in `config/settings.py`:
 | `"claude_code"` | Claude Code subscription (`claude /login`) | `sonnet` |
 | `"gemini"` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
 | `"codex"` | `OPENAI_API_KEY` | `gpt-4o` |
+| `"openrouter"` | `OPENROUTER_API_KEY` | `openrouter/auto` |
 
 Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (strong).
 
@@ -183,6 +185,15 @@ on this path, and `ANTHROPIC_API_KEY` must **not** be present in the environment
 would prefer it and bill metered) — `_chat_claude_code` pops it from `os.environ` before calling.
 For headless auth (e.g. CI), run `claude setup-token` locally once (requires Pro/Max) and set
 the resulting value as `CLAUDE_CODE_OAUTH_TOKEN` in the environment instead of `/login`.
+
+**`gemini` / `codex` / `openrouter` (alternative metered APIs):** `gemini` and `codex` call
+Google/OpenAI directly; `openrouter` calls [OpenRouter](https://openrouter.ai)'s
+OpenAI-compatible endpoint, which fronts many vendors' models (Anthropic, OpenAI, Google,
+Meta, ...) behind one `OPENROUTER_API_KEY` — set the actual model per tier via
+`MODEL_OVERRIDES["openrouter"]` (ids look like `"anthropic/claude-3.5-sonnet"`,
+`"openai/gpt-4o-mini"`; see https://openrouter.ai/models). All three are wired the same way
+as `claude`/`claude_code` in `scripts/utils.py`'s `_BACKENDS` — no other code changes needed
+to add a fourth in the future.
 
 ### Hybrid tiering (`FAST_PROVIDER` / `QUALITY_PROVIDER`)
 
@@ -201,6 +212,20 @@ while `FAST_PROVIDER=claude` keeps the bulk/many-small-call stages on the cheap,
 session-window-independent path. `_chat_claude_code` raises a clear error (not a silent hang)
 if a call hits the subscription's usage cap — re-running is safe since stages are idempotent
 via Notion status.
+
+### Runtime override (`--ai-mode`)
+
+`run.py --ai-mode {metered,hybrid,subscription}` sets `FAST_PROVIDER`/`QUALITY_PROVIDER` env
+vars for that single process before any `config.settings` import — the interactive equivalent
+of hand-setting those env vars, without editing `config/settings.py` or a `.env` file.
+`--metered-provider {claude,codex,gemini,openrouter}` (default `claude`) picks which metered
+backend fills the non-subscription tier(s): `metered` → that provider on both tiers,
+`hybrid` → that provider on the fast tier + `claude_code` on quality, `subscription` →
+`claude_code`/`claude_code` regardless of `--metered-provider`. E.g. `--ai-mode metered
+--metered-provider openrouter` runs both tiers through OpenRouter for one run. It takes
+precedence over `.env` for that run only and does not persist; the next run without the flag
+reverts to config defaults. Omitting `--ai-mode` leaves today's behavior untouched,
+including the nightly workflow, which never passes it and keeps its own env vars.
 
 ## Development Notes
 

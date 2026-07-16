@@ -191,7 +191,7 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages (run.py is the only entry point in use).
-# Options: "claude" (metered API) | "claude_code" (subscription) | "gemini" | "codex"
+# Options: "claude" (metered API) | "claude_code" (subscription) | "gemini" | "codex" | "openrouter"
 #
 # "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
 # No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
@@ -210,7 +210,9 @@ STAGE_AI_PROVIDER = ""
 # "claude_code" (subscription) once ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN + `claude
 # setup-token` are set up for headless auth. Both default to AI_PROVIDER's value, matching
 # today's all-metered behavior for local/manual runs; only overridden when the env vars below
-# are set (e.g. in the GitHub Actions workflow env).
+# are set (e.g. in the GitHub Actions workflow env). Interactively, `python run.py
+# --ai-mode {metered,hybrid,subscription}` sets these same two env vars for a single run
+# without editing this file.
 FAST_PROVIDER    = os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER
 QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
 
@@ -223,23 +225,26 @@ QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
 AI_MODEL_OVERRIDE = "claude-haiku-4-5-20251001"   # fast/cheap — stages 1, 3 (claude only)
 QUALITY_MODEL     = "claude-sonnet-5"             # strong — stages 2, 5, 6 (claude only)
 
-# Per-provider model overrides for gemini/codex/claude_code — keyed by provider, each with
-# "fast" (stages 1/3) and "quality" (stages 2/5/6) entries. Blank/missing falls back to that
-# backend's built-in default (see _DEFAULTS in scripts/utils.py). This is what makes switching
-# AI_PROVIDER (or a single tier via FAST_PROVIDER/QUALITY_PROVIDER) to gemini/codex safe to do
-# at any time — the right model comes along with the provider instead of being a separate,
-# easy-to-forget field.
+# Per-provider model overrides for gemini/codex/openrouter/claude_code — keyed by provider,
+# each with "fast" (stages 1/3) and "quality" (stages 2/5/6) entries. Blank/missing falls back
+# to that backend's built-in default (see _DEFAULTS in scripts/utils.py). This is what makes
+# switching AI_PROVIDER (or a single tier via FAST_PROVIDER/QUALITY_PROVIDER) to gemini/codex/
+# openrouter safe to do at any time — the right model comes along with the provider instead of
+# being a separate, easy-to-forget field. OpenRouter model ids are "<vendor>/<model>" (see
+# https://openrouter.ai/models) — its own default is the "openrouter/auto" router if unset.
 MODEL_OVERRIDES = {
-    # "gemini": {"fast": "gemini-2.0-flash", "quality": "gemini-1.5-pro"},
-    # "codex":  {"fast": "gpt-4o-mini",      "quality": "gpt-4o"},
+    # "gemini":     {"fast": "gemini-2.0-flash",        "quality": "gemini-1.5-pro"},
+    # "codex":      {"fast": "gpt-4o-mini",             "quality": "gpt-4o"},
+    # "openrouter": {"fast": "openai/gpt-4o-mini",      "quality": "anthropic/claude-3.5-sonnet"},
 }
 
 # --- API Keys -----------------------------------------------
 APIFY_API_TOKEN   = os.environ.get("APIFY_API_TOKEN", "")   # set in your env — https://apify.com (free token)
 NOTION_API_KEY    = os.environ.get("NOTION_API_KEY", "")   # set in your env (the integration token; DB is shared & working)
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
-GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")   # set in your env (required for AI_PROVIDER="gemini")
-OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")   # set in your env (required for AI_PROVIDER="codex")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")   # set in your env (metered API key for AI_PROVIDER="claude")
+GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")   # set in your env (required for AI_PROVIDER="gemini")
+OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY", "")   # set in your env (required for AI_PROVIDER="codex")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")   # set in your env (required for AI_PROVIDER="openrouter" — https://openrouter.ai)
 HUNTER_API_KEY    = os.environ.get("HUNTER_API_KEY", "")   # set in your env (Step 7 Phase 0 spike — Hunter.io email finder/verifier)
 
 # --- Step 7 Phase 0 spike (communications subsystem) ---------
