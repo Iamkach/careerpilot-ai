@@ -29,16 +29,6 @@ run before any Phase 1+ code.
 Full spec: `docs/backlog/step-7-communications-subsystem.md` and
 `docs/refinement-plans/communications/communications-subsystem.md`.
 
-## Step 8 — Runtime `--ai-mode` flag (not started)
-
-Add `run.py --ai-mode {metered,hybrid,subscription}` so AI provider routing
-(`FAST_PROVIDER`/`QUALITY_PROVIDER`) can be picked per invocation instead of only via config
-edits or env vars (today only the nightly workflow overrides the default). XS-sized, no
-dependencies.
-
-Full spec: `docs/backlog/step-8-runtime-ai-mode-flag.md` and
-`docs/refinement-plans/ai-provider/runtime-ai-mode-flag.md`.
-
 ## Step 9 — Evals / testing strategy (not started)
 
 The repo has zero automated tests and no `on: pull_request`/`on: push` CI trigger today —
