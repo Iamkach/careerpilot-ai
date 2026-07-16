@@ -112,6 +112,23 @@ New `scripts/sources.py`: `KEYWORD_SOURCES` (LinkedIn, Indeed via Apify) and `BO
 - `run()` restructured to global gather → collapse → filter → score (a duplicate can span
   roles and sources, so per-role processing couldn't see it before).
 
+## Step 8 — Runtime `--ai-mode` flag + dynamic metered provider
+
+`run.py --ai-mode {metered,hybrid,subscription}` sets `FAST_PROVIDER`/`QUALITY_PROVIDER` env
+vars for a single invocation, before any `config.settings` import — the interactive equivalent
+of hand-setting those env vars, without editing `config/settings.py` or `.env`. Omitting the
+flag leaves today's behavior (including the nightly workflow's own env vars) untouched.
+
+Expanded beyond the original spec: the metered tier is no longer hardwired to `claude`.
+`--metered-provider {claude,codex,gemini,openrouter}` (default `claude`) picks which metered
+backend fills `metered`'s both tiers / `hybrid`'s fast tier (`subscription` ignores it —
+always `claude_code`/`claude_code`). This required a fourth metered backend: `openrouter`
+(`scripts/utils.py` `_chat_openrouter`) — OpenRouter's OpenAI-compatible endpoint, fronting
+many vendors' models (Anthropic, OpenAI, Google, Meta, ...) behind one `OPENROUTER_API_KEY`,
+wired into `_BACKENDS`/`_DEFAULTS`/`MODEL_OVERRIDES` the same way as the existing
+`claude`/`gemini`/`codex` providers — no changes needed to `_active_provider()`'s resolution
+logic.
+
 ## Not in any refinement plan, but shipped
 
 - Stage 2 sponsorship gate (`RESTRICTED_SPONSORSHIP_COMPANIES`, `_sponsorship_gate()` in
