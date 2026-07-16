@@ -6,7 +6,7 @@ notion-client>=2.2.1,<2.6  # Primary data store (job tracker DB); 2.6+/3.x dropp
 
 # Optional providers (only needed if AI_PROVIDER is changed)
 google-generativeai>=0.8.0 # Gemini provider
-openai>=1.40.0             # Codex/OpenAI provider
+openai>=1.40.0             # Codex/OpenAI provider (also used for the OpenRouter provider — OpenAI-compatible API)
 docxtpl>=0.18.0            # Render tailored resume into a .docx template (stage 2)
 
 # Optional — Stage 4 Gmail digest sending
