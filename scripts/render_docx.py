@@ -143,11 +143,15 @@ def _replace_para_text(para, old: str, new: str) -> None:
         para.add_run(full)
 
 
-def apply_docx_edits(base_path: str, edits: list, out_path: str) -> str:
+def apply_docx_edits(base_path: str, edits: list, out_path: str) -> tuple[str, list]:
     """Copy base_path to out_path and apply targeted text replacements.
 
     edits: list of {"old": <exact existing text>, "new": <replacement text>}
     Each edit matches the first paragraph whose text contains the "old" string.
+
+    Returns (out_path, unmatched_edits) — unmatched_edits lists any edit whose
+    "old" text wasn't found in any paragraph, so the caller can surface it
+    instead of it silently vanishing.
     """
     try:
         from docx import Document
@@ -163,6 +167,7 @@ def apply_docx_edits(base_path: str, edits: list, out_path: str) -> str:
     shutil.copy2(base_path, out_path)
     doc = Document(out_path)
 
+    unmatched = []
     for edit in edits:
         old = (edit.get("old") or "").strip()
         new = (edit.get("new") or "").strip()
@@ -172,9 +177,11 @@ def apply_docx_edits(base_path: str, edits: list, out_path: str) -> str:
             if old in para.text:
                 _replace_para_text(para, old, new)
                 break
+        else:
+            unmatched.append(edit)
 
     doc.save(out_path)
-    return out_path
+    return out_path, unmatched
 
 
 def resume_data_to_text(data: dict) -> str:

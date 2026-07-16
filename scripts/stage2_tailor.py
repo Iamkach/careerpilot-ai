@@ -285,12 +285,23 @@ Return ONLY a JSON array (no markdown fences, no commentary):
 
 # ── Save tailored resume to file ─────────────────────────────
 
-def save_resume(edits: list, job: dict) -> str:
+def _resume_title_line(resume_text: str) -> str:
+    """The resume's header role line — 3rd non-empty line (name, contact, title)."""
+    lines = [l for l in resume_text.split("\n") if l.strip()]
+    return lines[2] if len(lines) > 2 else ""
+
+
+def save_resume(edits: list, job: dict, resume_text: str) -> str:
     """Apply edits to the base .docx and save to output/resumes/.
 
     Copies Achyuth_Resume.docx, patches each edited paragraph in-place, and
     writes a plain-text mirror alongside the .docx for quick review.
     Returns the path to the saved .docx.
+
+    The header title line is forced to match job["title"] deterministically
+    rather than relying on the AI to have proposed a matching edit — the AI's
+    title-line edit is easy to drop (token budget in large batches, exact-match
+    quoting) since it's the only purely mechanical edit in the list.
     """
     ensure_dirs()
     safe_company = "".join(c for c in job["company"] if c.isalnum() or c in " _-").strip()
@@ -299,7 +310,17 @@ def save_resume(edits: list, job: dict) -> str:
     docx_path = str(Path(RESUMES_DIR) / f"{stem}.docx")
     base = str(ROOT / RESUME_TEMPLATE_PATH)
 
-    apply_docx_edits(base, edits, docx_path)
+    title_line = _resume_title_line(resume_text)
+    job_title = (job.get("title") or "").strip()
+    final_edits = list(edits)
+    if title_line and job_title and title_line.strip().lower() != job_title.lower():
+        final_edits = [e for e in final_edits if (e.get("old") or "").strip() != title_line]
+        final_edits.insert(0, {"old": title_line, "new": job_title})
+
+    docx_path, unmatched = apply_docx_edits(base, final_edits, docx_path)
+    if unmatched:
+        for e in unmatched:
+            log(f"  ⚠ Edit did not match any paragraph, skipped: {e.get('old', '')[:80]!r}")
 
     # Plain-text mirror: re-extract from the saved docx for quick review.
     txt_path = docx_path.replace(".docx", ".txt")
@@ -382,7 +403,7 @@ def run(min_score: int = 0):
             if dropped:
                 log(f"  ↳ Stage 1 flagged but not injected: {', '.join(dropped)}")
 
-        file_path = save_resume(edits, job)
+        file_path = save_resume(edits, job, resume_text)
         log(f"  ✓ Saved: {file_path}")
 
         tailored_text = extract_docx_text(file_path)
