@@ -1,12 +1,10 @@
 # 🤖 AI Job Search Pipeline
 
-[![Nightly Pipeline](https://github.com/Iamkach/careerpilot-ai/actions/workflows/nightly-pipeline.yml/badge.svg)](https://github.com/Iamkach/careerpilot-ai/actions/workflows/nightly-pipeline.yml)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](https://github.com/Iamkach/careerpilot-ai/actions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![AI Provider](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20OpenRouter-8a2be2.svg)](#switching-ai-provider)
 [![Data store](https://img.shields.io/badge/data%20store-Notion-black.svg)](https://www.notion.so/)
-[![Last commit](https://img.shields.io/github/last-commit/Iamkach/careerpilot-ai.svg)](https://github.com/Iamkach/careerpilot-ai/commits)
-[![Issues](https://img.shields.io/github/issues/Iamkach/careerpilot-ai.svg)](https://github.com/Iamkach/careerpilot-ai/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Iamkach/careerpilot-ai/pulls)
+[![Repo](https://img.shields.io/badge/repo-private-lightgrey.svg)](https://github.com/Iamkach/careerpilot-ai)
 
 Automated job search system using the Claude API — no N8N, no VPS required.
 Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, scores
