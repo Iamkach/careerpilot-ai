@@ -22,20 +22,23 @@ run before any Phase 1+ code.
 Full spec: `docs/backlog/step-7-communications-subsystem.md` and
 `docs/refinement-plans/communications/communications-subsystem.md`.
 
-## Step 9 — Evals / testing strategy (not started)
+## Step 9 — Evals / testing strategy (Phases 0-4 done, Phase 5 not started)
 
-The repo has zero automated tests and no `on: pull_request`/`on: push` CI trigger today —
-`.github/workflows/nightly-pipeline.yml` is the live production cron job, not a test gate.
-Phased plan: a mocked pytest harness (Phase 0) covering pure functions (Phase 1 — `sources.py`
-fingerprinting/filtering, `utils.py`'s `parse_json_response`), docx golden-file tests (Phase 2),
-mocked AI-flow contract tests (Phase 3 — `score_jobs_batch`, tailoring fallback, InMail
-truncation), and a new CI gate (Phase 4) — all free, no API keys, no live calls. A separate
-opt-in Phase 5 adds a hand-labeled dataset + `scripts/run_evals.py` that hits the real Anthropic
-API to track AI *judgment* quality (score accuracy, keyword recall) around prompt/model changes
-— deliberately not part of CI. Also documents (without fixing) a few real gaps found during the
-audit: an unclamped ATS score in `score_jobs_batch`, an inconsistent JSON-parsing fallback in
-stage 3's cold-email path, missing `<ul>` wrapping in the stage 5/6 markdown→HTML converters, and
-stage 6's negotiation-brief prompt claiming "web search" with no actual search tool call.
+`.github/workflows/tests.yml` now runs the full mocked pytest suite (129 tests, ~1.5s) on
+every `pull_request`/`push`, with no API keys and no Claude Code login required anywhere in it
+— separate from `.github/workflows/nightly-pipeline.yml`, the live production cron job, which
+is untouched. Landed: pure-function unit tests (Phase 1 — `sources.py` fingerprinting/filtering,
+`utils.py`'s `parse_json_response`), docx golden-file tests (Phase 2), a one-time real-call
+recording pass via Claude Code whose output lives under `tests/fixtures/recorded_ai_responses/`
+(Phase 3a, never re-run in CI), and mocked AI-flow contract tests seeded from those recordings
+(Phase 3b — `score_jobs_batch`'s chunk-boundary isolation, tailoring fallback, InMail
+truncation). A separate opt-in Phase 5 would add a hand-labeled dataset + `scripts/run_evals.py`
+that hits the real Anthropic API to track AI *judgment* quality (score accuracy, keyword
+recall) around prompt/model changes — deliberately not part of CI, and not yet built. The
+suite also documents (without fixing) a few real gaps found during the audit: an unclamped ATS
+score in `score_jobs_batch`, an inconsistent JSON-parsing fallback in stage 3's cold-email path,
+missing `<ul>` wrapping in the stage 5/6 markdown→HTML converters, and stage 6's
+negotiation-brief prompt claiming "web search" with no actual search tool call.
 
 Full spec: `docs/backlog/step-9-evals-testing.md` and
 `docs/refinement-plans/testing/evals-strategy.md`.
