@@ -141,3 +141,53 @@ logic.
   §1 and `workflow.py` §4 — `workflow.py` itself was deleted (`cc7b6d8`), making `run.py` the
   sole entry point, and the default provider switched to metered `claude` for interactive runs
   (`ab97add`). Don't resurrect the `AI_ROUTING` design; this is the shipped replacement.
+
+## Step 9 — Evals / testing strategy
+
+The repo had zero automated tests and no `on: pull_request`/`on: push` CI trigger before this
+story — `.github/workflows/nightly-pipeline.yml` is the live production cron job, not a test
+gate. Landed in six phases (0-5), all independently shippable:
+
+- **Phase 0** — `requirements-dev.txt` (`pytest`, `pytest-mock`), `tests/conftest.py` (a fake
+  `ai_chat`/`ai_chat_blocks` monkeypatch and an in-memory fake Notion layer over `scripts/utils.py`'s
+  `db_*` functions), and `.github/workflows/tests.yml` on `pull_request`/`push`, separate from
+  `nightly-pipeline.yml`.
+- **Phase 1** — pure-function unit tests: `sources.py` (`job_fingerprint`,
+  `collapse_by_fingerprint`, `title_matches_targets`, `_is_fresh`, `_to_iso_date`,
+  `_parse_salary`), `utils.py` (`matches_company_list`, `parse_json_response`),
+  `stage2_tailor.py`'s `_sponsorship_gate`, `stage6_negotiate.py`'s `get_company_type`, and
+  characterization tests for the stage 5/6 markdown→HTML converters' missing `<ul>` wrapping.
+- **Phase 2** — docx golden-file tests for `render_docx.py`'s `extract_docx_text` /
+  `apply_docx_edits`, including characterization tests for the run-collapsing formatting-loss and
+  same-paragraph double-edit clobber edge cases.
+- **Phase 3a** — a one-time real-call recording pass via Claude Code (free under the
+  subscription), run manually against `score_jobs_batch`/`_score_jobs_chunk`,
+  `tailor_resumes_batch`/`_tailor_resume_single`, and stage 3's outreach draft call at batch
+  sizes bracketing the chunk boundary (1, 20, 21, 50, 100+) plus empty/garbled-description and
+  huge-keyword-hint inputs. Saved verbatim under `tests/fixtures/recorded_ai_responses/`; never
+  re-run by CI.
+- **Phase 3b** — mocked AI-flow contract tests seeded from the Phase 3a recordings (not
+  hand-typed), including a permanent regression test for the 2026-07-16 incident where
+  `score_jobs_batch` sent an entire 100+-job scrape in one AI call, truncating the JSON reply
+  and blanking every job's score — now split into `_SCORE_CHUNK_SIZE`-sized chunks, and a test
+  asserts one chunk's failure only blanks that chunk's jobs, not the whole batch. Also documents
+  (without fixing) the unclamped-ATS-score gap and the cold-email fallback's ad-hoc JSON
+  stripping.
+- **Phase 4** — `tests.yml` runs the full mocked suite (129 tests, ~1.5s) on every PR/push, no
+  `ANTHROPIC_API_KEY`/`NOTION_API_KEY`/`APIFY_API_TOKEN` or Claude Code login needed anywhere.
+- **Phase 5** — `scripts/run_evals.py`, a standalone opt-in script (never invoked by `run.py`,
+  `--evaluate`, or any CI workflow) that hits the real Anthropic API against a 10-entry
+  hand-labeled dataset (`tests/eval_data/jobs.json`) covering strong/medium/weak resume-match
+  quality, a staffing-agency posting, explicit and ambiguous sponsorship language, and
+  empty/garbled JDs (excluded from aggregates, observational only). Reports score-hit-rate
+  (predicted score vs. human-assigned expected range), sponsorship/company-type classification
+  accuracy, fuzzy keyword recall against a labeled missing-keywords set, and (with `--tailor`)
+  stage 2's before→after ATS delta. `--comp-check` prints one sample stage 6 negotiation brief
+  for manual staleness review — there's no fixed oracle for comp-benchmark accuracy, since
+  `generate_negotiation_brief`'s prompt draws on the model's own training knowledge despite the
+  module docstring's "Claude + web search" claim (no actual search tool is called). Intended to
+  be run manually around prompt or `QUALITY_MODEL`/`AI_MODEL_OVERRIDE` changes, not on a
+  schedule.
+
+Full spec (retired): `docs/backlog/step-9-evals-testing.md` and
+`docs/refinement-plans/testing/evals-strategy.md`.
