@@ -1,9 +1,129 @@
 {
+  "1Password": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "A16Z GAMES": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "A3 Solutions, Inc.": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "AMroute LLC": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Abbott Laboratories": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Abridge": {
+    "ashby": "abridge",
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Acceler8 Talent (YC AI Startup)": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Accenture Federal Services": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": "accenturefederalservices",
+    "lever": null
+  },
+  "Accylerate": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
   "Acme Nonexistent": {
     "ashby": null,
     "checked": "2026-07-13",
     "greenhouse": null,
     "lever": null
+  },
+  "Aditi Consulting": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Adobe": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "AgileGrid Solutions": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "AiMinr": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Aircover.ai": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Akina Inc.": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Altana": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Ansco & Associates, LLC": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Artie": {
+    "ashby": "artie",
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Ascot Group": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": null
+  },
+  "Atom Computing": {
+    "ashby": null,
+    "checked": "2026-07-16",
+    "greenhouse": null,
+    "lever": "atomcomputing"
   },
   "Figma": {
     "ashby": null,
