@@ -24,8 +24,8 @@ _load_local_env()
 
 # --- Your profile -------------------------------------------
 YOUR_NAME        = "Krishna Achyuth"
-YOUR_EMAIL       = "kachyuth06@example.com"
-YOUR_BIO         = "2-line professional bio used in outreach emails" #TODO: write a concise, compelling bio that highlights your experience and value proposition as a Senior Software Engineer.
+YOUR_EMAIL       = "kachyuth06@gmail.com"
+YOUR_BIO         = "Senior Software Engineer with deep experience building scalable, reliable products across backend, full-stack, and cloud systems. I bring strong technical execution, product-minded judgment, and a track record of turning complex requirements into maintainable software that moves business outcomes."
 
 # --- Job search targets -------------------------------------
 TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
@@ -196,7 +196,7 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 # "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
 # No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
 # runs independently of any subscription session, and prompt caching is enabled.
-AI_PROVIDER = "claude"
+AI_PROVIDER = "codex"
 
 # Optional: route stage scripts (run.py path) through a different provider than AI_PROVIDER.
 # Leave blank to fall through to AI_PROVIDER above (default behavior).
