@@ -1,0 +1,15 @@
+{
+  "scenario": "score_jobs_batch, 1 job(s), chunk 0/1",
+  "function": "score_jobs_batch/_score_jobs_chunk",
+  "recorded_at": "2026-07-17T01:30:48.824274+00:00",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "input_summary": {
+    "job_count": 1,
+    "chunk_index": 0,
+    "chunk_count": 1
+  },
+  "raw_response": "```json\n[\n  {\n    \"url\": \"https://example.com/jobs/0\",\n    \"score\": 87,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  }\n]\n```",
+  "parse_success": true,
+  "parse_error": null
+}
