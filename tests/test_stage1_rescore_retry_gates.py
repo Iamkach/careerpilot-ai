@@ -83,3 +83,46 @@ def test_rescore_retry_jobs_recovers_normally_when_nothing_is_gated(
     assert counters["filtered"] == 0
     assert fake_db._pages[page_id]["status"] == "Scraped"
     assert fake_db._pages[page_id]["ats_score"] == 80
+
+
+# ── Phase 3b: give-up boundary (docs/backlog/step-9-evals-testing.md Phase 3b) ─────────────
+
+def test_rescore_retry_jobs_still_retries_under_the_attempt_ceiling(
+    monkeypatch, patch_ai_chat, patch_notion_db,
+):
+    """A job whose scoring keeps failing stays in 'Retry' (not given up) as long as the next
+    attempt count is still <= MAX_SCORING_ATTEMPTS."""
+    monkeypatch.setattr(stage1_scrape, "MAX_SCORING_ATTEMPTS", 3)
+    fake_db = patch_notion_db(stage1_scrape)
+    page_id = fake_db.seed(status="Retry", title="Backend Engineer", company="Acme Corp",
+                            url="u1", description="jd", scoring_attempts=1)
+    fake = patch_ai_chat(stage1_scrape)
+    fake.raises = RuntimeError("simulated AI failure")
+
+    counters = stage1_scrape.rescore_retry_jobs("resume text")
+
+    assert counters == {"recovered": 0, "filtered": 0, "given_up": 0, "still_retrying": 1}
+    assert fake_db._pages[page_id]["status"] == "Retry"
+    assert fake_db._pages[page_id]["scoring_attempts"] == 2
+
+
+def test_rescore_retry_jobs_gives_up_once_attempts_exceed_the_ceiling(
+    monkeypatch, patch_ai_chat, patch_notion_db,
+):
+    """Once the NEXT attempt count would exceed MAX_SCORING_ATTEMPTS, rescore_retry_jobs stops
+    retrying forever and promotes the job to 'Scraped' with an empty score instead — never
+    fabricating a score, but also never leaving it stuck in 'Retry' indefinitely."""
+    monkeypatch.setattr(stage1_scrape, "MAX_SCORING_ATTEMPTS", 3)
+    fake_db = patch_notion_db(stage1_scrape)
+    page_id = fake_db.seed(status="Retry", title="Backend Engineer", company="Acme Corp",
+                            url="u1", description="jd", scoring_attempts=3)
+    fake = patch_ai_chat(stage1_scrape)
+    fake.raises = RuntimeError("simulated AI failure")
+
+    counters = stage1_scrape.rescore_retry_jobs("resume text")
+
+    assert counters == {"recovered": 0, "filtered": 0, "given_up": 1, "still_retrying": 0}
+    rec = fake_db._pages[page_id]
+    assert rec["status"] == "Scraped"
+    assert rec["scoring_attempts"] == 4
+    assert rec.get("ats_score") is None  # never a fabricated score

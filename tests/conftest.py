@@ -284,6 +284,57 @@ def fixture_docx_path(tmp_path) -> Path:
     return path
 
 
+# ── Phase 3a recorded-response loader ────────────────────────────────────
+
+RECORDED_DIR = ROOT / "tests" / "fixtures" / "recorded_ai_responses"
+
+
+def load_recorded(subdir: str, name: str) -> str:
+    """Return the raw_response text of a Phase 3a recording
+    (tests/fixtures/recorded_ai_responses/<subdir>/<name>.json). Phase 3b tests replay this
+    exact real-model text through ai_chat/ai_chat_blocks instead of a hand-authored mock —
+    see tests/fixtures/recorded_ai_responses/README.md."""
+    path = RECORDED_DIR / subdir / f"{name}.json"
+    import json as _json
+    return _json.loads(path.read_text(encoding="utf-8"))["raw_response"]
+
+
+# Mirrors tests/record_ai_responses.py's make_jobs() exactly (same URL/company/title
+# sequence), so a Phase 3b test can regenerate the identical job list a Phase 3a recording
+# was made against without importing the recording script itself (which sets
+# FAST_PROVIDER/QUALITY_PROVIDER env vars as an import side effect).
+_RECORDED_TITLES = [
+    "Senior Backend Engineer", "Staff Software Engineer", "Full-Stack Engineer",
+    "Platform Engineer", "Senior Software Engineer, Infrastructure", "Backend Engineer II",
+    "Software Engineer, Distributed Systems", "Senior Cloud Engineer",
+]
+_RECORDED_COMPANIES = [
+    "Acme Corp", "Beta Inc", "Gamma LLC", "Delta Systems", "Epsilon Labs", "Zeta Cloud",
+    "Theta Analytics", "Iota Networks", "Kappa Technologies", "Lambda Software",
+]
+
+
+def make_recorded_jobs(n: int) -> list[dict]:
+    jobs = []
+    for i in range(n):
+        title = _RECORDED_TITLES[i % len(_RECORDED_TITLES)]
+        company = f"{_RECORDED_COMPANIES[i % len(_RECORDED_COMPANIES)]} {i // len(_RECORDED_COMPANIES) or ''}".strip()
+        jobs.append({
+            "url": f"https://example.com/jobs/{i}",
+            "title": title,
+            "company": company,
+            "location": "Remote - US",
+            "description": (
+                f"We are hiring a {title} at {company}. Looking for experience with "
+                "Python, AWS, Kubernetes, PostgreSQL, and distributed systems. "
+                "Must be authorized to work in the US."
+            ),
+            "applicant_count": 10 + i,
+            "salary_range": "$140,000 - $190,000",
+        })
+    return jobs
+
+
 @pytest.fixture
 def sample_jobs(sample_job) -> list[dict]:
     second = {
