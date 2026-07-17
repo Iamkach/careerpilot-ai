@@ -28,6 +28,19 @@ canned responses) rather than hitting the real Anthropic API on every PR — fas
 deterministic, no flakiness, no `ANTHROPIC_API_KEY` needed in the PR-gate workflow. A separate
 opt-in script (Phase 5) hits the real API for periodic quality checks only.
 
+**Revised after a 2026-07-16 production incident:** `score_jobs_batch` sent an entire scrape's
+worth of candidates (100+) in one AI call capped at the default 4096 output tokens; the JSON
+reply truncated mid-array, the whole batch failed to parse, and all 104 jobs landed in Notion as
+`Retry` with a blank score. Fixed by chunking (`_SCORE_CHUNK_SIZE = 20`). The failure mode is
+structural: a **hand-authored** canned mock is well-formed JSON by construction, so Phase 3 as
+originally scoped — engineer imagines plausible/malformed responses and types them in — can never
+produce the shape of a real truncated response and would not have caught this bug even at 100%
+mocked-suite pass. Phase 3 is therefore split into 3a (a manual recording pass against the real
+model via Claude Code, free under the subscription, run to actually observe large-batch and
+near-truncation behavior) and 3b (the mocked contract tests, now seeded from those recordings
+instead of invented from scratch). 3a is not part of CI — same treatment as Phase 5 — only its
+saved fixture output is.
+
 ### Phase 0 — Harness setup (Size: S, depends on: none)
 
 - New `requirements-dev.txt` at repo root: `pytest`, `pytest-mock`. Keeps the prod
@@ -103,14 +116,44 @@ stage 2. This makes it a strong golden-file/snapshot-testing candidate.
   - Same-paragraph double-edit: two edits whose `old` text overlaps within the same paragraph can
     clobber each other, since only the *first* occurrence of each `old` is replaced.
 
-### Phase 3 — Mocked AI-flow contract tests (Size: M, depends on: Phase 0)
+### Phase 3a — Real-call recording pass via Claude Code (Size: S, depends on: Phase 0, NOT part of CI)
 
-With `ai_chat`/`ai_chat_blocks` monkeypatched to return fixed canned JSON/text, test the
-**plumbing** around each AI call — not whether the AI's judgment is good (that's Phase 5), but
-whether the code correctly handles what the AI could plausibly (or implausibly) return.
+Run before any mock is written. Purpose: observe what the real model actually returns for the
+inputs Phase 3b needs to test against, instead of an engineer guessing at plausible/malformed
+JSON shapes from imagination — the guessing approach is exactly what let the 2026-07-16
+large-batch-truncation bug through undetected by a "complete" mocked suite.
+
+- Set `AI_PROVIDER="claude_code"` (free under the subscription, no metered billing, no
+  `ANTHROPIC_API_KEY` needed) and call the real stage functions directly (not through `run.py`) —
+  `score_jobs_batch`/`_score_jobs_chunk`, `tailor_resumes_batch`/`_tailor_resume_single`, and
+  stage 3's outreach draft call.
+- Inputs to record, chosen to bracket the chunking boundary and other plumbing edges:
+  - Batch sizes of 1, `_SCORE_CHUNK_SIZE` (20), 21, 50, and 100+ jobs — the last two specifically
+    to reproduce the truncation failure mode directly against the real model, not just trust that
+    the chunking fix prevents it in theory.
+  - A job with an empty/garbled description, to see how the model actually responds rather than
+    assuming it always returns a clean `_unscored()`-shaped gap.
+  - A tailoring call with a deliberately long `missing_keywords` hint list.
+- Save each raw response (successes and any truncated/malformed ones) verbatim under
+  `tests/fixtures/recorded_ai_responses/`, plus a short note of the exact input that produced it.
+  These recordings are what Phase 3b's mocks return — not hand-typed strings.
+- Re-run manually (not on a schedule) whenever a prompt, `_SCORE_CHUNK_SIZE`, or provider default
+  changes enough that the saved recordings might no longer reflect real model behavior.
+
+### Phase 3b — Mocked AI-flow contract tests (Size: M, depends on: Phase 3a)
+
+With `ai_chat`/`ai_chat_blocks` monkeypatched to return the **recorded** responses from Phase 3a
+(supplemented with a minimal number of hand-authored cases only for branches no recording
+happened to exercise), test the **plumbing** around each AI call — not whether the AI's judgment
+is good (that's Phase 5), but whether the code correctly handles what the AI actually returns.
 
 - **`stage1_scrape.score_jobs_batch`**
   - Happy path: well-formed batch response → correct per-job dicts.
+  - **Chunking regression (the 2026-07-16 incident, now a permanent test):** a candidate list
+    above `_SCORE_CHUNK_SIZE` is split into multiple `_score_jobs_chunk` calls; mock one chunk's
+    call to raise / return the recorded truncated-JSON response while others return normal
+    recordings, and assert only that chunk's jobs come back `_unscored()` — every other chunk's
+    jobs keep their real scores.
   - A job URL missing from the AI's returned array → that job falls back to `_unscored()`
     (`score: None, scored: False, sponsorship: "unknown", company_type: "unknown"`), not a
     fabricated score.
@@ -138,12 +181,13 @@ whether the code correctly handles what the AI could plausibly (or implausibly) 
     of reusing `parse_json_response`, unlike every other AI-parsing path in the codebase. A test
     locks in today's behavior; the inconsistency itself is a candidate for a future cleanup.
 
-### Phase 4 — CI gate live (Size: XS, depends on: Phases 0-3)
+### Phase 4 — CI gate live (Size: XS, depends on: Phases 0-3b)
 
-`tests.yml` runs `pytest` on every PR/push using only the Phase 0 mocks — no
-`ANTHROPIC_API_KEY`, `NOTION_API_KEY`, or `APIFY_API_TOKEN` required or used anywhere in the
-suite, so the workflow is free to run and has no external dependency to flake on. This is the
-concrete, mechanical fix for "no automated gate before `main`."
+`tests.yml` runs `pytest` on every PR/push using only the Phase 0 mocks, seeded from Phase 3a's
+saved recordings — no `ANTHROPIC_API_KEY`, `NOTION_API_KEY`, `APIFY_API_TOKEN`, or Claude Code
+login required or used anywhere in the suite, so the workflow is free to run and has no external
+dependency to flake on. Phase 3a's recording pass itself never runs in CI, only its output does.
+This is the concrete, mechanical fix for "no automated gate before `main`."
 
 ### Phase 5 — AI-quality eval layer (Size: M, depends on: Phases 0-4, harness reused; NOT part of CI)
 
@@ -177,8 +221,9 @@ mocked contract tests cannot see by construction, since they assert against cann
 | 0 — harness + CI wiring | S | none |
 | 1 — pure-function unit tests | S | Phase 0 |
 | 2 — docx golden-file tests | S | Phase 0 |
-| 3 — mocked AI-flow contract tests | M | Phase 0 |
-| 4 — CI gate live | XS | Phases 0-3 |
+| 3a — real-call recording pass (Claude Code) | S | Phase 0 |
+| 3b — mocked AI-flow contract tests | M | Phase 3a |
+| 4 — CI gate live | XS | Phases 0-3b |
 | 5 — AI-quality eval dataset + script | M | Phases 0-4 |
 
 Total story size: **M-L**. No blocking dependency on Step 7 or Step 8 — can start immediately.
@@ -187,12 +232,13 @@ Total story size: **M-L**. No blocking dependency on Step 7 or Step 8 — can st
 
 - Not fixing the bugs/inconsistencies this audit surfaced (unclamped ATS score, cold-email JSON-
   parsing inconsistency, missing `<ul>` wrapping in the markdown→HTML converters, stage 6's
-  no-actual-web-search prompt). Phases 1-3 deliberately write **characterization tests** that lock
+  no-actual-web-search prompt). Phases 1-3b deliberately write **characterization tests** that lock
   in current behavior and flag these as documented gaps — fixing them is separate future work,
   tracked as a note in `docs/TODO.md` alongside this story rather than folded into it.
-- Not adding real-API integration tests to CI. Phase 5's live-API script is opt-in/manual by
-  design; a metered API call on every PR is a cost and reliability trade-off this plan explicitly
-  avoids.
+- Not adding real-API/Claude-Code calls to the CI-gated suite. Phase 3a (like Phase 5's live-API
+  script) is opt-in/manual by design — its recordings feed Phase 3b's mocks, but CI itself never
+  re-runs it; a metered API call or subscription session on every PR is a cost and reliability
+  trade-off this plan explicitly avoids.
 - Not testing `scripts/spike_phase0_leads.py` (Step 7 Phase 0 spike, not part of the shipped
   6-stage pipeline) or `render_docx.render_resume_docx`/`normalize_resume_data` (the legacy
   Jinja2/`docxtpl` template path, superseded by `apply_docx_edits` and not used by the current
