@@ -10,6 +10,17 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   `python run.py --ingest`, confirm it lands on `Scraped` with a real score and cached JD (not
   silently retired). Re-run ingest twice to confirm the `existing_urls` snapshot doesn't treat
   the first run's output as a duplicate of itself.
+- **Known gaps characterized (not fixed) by the Step 9 test suite** — locked in by
+  characterization tests so a future fix has a single place to update, not blocking anything
+  today: `score_jobs_batch`'s `int(entry.get("score", 0))` has no bounds clamping, so a
+  hallucinated score of `150` or `-10` passes through uncaught (`scripts/stage1_scrape.py`);
+  stage 3's `_draft_cold_email_single` fallback does ad-hoc
+  `raw.strip().strip("```json").strip("```")` instead of reusing `parse_json_response`, unlike
+  every other AI-parsing path in the codebase; the stage 5/6 markdown→HTML converters never wrap
+  consecutive `<li>` lines in `<ul>`/`<ol>`, producing invalid list HTML; `stage6_negotiate.py`'s
+  `generate_negotiation_brief` module docstring claims "Claude + web search" but no actual
+  search tool is called — comp numbers come from the model's own training knowledge and can go
+  stale silently (`scripts/run_evals.py --comp-check` is the manual spot-check for this one).
 
 ## Step 7 — Communications subsystem (not started)
 
@@ -22,23 +33,3 @@ run before any Phase 1+ code.
 Full spec: `docs/backlog/step-7-communications-subsystem.md` and
 `docs/refinement-plans/communications/communications-subsystem.md`.
 
-## Step 9 — Evals / testing strategy (Phases 0-4 done, Phase 5 not started)
-
-`.github/workflows/tests.yml` now runs the full mocked pytest suite (129 tests, ~1.5s) on
-every `pull_request`/`push`, with no API keys and no Claude Code login required anywhere in it
-— separate from `.github/workflows/nightly-pipeline.yml`, the live production cron job, which
-is untouched. Landed: pure-function unit tests (Phase 1 — `sources.py` fingerprinting/filtering,
-`utils.py`'s `parse_json_response`), docx golden-file tests (Phase 2), a one-time real-call
-recording pass via Claude Code whose output lives under `tests/fixtures/recorded_ai_responses/`
-(Phase 3a, never re-run in CI), and mocked AI-flow contract tests seeded from those recordings
-(Phase 3b — `score_jobs_batch`'s chunk-boundary isolation, tailoring fallback, InMail
-truncation). A separate opt-in Phase 5 would add a hand-labeled dataset + `scripts/run_evals.py`
-that hits the real Anthropic API to track AI *judgment* quality (score accuracy, keyword
-recall) around prompt/model changes — deliberately not part of CI, and not yet built. The
-suite also documents (without fixing) a few real gaps found during the audit: an unclamped ATS
-score in `score_jobs_batch`, an inconsistent JSON-parsing fallback in stage 3's cold-email path,
-missing `<ul>` wrapping in the stage 5/6 markdown→HTML converters, and stage 6's
-negotiation-brief prompt claiming "web search" with no actual search tool call.
-
-Full spec: `docs/backlog/step-9-evals-testing.md` and
-`docs/refinement-plans/testing/evals-strategy.md`.
