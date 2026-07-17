@@ -204,17 +204,30 @@ def _unscored(job: dict) -> dict:
     }
 
 
+_SCORE_CHUNK_SIZE = 20  # keep each AI call's JSON reply well under any provider's default max_tokens
+
+
 def score_jobs_batch(jobs: list[dict], resume: str) -> list[dict]:
-    """Score all jobs in a single AI call →
+    """Score all jobs, chunked into calls of at most `_SCORE_CHUNK_SIZE` →
     [{url, score, scored, missing_keywords, sponsorship, company_type}].
-    Sponsorship classification here is a second-pass safety net; the deterministic
-    regex catches the clear cases before we even reach scoring.
-    On a call that fails outright (ai_chat exhausts its own retries) or a malformed
-    response, every job comes back `scored: False` — callers must queue those for retry,
-    never treat a missing/failed score as a real 0-100 value."""
+    A single AI call covering a large candidate list can have its JSON reply truncated by
+    the model's max_tokens cap, which fails parsing for the *whole* batch — chunking keeps
+    each call's expected output small enough to always fit, and one chunk's failure no
+    longer takes down every other candidate's score with it."""
     if not jobs:
         return []
+    results = []
+    for i in range(0, len(jobs), _SCORE_CHUNK_SIZE):
+        results.extend(_score_jobs_chunk(jobs[i:i + _SCORE_CHUNK_SIZE], resume))
+    return results
 
+
+def _score_jobs_chunk(jobs: list[dict], resume: str) -> list[dict]:
+    """Score one chunk of jobs in a single AI call. See score_jobs_batch for why chunking
+    matters; this function keeps the original single-call scoring logic per chunk.
+    On a call that fails outright (ai_chat exhausts its own retries) or a malformed
+    response, every job in this chunk comes back `scored: False` — callers must queue
+    those for retry, never treat a missing/failed score as a real 0-100 value."""
     job_list = "\n\n".join(
         f"{i+1}. URL: {j['url']}\n"
         f"   Title: {j.get('title','')}\n"
@@ -251,7 +264,8 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
   ...
 ]"""
     try:
-        raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with a valid JSON array.")
+        raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with a valid JSON array.",
+                           max_tokens=4096)
         data = parse_json_response(raw)
         if isinstance(data, dict):
             for key in ("results", "jobs", "scores"):
@@ -369,8 +383,16 @@ def ingest_interested_from_notion(resume: str) -> int:
 
 def rescore_retry_jobs(resume: str) -> dict:
     """Re-score every Status='Retry' job from its already-cached JD (no Apify call).
-    Returns {"recovered": n, "given_up": n, "still_retrying": n}."""
-    counters = {"recovered": 0, "given_up": 0, "still_retrying": 0}
+    Returns {"recovered": n, "filtered": n, "given_up": n, "still_retrying": n}.
+
+    A successfully-scored job is subject to the same post-scoring gates the normal scrape
+    path in run() applies (EXCLUDE_NO_SPONSORSHIP, SKIP_COMPANY_TYPES, MIN_ATS_SCORE) before
+    promotion to 'Scraped' — a job the fresh-scrape path would have silently dropped must not
+    survive just because it happened to fail scoring on its first pass and come through this
+    recovery path instead. A gated job moves to 'Disregard' (not 'Scraped') with a note
+    explaining why, since — unlike a fresh scrape, which simply never writes the page — this
+    job's Notion page already exists and needs an explicit terminal status."""
+    counters = {"recovered": 0, "filtered": 0, "given_up": 0, "still_retrying": 0}
     pages = db_get_jobs(status="Retry")
     if not pages:
         return counters
@@ -386,6 +408,26 @@ def rescore_retry_jobs(resume: str) -> dict:
     for job in candidates:
         s = score_by_url.get(job["url"]) or _unscored(job)
         if s["scored"]:
+            gate_reason = None
+            if EXCLUDE_NO_SPONSORSHIP and s["sponsorship"] == "no":
+                gate_reason = "no-sponsor/AI"
+            elif s["company_type"] in SKIP_COMPANY_TYPES:
+                gate_reason = "staffing/AI"
+            elif MIN_ATS_SCORE and s["score"] < MIN_ATS_SCORE:
+                gate_reason = f"low-ats-score:{s['score']}"
+
+            if gate_reason:
+                db_update_status(job["page_id"], "Disregard", {
+                    "ats_score":        s["score"],
+                    "sponsorship":      s["sponsorship"],
+                    "scoring_attempts": (job.get("scoring_attempts") or 0) + 1,
+                    "missing_keywords": s["missing_keywords"],
+                    "notes": f"Auto-filtered on recovery from Retry: [{gate_reason}]",
+                })
+                counters["filtered"] += 1
+                log(f"  ⊘ [{gate_reason}] Filtered on recovery: {job['company']} — {job['title']}")
+                continue
+
             db_update_status(job["page_id"], "Scraped", {
                 "ats_score":        s["score"],
                 "sponsorship":      s["sponsorship"],
@@ -522,6 +564,7 @@ def run():
     try:
         retry_counters = rescore_retry_jobs(resume)
         log(f"  Retry queue: {retry_counters['recovered']} recovered, "
+            f"{retry_counters['filtered']} filtered (no-sponsor/staffing/low-score), "
             f"{retry_counters['given_up']} given up, "
             f"{retry_counters['still_retrying']} still retrying")
     except Exception as e:

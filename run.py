@@ -13,6 +13,7 @@ Two-step daily flow:
 
   Individual stages:
     python run.py --stage 1               # Scrape only
+    python run.py --retry-only            # Re-score 'Retry' jobs only, no new scrape
     python run.py --stage 2 --min-score 65
     python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
     python run.py --stage 4 --send
@@ -193,6 +194,21 @@ def ingest_routine(args):
     print("   → Review them in Notion, set Status=Reviewed, then run: python run.py --evaluate")
 
 
+def retry_routine(args):
+    """Re-score only the jobs stuck in Status=Retry from their already-cached JD —
+    no Apify call, no scrape of new roles."""
+    print("\n🔁 RETRY — Re-score 'Retry' jobs")
+    print("=" * 45)
+    from scripts.utils import load_resume
+    from scripts.stage1_scrape import rescore_retry_jobs
+    counters = rescore_retry_jobs(load_resume())
+    print(
+        f"\n✅ Retry pass complete: {counters['recovered']} recovered, "
+        f"{counters['filtered']} filtered, {counters['given_up']} given up, "
+        f"{counters['still_retrying']} still retrying."
+    )
+
+
 def morning_routine(args):
     """Scrape + score only. Sends a review digest so you can mark good jobs as Reviewed before tailoring."""
     print("\n☀️  MORNING JOB SEARCH PIPELINE")
@@ -243,6 +259,8 @@ def main():
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
     parser.add_argument("--evaluate",     action="store_true",       help="Sync Reviewed jobs from Notion then tailor + outreach + digest")
     parser.add_argument("--ingest",       action="store_true",       help="Ingest only Notion 'Interested' jobs (score + promote to Scraped)")
+    parser.add_argument("--retry-only",   action="store_true",       dest="retry_only",
+                         help="Re-score only Status='Retry' jobs from their cached JD (no scrape of new roles)")
     parser.add_argument(
         "--ai-mode", type=str, default=None,
         choices=["metered", "hybrid", "subscription"],
@@ -282,6 +300,8 @@ def main():
 
     if args.ingest:
         ingest_routine(args)
+    elif args.retry_only:
+        retry_routine(args)
     elif args.evaluate:
         evaluate_routine(args)
     elif args.stage:
