@@ -579,6 +579,68 @@ def get_notion_jobs_by_status(status: str) -> list[dict]:
     return jobs
 
 
+def get_scratch_note_entries() -> list[dict]:
+    """Return every row of the scratch-note Notion database (NOTION_SCRATCH_PAGE_ID) as
+    {page_id, url} dicts — url is whatever text is in that row's title property (found by
+    type, not by name, so it doesn't matter what the title column is called). Rows with a
+    blank title are skipped (left alone, not treated as a URL). Returns [] if the setting
+    is unset (feature disabled, no-op) or on any read failure."""
+    if not NOTION_SCRATCH_PAGE_ID:
+        return []
+    try:
+        entries, cursor = [], None
+        while True:
+            kwargs = {"database_id": NOTION_SCRATCH_PAGE_ID}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().databases.query(**kwargs)
+            for page in res.get("results", []):
+                title_prop = next(
+                    (p for p in page.get("properties", {}).values() if p.get("type") == "title"),
+                    None,
+                )
+                url = _notion_plain_text(title_prop).strip() if title_prop else ""
+                if url:
+                    entries.append({"page_id": page["id"], "url": url})
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return entries
+    except Exception as e:
+        log(f"[get_scratch_note_entries] warning: {e}")
+        return []
+
+
+def archive_scratch_note_entry(page_id: str):
+    """Archive (soft-delete) one row of the scratch-note database once it's been
+    successfully turned into an Interested row, so it doesn't get reprocessed. Leaving a
+    row un-archived (on failure) is the retry mechanism — the next run just sees it again."""
+    try:
+        _notion().pages.update(page_id=page_id, archived=True)
+    except Exception as e:
+        log(f"[archive_scratch_note_entry] warning: {e}")
+
+
+def db_add_interested_url(url: str) -> str | None:
+    """Create a minimal Status='Interested' Notion row for a URL dropped in the scratch
+    note (Job Title left as a placeholder — the existing ingest_interested_from_notion()
+    enrichment fills it in). Returns the new page id, or None on failure."""
+    if not NOTION_API_KEY:
+        return None
+    try:
+        props = {
+            "Job Title": {"title": [{"text": {"content": "Pending intake"}}]},
+            "Job URL":   {"url": url},
+            "Status":    {"select": {"name": "Interested"}},
+        }
+        page = _notion().pages.create(parent={"database_id": NOTION_DB_ID}, properties=props)
+        return page["id"]
+    except Exception as e:
+        log(f"[db_add_interested_url] Notion page creation failed: {e}")
+        return None
+
+
 def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Scraped"):
     """Update an EXISTING manually-added Notion page to the given Status (default 'Scraped'),
     set ATS score + Date Scraped, and backfill Title/Company/Location if blank."""

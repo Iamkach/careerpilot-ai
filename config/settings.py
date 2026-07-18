@@ -255,6 +255,13 @@ LEAD_ACTOR = "coregent~linkedin-recruiter-job-poster-finder"
 # --- Notion IDs (already created for you) -------------------
 NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
 
+# --- Notion scratch-note intake (optional) -------------------
+# Database id of a small Notion database (a "list" view works well) where each row's
+# title is one job URL -- fast to add from mobile (tap "+ New", paste the link). Optional
+# -- if unset, ingest_from_scratch_note() is a no-op. Create the database once, share it
+# with the integration, paste its id here.
+NOTION_SCRATCH_PAGE_ID = os.environ.get("NOTION_SCRATCH_PAGE_ID", "")
+
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials
 GMAIL_CREDENTIALS_PATH = "config/gmail_credentials.json"

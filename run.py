@@ -183,12 +183,16 @@ def stage6(args):
 # ── Full morning routine ──────────────────────────────────────
 
 def ingest_routine(args):
-    """Pull only the jobs hand-picked in Notion (Status=Interested), score them,
-    and promote them to Scraped — without a full LinkedIn scrape."""
+    """Promote scratch-note URL drops to Interested rows, then pull all jobs hand-picked
+    in Notion (Status=Interested), score them, and promote them to Scraped — without a
+    full LinkedIn scrape."""
     print("\n📥 INGEST — Notion 'Interested' jobs")
     print("=" * 45)
     from scripts.utils import load_resume
-    from scripts.stage1_scrape import ingest_interested_from_notion
+    from scripts.stage1_scrape import ingest_from_scratch_note, ingest_interested_from_notion
+    promoted = ingest_from_scratch_note()
+    if promoted:
+        print(f"   Promoted {promoted} scratch-note URL(s) to Interested")
     n = ingest_interested_from_notion(load_resume())
     print(f"\n✅ Ingested {n} 'Interested' job(s) → Scraped.")
     print("   → Review them in Notion, set Status=Reviewed, then run: python run.py --evaluate")
@@ -258,7 +262,7 @@ def main():
     parser.add_argument("--offer",        type=float, default=0)
     parser.add_argument("--send",         action="store_true",       help="Send digest via Gmail")
     parser.add_argument("--evaluate",     action="store_true",       help="Sync Reviewed jobs from Notion then tailor + outreach + digest")
-    parser.add_argument("--ingest",       action="store_true",       help="Ingest only Notion 'Interested' jobs (score + promote to Scraped)")
+    parser.add_argument("--ingest",       action="store_true",       help="Promote scratch-note URL drops + ingest Notion 'Interested' jobs (score + promote to Scraped)")
     parser.add_argument("--retry-only",   action="store_true",       dest="retry_only",
                          help="Re-score only Status='Retry' jobs from their cached JD (no scrape of new roles)")
     parser.add_argument(
