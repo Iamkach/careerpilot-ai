@@ -32,6 +32,7 @@ from scripts.utils import (
     claude_chat, parse_json_response, load_resume, db_add_job, db_add_job_linked,
     db_find_job_by_url, db_get_all_jobs, db_get_jobs, db_get_job_description,
     db_update_status, get_notion_jobs_by_status,
+    get_scratch_note_entries, archive_scratch_note_entry, db_add_interested_url,
     _notion_promote_to_scraped, log, today, matches_company_list,
 )
 from scripts.sources import (
@@ -305,6 +306,36 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
 
 # ── 5. Ingest manually-added "Interested" jobs from Notion ───
 
+def ingest_from_scratch_note() -> int:
+    """Read every row of the scratch-note Notion database (NOTION_SCRATCH_PAGE_ID) — one
+    URL per row's title — and create a minimal Status='Interested' row in the Jobs DB for
+    each URL not already tracked anywhere. A row is archived out of the scratch database
+    once it's been successfully converted (or found to be a duplicate); a row that fails
+    to convert is left in place and retried next run. No-op (returns 0) if
+    NOTION_SCRATCH_PAGE_ID is unset. Never raises."""
+    entries = get_scratch_note_entries()
+    if not entries:
+        return 0
+
+    log(f"  Found {len(entries)} URL(s) in the scratch note")
+
+    added = 0
+    for entry in entries:
+        url, page_id = entry["url"], entry["page_id"]
+        if db_find_job_by_url(url):
+            log(f"  ⊘ Already tracked, dropping from note: {url}")
+            archive_scratch_note_entry(page_id)
+            continue
+        if db_add_interested_url(url):
+            added += 1
+            log(f"  ✓ Queued Interested row: {url}")
+            archive_scratch_note_entry(page_id)
+        else:
+            log(f"  ✗ Failed to create row, leaving in note for retry: {url}")
+
+    return added
+
+
 def ingest_interested_from_notion(resume: str) -> int:
     """Pull jobs the user marked 'Interested' in Notion, enrich via Apify,
     score, and promote to 'Scraped'. Hand-picked jobs bypass all filters."""
@@ -552,6 +583,14 @@ def run():
     }
 
     drop_log_path, drop_fh = _open_drop_log()
+
+    # 8a-pre. Promote scratch-note URL drops to Interested rows
+    try:
+        promoted = ingest_from_scratch_note()
+        if promoted:
+            log(f"  Promoted {promoted} scratch-note URL(s) to Interested")
+    except Exception as e:
+        log(f"  ✗ Scratch-note ingestion failed: {e}")
 
     # 8a. Ingest hand-picked Notion jobs
     try:

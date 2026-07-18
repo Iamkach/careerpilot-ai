@@ -98,6 +98,10 @@ The pipeline has a human review gate between scraping and tailoring:
 
 Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **in Notion**: create a row with Job Title, Company, Job URL and `Status = Interested`. On the next Stage 1 run (or `python run.py --ingest`), `ingest_interested_from_notion()` enriches each via Apify, scores it, and promotes that same Notion page to "Scraped" (caching the JD in the page body) — after which it behaves like any scraped job. Hand-picked jobs bypass the `SKIP_COMPANIES` / US-location / sponsorship filters.
 
+### Scratch-note intake (fast mobile drop)
+
+A lower-friction alternative to filling in a full Notion Jobs-Tracker row per link: create one small Notion **database** (a "list" view works well) — e.g. titled "Job Link Scratch Pad" — where each row's title is one job URL and nothing else needs filling in. Share it with the same integration used for `NOTION_API_KEY`, and set its database id as `NOTION_SCRATCH_PAGE_ID` (optional; the feature no-ops if unset). From mobile, adding a link is just "+ New" → paste the URL as the title. On the next Stage 1 run (or `python run.py --ingest`), `ingest_from_scratch_note()` runs first: it reads every row (finding the URL by the row's title property, whatever that column happens to be named — extra columns in the database are ignored), creates a minimal `Status = Interested` row (Job Title = "Pending intake") for every URL not already tracked anywhere in the Jobs DB, then archives that scratch-database row so it isn't reprocessed (a row whose row-creation fails is left un-archived and retried next run; a row whose URL is already tracked under any status is archived without creating a duplicate). `ingest_interested_from_notion()` then picks up those freshly-created rows in the same run exactly as if they'd been entered by hand.
+
 ### Shared utilities (`scripts/utils.py`)
 
 - `ai_chat(prompt, system, max_tokens, quality)` — provider-agnostic chat; `claude_chat` is an alias
@@ -106,6 +110,7 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 - `db_get_all_jobs()` — one unfiltered paginated read of every row (`page_id, title, company, location, url, status, ats_score`); backs Stage 1's in-memory dedup (URL set + fingerprint set). **Raises `RuntimeError` on a failed read** — Stage 1 aborts the scrape rather than treating a failed read as an empty DB (which would mass-duplicate the tracker)
 - `db_add_job_linked(job, notion_page_id)` — promote an existing manually-added Notion page ("Interested" intake) to "Scraped" in place (no duplicate page); caches the JD in its body
 - `get_notion_jobs_by_status(status)` — read Notion rows by status. `sync_notion_to_supabase()` is now a no-op kept for compatibility (Notion is the store)
+- `get_scratch_note_entries()` / `archive_scratch_note_entry(page_id)` / `db_add_interested_url(url)` — the scratch-note read/archive/create helpers backing `ingest_from_scratch_note()` above (see "Scratch-note intake")
 - `load_resume()`, `ensure_dirs()`, `today()`, `parse_json_response()` — misc helpers
 
 **Configuration:** `config/settings.py` — all API keys, user profile, target roles, AI model settings, output paths.
@@ -114,7 +119,7 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 
 ```bash
 python run.py                                                    # Scrape + review digest (stages 1, 4) — STOP for review
-python run.py --ingest                                          # Ingest only Notion "Interested" jobs → Scraped
+python run.py --ingest                                          # Promote scratch-note URL drops, then ingest Notion "Interested" jobs → Scraped
 python run.py --evaluate                                        # Sync "Reviewed" from Notion, then tailor + outreach + digest
 python run.py --setup                                            # Verify config
 python run.py --stage 1                                          # Scrape only (also ingests "Interested")
@@ -235,7 +240,7 @@ including the nightly workflow, which never passes it and keeps its own env vars
 - **Stage 2 keyword hint + post-tailor verification:** `tailor_resumes_batch()`/`_tailor_resume_single()` pass each job's stored `missing_keywords` into the tailoring prompt as a hint to verify against the full JD, not a checklist to blindly inject — Stage 1's list comes from a truncated JD excerpt, so the model still does its own extraction from the full JD and may find more (or discard a Stage-1 hint that doesn't actually fit). After `save_resume()`, `run()` calls `verify_tailored_score()` (reuses stage 1's `score_jobs_batch()` contract against the *tailored* resume text) and logs `ATS: {before} → {after}`; if `after` is below `MIN_TAILORED_ATS_SCORE` (`config/settings.py`, default 75), it logs a `⚠` warning only — it does not retry tailoring or change Notion status, matching the pipeline's existing non-blocking "log it, human decides in Notion" pattern.
 - **Output dirs:** Auto-created by `ensure_dirs()` on first run
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
-- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead.
+- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID` follows the same env-sourced pattern but is **optional** — see "Scratch-note intake" above — the feature it backs no-ops when it's unset, unlike the required keys in this list.
 - **`HUNTER_API_KEY` / `LEAD_ACTOR`:** only consumed by `scripts/spike_phase0_leads.py`, the Step 7 (communications subsystem) Phase 0 spike — not part of the 6-stage pipeline above. See `docs/backlog/step-7-communications-subsystem.md`.
 - **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.
 

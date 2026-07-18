@@ -107,6 +107,7 @@ class FakeNotionDB:
     def __init__(self):
         self._pages: dict[str, dict] = {}
         self._next_id = 1
+        self._scratch_rows: dict[str, str] = {}  # page_id -> url, mirrors the scratch-note DB
 
     def _new_id(self) -> str:
         page_id = f"fake-page-{self._next_id}"
@@ -134,11 +135,21 @@ class FakeNotionDB:
             "missing_keywords": list(rec.get("missing_keywords") or []),
         }
 
-    # ── seeding helper (not a real db_* function — used to set up test state) ──
+    # ── seeding helpers (not real db_* functions — used to set up test state) ──
     def seed(self, status: str = "Scraped", **fields) -> str:
         page_id = self._new_id()
         self._pages[page_id] = {"status": status, "description": "", **fields}
         return page_id
+
+    def seed_scratch_note(self, urls: list[str]) -> list[str]:
+        """Seed the scratch-note database with one row per url. Returns the new page ids
+        in the same order, in case a test needs to assert on a specific row's fate."""
+        page_ids = []
+        for url in urls:
+            page_id = self._new_id()
+            self._scratch_rows[page_id] = url
+            page_ids.append(page_id)
+        return page_ids
 
     # ── mirrors of scripts/utils.py's public db_* interface ──────────────────
 
@@ -214,6 +225,19 @@ class FakeNotionDB:
             if rec.get("status") == status and rec.get("url")
         ]
 
+    # ── scratch-note intake mirrors ───────────────────────────────────────────
+
+    def get_scratch_note_entries(self) -> list[dict]:
+        return [{"page_id": pid, "url": url} for pid, url in self._scratch_rows.items()]
+
+    def archive_scratch_note_entry(self, page_id: str):
+        self._scratch_rows.pop(page_id, None)
+
+    def db_add_interested_url(self, url: str) -> str:
+        page_id = self._new_id()
+        self._pages[page_id] = {"status": "Interested", "url": url, "title": "Pending intake"}
+        return page_id
+
 
 # Every db_*/Notion-facing name a stage module might import — patch_notion_db only touches
 # the ones actually present on the target module.
@@ -221,6 +245,7 @@ _NOTION_METHOD_NAMES = (
     "db_add_job", "db_add_job_linked", "db_find_job_by_url", "db_update_status",
     "db_get_ready_to_apply", "db_get_job_description", "db_get_jobs", "db_get_all_jobs",
     "db_get_job_by_company", "get_notion_jobs_by_status",
+    "get_scratch_note_entries", "archive_scratch_note_entry", "db_add_interested_url",
 )
 
 
