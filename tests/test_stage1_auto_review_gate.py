@@ -1,9 +1,10 @@
 """
-Tests for the Stage 1 auto-review gate (feature/god-speed): a scored job whose JD the AI
-reads as explicitly sponsorship-friendly ("yes") and scoring at/above AUTO_REVIEW_MIN_SCORE
-skips the manual Scraped→Reviewed gate and lands in 'Reviewed' directly; everything less
-certain (silent/"unknown" sponsorship, or a lower score) still lands in 'Scraped' for a human
-second-eye pass.
+Tests for the Stage 1 auto-review gate (feature/god-speed): silence on sponsorship is not
+treated as a red flag -- most companies willing to sponsor simply don't say so in the JD. A
+scored job whose sponsorship isn't explicitly "no" (i.e. "yes" or silent/"unknown") and scores
+at/above AUTO_REVIEW_MIN_SCORE skips the manual Scraped→Reviewed gate and lands in 'Reviewed'
+directly; only an explicit "no" (already dropped upstream when EXCLUDE_NO_SPONSORSHIP is on)
+or a lower score still lands in 'Scraped' for a human second-eye pass.
 
 The gate decision lives in one helper, stage1_scrape._auto_review_status(), applied at all
 three places a job would otherwise land in 'Scraped': the fresh scrape write, the "Interested"
@@ -31,8 +32,9 @@ def _score_entry(url, score, sponsorship="unknown", company_type="product", miss
     ("yes",     80,   "Reviewed"),   # explicit sponsorship + comfortably above threshold
     ("yes",     35,   "Reviewed"),   # exactly at the threshold (>=)
     ("yes",     34,   "Scraped"),    # explicit sponsorship but below threshold
-    ("unknown", 90,   "Scraped"),    # silent JD never auto-promotes, however high the score
-    ("no",      95,   "Scraped"),    # (defensive) "no" never auto-promotes; it's dropped upstream
+    ("unknown", 90,   "Reviewed"),   # silent JD is not a red flag — auto-promotes too
+    ("unknown", 34,   "Scraped"),    # silent JD still needs a qualifying score
+    ("no",      95,   "Scraped"),    # explicit "no" never auto-promotes, however high the score
     ("yes",     None, "Scraped"),    # missing score (e.g. give-up path) never auto-promotes
 ])
 def test_auto_review_status_truth_table(monkeypatch, sponsorship, score, expected):
@@ -42,11 +44,12 @@ def test_auto_review_status_truth_table(monkeypatch, sponsorship, score, expecte
 
 # ── 2. Retry-recovery call site ──────────────────────────────────────────────
 
-def test_rescore_retry_promotes_confident_sponsor_job_to_reviewed(
+def test_rescore_retry_promotes_both_sponsor_and_silent_job_to_reviewed(
     monkeypatch, patch_ai_chat, patch_notion_db,
 ):
-    """A Retry job the AI recovers as sponsorship='yes' and score >= AUTO_REVIEW_MIN_SCORE
-    lands in 'Reviewed', not 'Scraped' — skipping the human gate on the recovery path too."""
+    """A Retry job the AI recovers as sponsorship='yes', and one recovered as silent/'unknown',
+    both with score >= AUTO_REVIEW_MIN_SCORE, land in 'Reviewed', not 'Scraped' — skipping the
+    human gate on the recovery path too. Only an explicit 'no' would stay gated."""
     monkeypatch.setattr(stage1_scrape, "EXCLUDE_NO_SPONSORSHIP", True)
     monkeypatch.setattr(stage1_scrape, "SKIP_COMPANY_TYPES", {"staffing_or_consulting"})
     monkeypatch.setattr(stage1_scrape, "MIN_ATS_SCORE", 30)
@@ -67,8 +70,8 @@ def test_rescore_retry_promotes_confident_sponsor_job_to_reviewed(
     counters = stage1_scrape.rescore_retry_jobs("resume text")
 
     assert counters == {"recovered": 2, "filtered": 0, "given_up": 0, "still_retrying": 0}
-    assert fake_db._pages[sponsor_hi]["status"] == "Reviewed"   # auto-promoted
-    assert fake_db._pages[silent_hi]["status"] == "Scraped"     # human gate
+    assert fake_db._pages[sponsor_hi]["status"] == "Reviewed"   # auto-promoted (yes)
+    assert fake_db._pages[silent_hi]["status"] == "Reviewed"    # auto-promoted (silent, not a red flag)
 
 
 def test_rescore_retry_does_not_promote_confident_sponsor_below_threshold(
@@ -94,13 +97,13 @@ def test_rescore_retry_does_not_promote_confident_sponsor_below_threshold(
 
 # ── 3. "Interested" intake call site ─────────────────────────────────────────
 
-def test_ingest_interested_promotes_confident_sponsor_job_to_reviewed(
+def test_ingest_interested_promotes_both_sponsor_and_silent_job_to_reviewed(
     monkeypatch, patch_ai_chat, patch_notion_db,
 ):
-    """A hand-added 'Interested' job enriched to sponsorship='yes' with score >=
-    AUTO_REVIEW_MIN_SCORE is promoted straight to 'Reviewed'; a silent one lands in 'Scraped'.
-    Uses linkedin.com URLs so enrichment goes through the mocked batch scrape_job_urls()
-    rather than the per-URL enrich_job_url() HTTP path."""
+    """A hand-added 'Interested' job enriched to sponsorship='yes', and one enriched as
+    silent/'unknown', both with score >= AUTO_REVIEW_MIN_SCORE, are promoted straight to
+    'Reviewed' — silence isn't a red flag. Uses linkedin.com URLs so enrichment goes through
+    the mocked batch scrape_job_urls() rather than the per-URL enrich_job_url() HTTP path."""
     monkeypatch.setattr(stage1_scrape, "AUTO_REVIEW_MIN_SCORE", 35)
 
     fake_db = patch_notion_db(stage1_scrape)
@@ -127,5 +130,5 @@ def test_ingest_interested_promotes_confident_sponsor_job_to_reviewed(
     ingested = stage1_scrape.ingest_interested_from_notion("resume text")
 
     assert ingested == 2
-    assert fake_db._pages[sponsor_pg]["status"] == "Reviewed"   # auto-promoted
-    assert fake_db._pages[silent_pg]["status"] == "Scraped"     # human gate
+    assert fake_db._pages[sponsor_pg]["status"] == "Reviewed"   # auto-promoted (yes)
+    assert fake_db._pages[silent_pg]["status"] == "Reviewed"    # auto-promoted (silent, not a red flag)

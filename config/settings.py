@@ -161,10 +161,11 @@ SPONSORSHIP_CONFIRMED_MARKER = "sponsorship confirmed"
 MIN_ATS_SCORE = 30
 
 # --- Auto-review gate (stage 1) -------------------------------
-# Jobs at/above this ATS score whose JD explicitly offers visa sponsorship skip the manual
-# Scraped→Reviewed gate and land in "Reviewed" directly (see stage1 _auto_review_status).
-# Everything less certain (silent/"unknown" sponsorship, or a lower score) stays in "Scraped"
-# for a human second-eye pass.
+# Jobs at/above this ATS score skip the manual Scraped→Reviewed gate and land in "Reviewed"
+# directly, unless the JD explicitly rules out sponsorship (see stage1 _auto_review_status).
+# Silence on sponsorship is NOT treated as a red flag -- most companies willing to sponsor
+# simply don't mention it in the JD. Only Sponsorship="no" (explicit) or a lower score keeps
+# a job in "Scraped" for a human second-eye pass.
 AUTO_REVIEW_MIN_SCORE = 35
 
 # --- Scoring reliability (stage 1) ----------------------------
