@@ -22,7 +22,8 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   extraction is weak (page `<title>` tag, no company parsing) and JS-rendered career sites
   (SPAs) will return too little text and fail enrichment outright — not something worth
   building against speculatively; revisit only if a real `Interested` URL is observed failing
-  this way.
+  this way. Options + trigger criteria written up in
+  `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 - ~~**Known gaps characterized (not fixed) by the Step 9 test suite**~~ — fixed:
   `score_jobs_batch` now clamps `int(entry.get("score", 0))` to `[0, 100]`
   (`scripts/stage1_scrape.py`); stage 3's `_draft_cold_email_single` fallback now reuses
