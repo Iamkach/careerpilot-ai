@@ -29,7 +29,7 @@ Scrapes jobs from multiple sources (LinkedIn + Indeed via Apify, Greenhouse/Leve
 
 | Stage | File | Purpose |
 |-------|------|---------|
-| 1 | `scripts/stage1_scrape.py` | Scrape every source in `ENABLED_SOURCES` via `scripts/sources.py` (+ ingest Notion "Interested" jobs), score against resume (ATS 0–100), save to Notion as "Scraped" |
+| 1 | `scripts/stage1_scrape.py` | Scrape every source in `ENABLED_SOURCES` via `scripts/sources.py` (+ ingest Notion "Interested" jobs), score against resume (ATS 0–100), save to Notion as "Scraped" — or "Reviewed" for confident jobs (`Sponsorship = yes` and score ≥ `AUTO_REVIEW_MIN_SCORE`) |
 | 2 | `scripts/stage2_tailor.py` | Fetch "Reviewed" jobs, apply targeted ATS keyword edits in-place to the base `.docx`, save to `output/resumes/` |
 | 3 | `scripts/stage3_outreach.py` | Draft cold/warm outreach emails, save to `output/outreach/` |
 | 4 | `scripts/stage4_digest.py` | Generate morning HTML digest of ready-to-apply jobs |
@@ -88,15 +88,24 @@ Dedup is the exception: it spans every status, so a `Disregard`d job is not re-s
 
 ### Two-step daily flow
 
-The pipeline has a human review gate between scraping and tailoring:
+The pipeline has a human review gate between scraping and tailoring — but Stage 1 now
+**auto-promotes the confident cases past it**. A scored job whose JD the AI reads as
+explicitly sponsorship-friendly (`Sponsorship = yes`) and scoring at/above
+`AUTO_REVIEW_MIN_SCORE` (`config/settings.py`, default 35) lands directly in `Reviewed`,
+skipping the manual step; everything less certain (silent/`unknown` sponsorship, or a lower
+score) still lands in `Scraped` for a human second-eye pass. The gate decision lives in one
+helper, `_auto_review_status()` in `scripts/stage1_scrape.py`, applied at all three places a
+job would otherwise land in `Scraped` (fresh scrape, "Interested" intake, Retry recovery).
+It runs **after** the drop gates (`EXCLUDE_NO_SPONSORSHIP == "no"`, `SKIP_COMPANY_TYPES`,
+`MIN_ATS_SCORE`), so it only ever sees jobs that already survived them.
 
-1. **Scrape & review** — `python run.py` runs stages 1 + 4: scrape LinkedIn, score, and emit a review digest of "Scraped" jobs. **Stop here.**
-2. **Review in Notion** — open the tracker and set `Status = Reviewed` on jobs worth applying to.
-3. **Evaluate** — `python run.py --evaluate` reads the "Reviewed" jobs straight from Notion, then runs stage 2 (tailor) → stage 3 (outreach drafts, non-interactive) → stage 4 (ready digest).
+1. **Scrape & review** — `python run.py` runs stages 1 + 4: scrape LinkedIn, score, and emit a review digest of "Scraped" jobs (the auto-`Reviewed` jobs skip this digest by design). **Stop here.**
+2. **Review in Notion** — open the tracker and set `Status = Reviewed` on any remaining `Scraped` jobs worth applying to.
+3. **Evaluate** — `python run.py --evaluate` reads the "Reviewed" jobs straight from Notion (both auto-promoted and hand-marked), then runs stage 2 (tailor) → stage 3 (outreach drafts, non-interactive) → stage 4 (ready digest).
 
 ### Manual job intake ("Interested")
 
-Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **in Notion**: create a row with Job Title, Company, Job URL and `Status = Interested`. On the next Stage 1 run (or `python run.py --ingest`), `ingest_interested_from_notion()` enriches each via Apify, scores it, and promotes that same Notion page to "Scraped" (caching the JD in the page body) — after which it behaves like any scraped job. Hand-picked jobs bypass the `SKIP_COMPANIES` / US-location / sponsorship filters.
+Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **in Notion**: create a row with Job Title, Company, Job URL and `Status = Interested`. On the next Stage 1 run (or `python run.py --ingest`), `ingest_interested_from_notion()` enriches each via Apify, scores it, and promotes that same Notion page to "Scraped" — or straight to "Reviewed" via the same `_auto_review_status()` gate (`Sponsorship = yes` and score ≥ `AUTO_REVIEW_MIN_SCORE`) — caching the JD in the page body, after which it behaves like any scraped job. Hand-picked jobs bypass the `SKIP_COMPANIES` / US-location / sponsorship filters.
 
 ### Scratch-note intake (fast mobile drop)
 
@@ -136,7 +145,7 @@ python run.py --ai-mode {metered,hybrid,subscription} --metered-provider {claude
 1. **Notion-first** — Notion is the single source of truth. All stages read/write the Notion jobs database via the `db_*` helpers; `NOTION_API_KEY` + DB sharing are required.
 2. **Two-model setup** — `AI_MODEL_OVERRIDE` (fast/cheap, e.g. Haiku) for scraping/outreach; `QUALITY_MODEL` (e.g. Sonnet) for tailoring/interview prep/negotiation. Both set in `config/settings.py`.
 3. **Idempotent stages** — Duplicates skipped by exact Job URL match **and** by company+title fingerprint (`job_fingerprint()` in `scripts/sources.py`, catching the same req posted to multiple sources). Stage 1 reads every existing row once via `db_get_all_jobs()` and dedups against that in-memory URL/fingerprint set (excluding the not-yet-settled `Interested` status), rather than querying Notion per listing. `db_find_job_by_url()` remains for one-off lookups (e.g. "Interested" intake).
-4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
+4. **Manual review gates** — A "Reviewed" gate sits between scraping and tailoring (user marks jobs in Notion before `--evaluate`), **except** for confident jobs Stage 1 auto-promotes straight to `Reviewed` (`Sponsorship = yes` and score ≥ `AUTO_REVIEW_MIN_SCORE`; see `_auto_review_status()` and "Two-step daily flow"). Outreach drafts are saved but not auto-sent; user reviews `output/outreach/` files first.
 5. **Prompt caching** — `utils.py` `ai_chat_blocks()` caches structured blocks, but only on the metered `"claude"` provider; every other provider joins the blocks into plain text. On the `claude_code` path the CLI manages its own caching.
 6. **Adding a provider** — Add a `_chat_<name>` function to `_BACKENDS` dict in `scripts/utils.py`. No other changes needed.
 
@@ -149,6 +158,10 @@ Settings in `config/settings.py` control what gets saved:
   `greenhouse`, `lever`, `ashby`)
 - `MAX_JOB_AGE_DAYS` / `DROP_UNDATED_JOBS` — freshness window applied to `posted_date`; a source
   that doesn't expose a date is kept by default unless `DROP_UNDATED_JOBS = True`
+- `AUTO_REVIEW_MIN_SCORE` (default 35) — not a filter: a saved job with `Sponsorship = yes`
+  scoring at/above this skips the manual `Scraped → Reviewed` gate and lands in `Reviewed`
+  directly (`_auto_review_status()`). Applied after the drop filters above, at all three
+  save paths (fresh scrape, "Interested" intake, Retry recovery)
 
 ## Stage 2 Sponsorship Gate
 

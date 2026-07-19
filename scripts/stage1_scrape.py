@@ -205,6 +205,19 @@ def _unscored(job: dict) -> dict:
     }
 
 
+def _auto_review_status(sponsorship: str, score: int | None) -> str:
+    """Landing status for a freshly-scored job. Silence on sponsorship is not treated as a
+    red flag — most companies willing to sponsor simply don't say so in the JD. A job whose
+    sponsorship isn't explicitly "no" (i.e. "yes" or silent/"unknown"), scoring at/above
+    AUTO_REVIEW_MIN_SCORE, skips the manual Scraped→Reviewed gate and lands in 'Reviewed'
+    directly. Only an explicit "no" (already filtered out upstream by
+    EXCLUDE_NO_SPONSORSHIP when that's on — this check also covers the "Interested" intake
+    path, which has no such gate) or a lower score keeps it in 'Scraped' for manual review."""
+    if sponsorship != "no" and score is not None and score >= AUTO_REVIEW_MIN_SCORE:
+        return "Reviewed"
+    return "Scraped"
+
+
 _SCORE_CHUNK_SIZE = 20  # keep each AI call's JSON reply well under any provider's default max_tokens
 
 
@@ -413,6 +426,7 @@ def ingest_interested_from_notion(resume: str) -> int:
             }, job["notion_page_id"], status="Retry")
             log(f"  ⏳ Queued for retry (scoring failed): {job['company']} — {job['title']}")
             continue
+        status = _auto_review_status(s["sponsorship"], s["score"])
         db_add_job_linked({
             "title":            job["title"],
             "company":          job["company"],
@@ -422,9 +436,10 @@ def ingest_interested_from_notion(resume: str) -> int:
             "sponsorship":      s["sponsorship"],
             "description":      job["description"],
             "missing_keywords": s["missing_keywords"],
-        }, job["notion_page_id"])
+        }, job["notion_page_id"], status=status)
         ingested += 1
-        log(f"  ✓ Ingested: {job['company']} — {job['title']} (ATS: {s['score']})")
+        arrow = "  →Reviewed (auto)" if status == "Reviewed" else ""
+        log(f"  ✓ Ingested: {job['company']} — {job['title']} (ATS: {s['score']}){arrow}")
 
     return ingested
 
@@ -478,14 +493,16 @@ def rescore_retry_jobs(resume: str) -> dict:
                 log(f"  ⊘ [{gate_reason}] Filtered on recovery: {job['company']} — {job['title']}")
                 continue
 
-            db_update_status(job["page_id"], "Scraped", {
+            status = _auto_review_status(s["sponsorship"], s["score"])
+            db_update_status(job["page_id"], status, {
                 "ats_score":        s["score"],
                 "sponsorship":      s["sponsorship"],
                 "scoring_attempts": (job.get("scoring_attempts") or 0) + 1,
                 "missing_keywords": s["missing_keywords"],
             })
             counters["recovered"] += 1
-            log(f"  ✓ Recovered from Retry: {job['company']} — {job['title']} (ATS: {s['score']})")
+            arrow = "  →Reviewed (auto)" if status == "Reviewed" else ""
+            log(f"  ✓ Recovered from Retry: {job['company']} — {job['title']} (ATS: {s['score']}){arrow}")
             continue
 
         attempts = (job.get("scoring_attempts") or 0) + 1
@@ -598,7 +615,7 @@ def run():
     counters = {
         "company": 0, "title": 0, "location": 0, "stale": 0,
         "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
-        "staffing_ai": 0, "retry": 0,
+        "staffing_ai": 0, "retry": 0, "auto_reviewed": 0,
     }
 
     drop_log_path, drop_fh = _open_drop_log()
@@ -754,11 +771,13 @@ def run():
             sal  = job.get("salary_range", "")
             posted = job.get("posted_date")
             src  = job.get("source", "")
+            status = _auto_review_status(sponsorship, score)
             db_add_job({
                 "title":           job["title"],
                 "company":         job["company"],
                 "location":        job["location"],
                 "url":             job["url"],
+                "status":          status,
                 "ats_score":       score,
                 "sponsorship":     sponsorship,
                 "description":     job["description"],
@@ -769,13 +788,17 @@ def run():
                 "source":          src,
             })
             added  += 1
+            if status == "Reviewed":
+                counters["auto_reviewed"] += 1
             ac_str  = f"  applicants:{ac}" if ac  is not None else ""
             sal_str = f"  salary:{sal}"     if sal             else ""
-            log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}{ac_str}{sal_str}")
+            rv_str  = "  →Reviewed (auto)" if status == "Reviewed" else ""
+            log(f"  ✓ Added [{src}]: {job['company']} — {job['title']} ({job['location']}) ATS:{score}{ac_str}{sal_str}{rv_str}")
 
     summary = (
         f"\n{'-'*60}\n"
         f"Done. Added {added} new job(s)  |  {ingested} ingested from Notion 'Interested'  |  "
+        f"{counters['auto_reviewed']} auto-reviewed (sponsorship!=no, score>={AUTO_REVIEW_MIN_SCORE})  |  "
         f"{counters['retry']} queued for retry (scoring failed)\n"
         f"Pre-filter drops -> "
         f"stale:{counters['stale']}  company:{counters['company']}  title:{counters['title']}  "

@@ -137,12 +137,16 @@ def test_scratch_note_wired_before_existing_interested_ingest_in_run(
     fake_db = patch_notion_db(stage1_scrape)
     fake_db.seed_scratch_note(["https://example.com/jobs/new"])
 
-    monkeypatch.setattr(stage1_scrape, "scrape_job_urls", lambda urls: {
-        u: {
-            "title": "Backend Engineer", "company": "Acme Corp",
-            "location": "Remote - US", "description": "jd",
-        } for u in urls
-    })
+    # The seeded URL is non-LinkedIn, so ingest_interested_from_notion() enriches it via the
+    # per-URL enrich_job_url() path (not the batch scrape_job_urls()); mock that so no real
+    # HTTP fetch happens. Both are stubbed to keep the test robust to either routing.
+    _enriched = {
+        "title": "Backend Engineer", "company": "Acme Corp",
+        "location": "Remote - US", "description": "jd",
+    }
+    monkeypatch.setattr(stage1_scrape, "enrich_job_url", lambda url: dict(_enriched))
+    monkeypatch.setattr(stage1_scrape, "scrape_job_urls",
+                        lambda urls: {u: dict(_enriched) for u in urls})
     canned = [{
         "url": "https://example.com/jobs/new", "score": 80, "missing_keywords": [],
         "sponsorship": "unknown", "company_type": "product",
