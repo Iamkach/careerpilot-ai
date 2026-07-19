@@ -78,3 +78,13 @@ Send to: {contact name}
 
 {LinkedIn message}
 ```
+
+## Testing (rule of thumb — every change ships with a test)
+
+Any change to `stage3_outreach.py` (draft logic, gates, CLI flags) needs a pytest test in the
+same change — see `tests/test_stage3_outreach_contract.py` for the existing pattern
+(`patch_ai_chat`/`patch_notion_db` fakes, never a real AI/Notion call). Run `pytest -v` and
+confirm green before calling it done. If you change `SYSTEM_OUTREACH` or a draft prompt itself,
+plumbing tests can't catch tone/quality drift — there's no automated eval for outreach copy yet,
+so sanity-check a real draft manually: `python run.py --stage 3 --company "Stripe"` and read the
+output under `output/outreach/`.

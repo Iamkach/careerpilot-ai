@@ -89,13 +89,14 @@ Dedup is the exception: it spans every status, so a `Disregard`d job is not re-s
 ### Two-step daily flow
 
 The pipeline has a human review gate between scraping and tailoring — but Stage 1 now
-**auto-promotes the confident cases past it**. A scored job whose JD the AI reads as
-explicitly sponsorship-friendly (`Sponsorship = yes`) and scoring at/above
-`AUTO_REVIEW_MIN_SCORE` (`config/settings.py`, default 35) lands directly in `Reviewed`,
-skipping the manual step; everything less certain (silent/`unknown` sponsorship, or a lower
-score) still lands in `Scraped` for a human second-eye pass. The gate decision lives in one
-helper, `_auto_review_status()` in `scripts/stage1_scrape.py`, applied at all three places a
-job would otherwise land in `Scraped` (fresh scrape, "Interested" intake, Retry recovery).
+**auto-promotes the confident cases past it**. Silence on sponsorship is not treated as a
+red flag (most companies willing to sponsor simply don't say so in the JD): a scored job
+whose sponsorship isn't explicitly ruled out (`Sponsorship = yes` or silent/`unknown`) and
+scores at/above `AUTO_REVIEW_MIN_SCORE` (`config/settings.py`, default 35) lands directly in
+`Reviewed`, skipping the manual step; only an explicit `Sponsorship = no` or a lower score
+still lands in `Scraped` for a human second-eye pass. The gate decision lives in one helper,
+`_auto_review_status()` in `scripts/stage1_scrape.py`, applied at all three places a job
+would otherwise land in `Scraped` (fresh scrape, "Interested" intake, Retry recovery).
 It runs **after** the drop gates (`EXCLUDE_NO_SPONSORSHIP == "no"`, `SKIP_COMPANY_TYPES`,
 `MIN_ATS_SCORE`), so it only ever sees jobs that already survived them.
 
@@ -259,10 +260,25 @@ including the nightly workflow, which never passes it and keeps its own env vars
 
 ## Testing a Change
 
-1. Run `python run.py --setup` to verify config
-2. Test on a single job: `python run.py --stage 2 --min-score 0` or `python run.py --stage 3 --company "Stripe"`
-3. Check output files in `output/` (resumes, emails, guides are human-readable)
-4. Verify the Notion jobs database rows updated (status/score/links)
+**Rule of thumb: every change ships with a test — no exceptions, for any agent working in this repo.**
+
+1. Touched `scripts/*.py` or `run.py` logic? Add or update a pytest test under `tests/` in the
+   same change, following the existing contract-test pattern (`patch_ai_chat`/`patch_notion_db`
+   fakes from `tests/conftest.py`; see `tests/test_stage1_auto_review_gate.py` or
+   `tests/test_stage2_sponsorship_gate.py` for reference). Run `pytest -v` — it's mocked, needs
+   no API keys/Notion/Claude Code login, and finishes in ~1.5s — and make sure it's green before
+   calling the change done.
+2. Touched an AI prompt (stage 1 scoring, stage 2 tailoring, stage 3 outreach) or a model
+   setting (`QUALITY_MODEL`, `AI_MODEL_OVERRIDE`)? A green pytest suite only proves the
+   *plumbing* against mocked/recorded responses — it can't see judgment drift. Also run
+   `python scripts/run_evals.py` (real API call, costs tokens — not part of `tests.yml`) against
+   the hand-labeled dataset (`tests/eval_data/jobs.json`) and check score-hit-rate / keyword
+   recall / tailoring ATS delta didn't regress. See "Step 9" in `docs/CHANGELOG.md` for exactly
+   what it measures. `--tailor` adds the stage 2 before→after ATS delta if stage 2 changed.
+3. Run `python run.py --setup` to verify config
+4. Test on a single job: `python run.py --stage 2 --min-score 0` or `python run.py --stage 3 --company "Stripe"`
+5. Check output files in `output/` (resumes, emails, guides are human-readable)
+6. Verify the Notion jobs database rows updated (status/score/links)
 
 ## Troubleshooting
 
