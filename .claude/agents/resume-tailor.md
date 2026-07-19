@@ -55,3 +55,14 @@ When writing new tailoring prompts, follow these rules:
 - Return **edit pairs as JSON** (`{old, new}`), with `old` copied verbatim — not a full rewrite
 - Provide the base resume text + the JD in the prompt
 - Bias edits toward the job's `missing_keywords`
+
+## Testing (rule of thumb — every change ships with a test)
+
+Any change to `stage2_tailor.py` logic (gate, batching, edit application) needs a pytest test in
+the same change — see `tests/test_stage2_tailor_contract.py` and
+`tests/test_stage2_sponsorship_gate.py` for the existing pattern (`patch_ai_chat`/
+`patch_notion_db` fakes, never a real AI/Notion call). Run `pytest -v` and confirm green before
+calling it done. If you change the `SYSTEM_PROMPT` or tailoring logic itself, plumbing tests
+can't catch judgment drift — also run `python scripts/run_evals.py --tailor` (real API call,
+costs tokens, not part of CI) and compare the before→after ATS delta against
+`tests/eval_data/jobs.json`.

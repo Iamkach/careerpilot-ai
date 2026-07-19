@@ -158,3 +158,13 @@ filter={"property": "Job URL", "url": {"equals": url}}
 - `notion.pages.create(parent, properties)` → new page
 - `notion.pages.update(page_id, properties)` → update existing page
 - Results are in `results["results"]` list; each item has `["id"]` and `["properties"]`
+
+## Testing (rule of thumb — every change ships with a test)
+
+Any change to `db_*`/`_notion_*` helpers or a status transition needs a pytest test in the same
+change — **never** exercise a real Notion write to verify a fix. Use `tests/conftest.py`'s
+`patch_notion_db` fixture (an in-memory `FakeNotionDB` mirroring every `db_*` function's exact
+return shape) and extend it if you add a new helper or property. See
+`tests/test_stage1_auto_review_gate.py`, `tests/test_stage1_rescore_retry_gates.py`, or
+`tests/test_stage1_scratch_note_ingest.py` for the existing pattern. Run `pytest -v` — mocked,
+no `NOTION_API_KEY` needed, ~1.5s — and confirm it's green before calling the change done.

@@ -101,3 +101,13 @@ When asked to extend the pipeline, follow the existing pattern:
 - Register it in `run.py`'s `stages` dict and add its CLI flags
 - Reuse `ai_chat`/`ai_chat_blocks` and the `db_*` helpers in `scripts/utils.py` — never
   re-implement Notion or AI-call logic in the new stage
+
+## Testing (rule of thumb — every change ships with a test)
+
+Any logic change to `run.py` or a stage script needs a pytest test in the same change, reusing
+`tests/conftest.py`'s `patch_ai_chat`/`patch_notion_db` fakes (never a real AI/Notion call in a
+test). Run `pytest -v` — mocked, no keys/login needed, ~1.5s — and confirm it's green before
+calling the change done. If the change touches a prompt (scoring/tailoring/outreach) or
+`QUALITY_MODEL`/`AI_MODEL_OVERRIDE`, also run `python scripts/run_evals.py` (real API call, not
+part of CI) to check score-hit-rate/keyword-recall/ATS-delta didn't regress — see "Step 9" in
+`docs/CHANGELOG.md`.

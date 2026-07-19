@@ -53,6 +53,31 @@ Smoke test — careerpilot-ai
 
 ---
 
+## Rule of thumb: every change ships with a test
+
+Before treating any code change as done — whether you made it directly or via a subagent:
+
+1. **Logic change** (`scripts/*.py`, `run.py`): add or update a pytest test under `tests/`,
+   reusing `tests/conftest.py`'s `patch_ai_chat`/`patch_notion_db` fakes rather than hitting a
+   real AI/Notion call. Then run:
+   ```bash
+   pytest -v
+   ```
+   Mocked, no API keys/Notion/Claude Code login needed, ~1.5s for the full suite. Must be green.
+2. **Prompt or model change** (stage 1 scoring, stage 2 tailoring, stage 3 outreach,
+   `QUALITY_MODEL`/`AI_MODEL_OVERRIDE`): pytest alone can't catch judgment drift since it replays
+   mocked/recorded responses. Also run the real-API eval layer:
+   ```bash
+   python scripts/run_evals.py            # stage 1 scoring + keyword recall
+   python scripts/run_evals.py --tailor   # + stage 2 tailoring ATS delta
+   ```
+   Costs real tokens (never run by CI) — check score-hit-rate / keyword recall / ATS delta
+   against `tests/eval_data/jobs.json` for a regression before and after the change.
+
+Don't report a change complete without at least step 1.
+
+---
+
 ## Setup check
 
 ```
