@@ -12,3 +12,10 @@ docxtpl>=0.18.0            # Render tailored resume into a .docx template (stage
 # Optional — Stage 4 Gmail digest sending
 google-auth>=2.30.0
 google-api-python-client>=2.130.0
+
+# Optional — headless render fallback for JS-rendered career pages with no JobPosting
+# JSON-LD (Stage 1 "Interested" enrichment, Option B of
+# docs/refinement-plans/sourcing/career-site-enrichment-fallback.md). generic_url_fetch()
+# degrades gracefully (skips this path, logs a warning) if not installed.
+# After installing, also run: playwright install chromium
+playwright>=1.40.0

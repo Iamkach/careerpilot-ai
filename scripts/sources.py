@@ -451,30 +451,157 @@ def ashby_job_by_url(url: str) -> dict | None:
     return None
 
 
+_JSONLD_SCRIPT_RE = re.compile(
+    r'(?is)<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+)
+
+
+def _jobposting_location(job_location) -> str:
+    """jobLocation can be a single Place dict or a list of them; join city + region."""
+    places = job_location if isinstance(job_location, list) else [job_location]
+    parts = []
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        addr = place.get("address")
+        if isinstance(addr, dict):
+            locality = addr.get("addressLocality") or ""
+            region = addr.get("addressRegion") or ""
+            joined = ", ".join(p for p in (locality, region) if p)
+            if joined:
+                parts.append(joined)
+        elif isinstance(addr, str) and addr:
+            parts.append(addr)
+    return "; ".join(parts)
+
+
+def _as_jobposting_candidates(parsed) -> list:
+    """Normalize a parsed JSON-LD document (dict, list, or {"@graph": [...]}) into a flat
+    list of candidate node dicts to check for @type == JobPosting."""
+    if isinstance(parsed, list):
+        nodes = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("@graph"), list):
+        nodes = parsed["@graph"]
+    elif isinstance(parsed, dict):
+        nodes = [parsed]
+    else:
+        return []
+    return [n for n in nodes if isinstance(n, dict)]
+
+
+def _extract_jobposting_jsonld(html: str) -> dict | None:
+    """Probe a page's <script type="application/ld+json"> blocks for a schema.org
+    JobPosting node and pull title/company/location/description from it directly.
+
+    Many ATS-hosted and SEO-conscious career pages emit this even when the visible DOM is a
+    client-rendered SPA shell with almost no static text — so this can succeed where the raw
+    tag-stripped page text comes back empty. Returns None if no block parses as JSON or none
+    of them is a JobPosting."""
+    for block in _JSONLD_SCRIPT_RE.findall(html):
+        try:
+            parsed = json.loads(block.strip())
+        except (ValueError, TypeError):
+            continue
+        for node in _as_jobposting_candidates(parsed):
+            node_type = node.get("@type")
+            is_job_posting = node_type == "JobPosting" or (
+                isinstance(node_type, list) and "JobPosting" in node_type
+            )
+            if not is_job_posting:
+                continue
+            org = node.get("hiringOrganization")
+            company = org.get("name", "") if isinstance(org, dict) else (org or "")
+            return {
+                "title":       node.get("title", "") or "",
+                "company":     company or "",
+                "location":    _jobposting_location(node.get("jobLocation")),
+                "description": _strip_html(node.get("description", "") or ""),
+            }
+    return None
+
+
+def _parse_fetched_html(html: str) -> dict | None:
+    """Given fetched HTML (static GET or headless-rendered), try the JobPosting JSON-LD
+    probe first, then raw tag-stripped text. Returns None if neither yields enough text
+    (< 200 chars) to score against. Shared by generic_url_fetch()'s static and headless
+    passes so both go through the identical extraction logic."""
+    title_m = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    title = _strip_html(title_m.group(1)).strip() if title_m else ""
+
+    ld = _extract_jobposting_jsonld(html)
+    if ld and len(ld["description"]) >= 200:
+        return {
+            "title":       ld["title"] or title,
+            "company":     ld["company"],
+            "location":    ld["location"],
+            "description": ld["description"][:8000],
+        }
+
+    text = _strip_html(html)
+    if len(text) >= 200:
+        return {"title": title, "company": "", "location": "", "description": text[:8000]}
+    return None
+
+
+def _headless_fetch(url: str, timeout_ms: int = 20000) -> str | None:
+    """Render a JS-heavy career page with a headless browser and return the hydrated HTML.
+
+    Option B of docs/refinement-plans/sourcing/career-site-enrichment-fallback.md — used only
+    when the static GET's JSON-LD probe and raw-text fallback both come up short (a genuine
+    client-rendered SPA shell with no server-rendered JobPosting data at all). Requires
+    `pip install playwright` + `playwright install chromium`; both the missing-dependency case
+    and any render failure return None (never raise), so callers treat it exactly like any
+    other enrichment miss rather than a hard error."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log("  ⚠ Playwright not installed — skipping headless render "
+            "(pip install playwright && playwright install chromium)")
+        return None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(user_agent="Mozilla/5.0")
+                page.goto(url, timeout=timeout_ms, wait_until="networkidle")
+                return page.content()
+            finally:
+                browser.close()
+    except Exception as e:
+        log(f"  ✗ Headless render failed for {url}: {e}")
+        return None
+
+
 def generic_url_fetch(url: str) -> dict | None:
     """Best-effort fallback for any career-site URL with no dedicated ATS API
-    (e.g. amazon.jobs, explore.jobs.netflix.net): GET the page and strip HTML tags.
-    Quality varies a lot — a JS-rendered SPA returns near-empty text, which is treated
-    as a failure (returns None) so the caller doesn't score against nothing."""
+    (e.g. amazon.jobs, explore.jobs.netflix.net): GET the page, try a JobPosting JSON-LD
+    probe, then raw tag-stripped text — and if a JS-rendered SPA shell leaves both of those
+    short, fall back to a headless render (_headless_fetch) and retry the same extraction
+    against the hydrated HTML. Returns None only if every path comes up short, so the caller
+    doesn't score against nothing."""
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
     except Exception as e:
         log(f"  ✗ Generic fetch failed for {url}: {e}")
         return None
-    title_m = re.search(r"(?is)<title[^>]*>(.*?)</title>", r.text)
-    title = _strip_html(title_m.group(1)).strip() if title_m else ""
-    text = _strip_html(r.text)
-    if len(text) < 200:
-        log(f"  ⚠ Generic fetch for {url} returned too little text ({len(text)} chars) — "
-            f"likely a JS-rendered page; treating as enrichment failure")
-        return None
-    return {
-        "title":       title,
-        "company":     "",
-        "location":    "",
-        "description": text[:8000],
-    }
+
+    result = _parse_fetched_html(r.text)
+    if result:
+        return result
+
+    log(f"  ⚠ Generic fetch for {url} returned too little static text — "
+        f"likely a JS-rendered page; trying a headless render")
+    rendered = _headless_fetch(url)
+    if rendered:
+        result = _parse_fetched_html(rendered)
+        if result:
+            log(f"  ✓ Headless render recovered enrichment for {url}")
+            return result
+
+    log(f"  ⚠ Headless render for {url} also returned too little text — "
+        f"treating as enrichment failure")
+    return None
 
 
 def enrich_job_url(url: str) -> dict | None:

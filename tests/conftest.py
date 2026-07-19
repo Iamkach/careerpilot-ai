@@ -131,6 +131,7 @@ class FakeNotionDB:
             "hm_li":            rec.get("hiring_manager_linkedin", ""),
             "sponsorship":      rec.get("sponsorship"),
             "scoring_attempts": rec.get("scoring_attempts", 0) or 0,
+            "enrichment_attempts": rec.get("enrichment_attempts", 0) or 0,
             "notes":            rec.get("notes", ""),
             "missing_keywords": list(rec.get("missing_keywords") or []),
         }
@@ -220,6 +221,7 @@ class FakeNotionDB:
                 "title":          rec.get("title", ""),
                 "company":        rec.get("company", ""),
                 "location":       rec.get("location", ""),
+                "enrichment_attempts": rec.get("enrichment_attempts", 0) or 0,
             }
             for pid, rec in self._pages.items()
             if rec.get("status") == status and rec.get("url")

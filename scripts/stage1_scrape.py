@@ -388,10 +388,24 @@ def ingest_interested_from_notion(resume: str) -> int:
     candidates = []
     for page in fresh:
         e = enriched.get(page["url"])
-        # No real JD text means nothing to score against — leave the row as "Interested"
-        # for the next run rather than writing a confident-looking score off blank input.
+        # No real JD text means nothing to score against. Retry up to MAX_ENRICHMENT_ATTEMPTS
+        # (mirrors rescore_retry_jobs()'s scoring-attempt ceiling) rather than looping on the
+        # same unfetchable URL forever; past the ceiling, hand it to a human instead.
         if not e or not e.get("description"):
-            log(f"  ⏳ Enrichment failed, leaving as Interested for next run: {page['url']}")
+            attempts = (page.get("enrichment_attempts") or 0) + 1
+            if attempts > MAX_ENRICHMENT_ATTEMPTS:
+                db_update_status(page["notion_page_id"], "Scraped", {
+                    "enrichment_attempts": attempts,
+                    "notes": "enrichment failed — add JD manually",
+                })
+                log(f"  ⚠ giving up on enrichment after {attempts} attempts, "
+                    f"moved to Scraped for manual JD entry: {page['url']}")
+            else:
+                db_update_status(page["notion_page_id"], "Interested", {
+                    "enrichment_attempts": attempts,
+                })
+                log(f"  ⏳ Enrichment failed (attempt {attempts}/{MAX_ENRICHMENT_ATTEMPTS}), "
+                    f"leaving as Interested for next run: {page['url']}")
             continue
         candidates.append({
             "url":            page["url"],

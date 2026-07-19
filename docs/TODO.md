@@ -18,12 +18,21 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   false-matched non-LinkedIn URLs too) and never scores a job whose enrichment returned no
   description — it's left as `Interested` for the next run instead. Verified by re-running
   ingest against the same 3 rows: all landed on `Scraped` with real cached JD text and
-  differentiated scores. **Known residual gap:** `generic_url_fetch()`'s title/company
-  extraction is weak (page `<title>` tag, no company parsing) and JS-rendered career sites
-  (SPAs) will return too little text and fail enrichment outright — not something worth
-  building against speculatively; revisit only if a real `Interested` URL is observed failing
-  this way. Options + trigger criteria written up in
-  `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
+  differentiated scores. **Known residual gap — mostly closed (2026-07-19):**
+  `generic_url_fetch()` now probes for a schema.org `JobPosting` JSON-LD block before falling
+  back to raw `<title>`/tag-stripped text, recovering real title/company/location even out of
+  a near-empty SPA shell when that JSON-LD is present (Option A); when both that probe and the
+  raw-text fallback come up short, it now also tries a headless Chromium render (Playwright,
+  optional dependency) and retries the same extraction against the hydrated HTML (Option B —
+  built ahead of its trigger criteria, at explicit user request, since Playwright/Chromium
+  weight in the pipeline's real runtime environment hasn't been validated yet); degrades to the
+  old "treat as enrichment failure" behavior if Playwright isn't installed or the render fails.
+  `ingest_interested_from_notion()` also gained an `Enrichment Attempts` ceiling
+  (`MAX_ENRICHMENT_ATTEMPTS`, mirroring `MAX_SCORING_ATTEMPTS`) so a permanently unfetchable URL
+  gives up after N `--ingest` passes instead of retrying forever (Option D). Still open: a paid
+  scrape API (Option C) as a no-new-infra alternative to B remains deferred — only worth adding
+  if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
+  runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 - ~~**Known gaps characterized (not fixed) by the Step 9 test suite**~~ — fixed:
   `score_jobs_batch` now clamps `int(entry.get("score", 0))` to `[0, 100]`
   (`scripts/stage1_scrape.py`); stage 3's `_draft_cold_email_single` fallback now reuses

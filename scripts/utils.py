@@ -443,6 +443,7 @@ def _page_to_job(page: dict) -> dict:
         "hm_li":       _prop_url(props, "Hiring Manager LinkedIn"),
         "sponsorship":     _prop_select(props, "Sponsorship"),
         "scoring_attempts": _prop_number(props, "Scoring Attempts"),
+        "enrichment_attempts": _prop_number(props, "Enrichment Attempts"),
         "notes":       _notion_plain_text(props.get("Notes")),
         "missing_keywords": [k.strip() for k in _notion_plain_text(props.get("Missing Keywords")).split(",") if k.strip()],
     }
@@ -519,6 +520,7 @@ _EXTRA_TO_NOTION = {
     "ats_score":               lambda v: {"ATS Match Score": {"number": float(v)}},
     "sponsorship":             lambda v: {"Sponsorship": {"select": {"name": v}}},
     "scoring_attempts":        lambda v: {"Scoring Attempts": {"number": float(v)}},
+    "enrichment_attempts":     lambda v: {"Enrichment Attempts": {"number": float(v)}},
     "missing_keywords":        lambda v: {"Missing Keywords": {"rich_text": [{"text": {"content": ", ".join(v)}}]}},
 }
 
@@ -585,6 +587,7 @@ def get_notion_jobs_by_status(status: str) -> list[dict]:
                 "title":          _notion_plain_text(props.get("Job Title")),
                 "company":        _notion_plain_text(props.get("Company")),
                 "location":       _notion_plain_text(props.get("Location")),
+                "enrichment_attempts": _prop_number(props, "Enrichment Attempts"),
             })
     except Exception as e:
         log(f"[get_notion_jobs_by_status] warning: {e}")
