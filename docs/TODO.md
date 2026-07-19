@@ -6,10 +6,23 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
 
 ## Small, standalone fixes
 
-- **Step 3 manual QA never run** — add a real `Interested` row with a live LinkedIn URL, run
-  `python run.py --ingest`, confirm it lands on `Scraped` with a real score and cached JD (not
-  silently retired). Re-run ingest twice to confirm the `existing_urls` snapshot doesn't treat
-  the first run's output as a duplicate of itself.
+- **Step 3 manual QA run (2026-07-18)** — added 3 real `Interested` rows (Netflix, SmithRx/
+  Greenhouse, Amazon — via the scratch-note path) and ran `python run.py --ingest`. The
+  self-match fix holds (no row retired against itself). But it surfaced a real bug:
+  `scrape_job_urls()` only enriches `linkedin.com/jobs/view/...` URLs; all 3 non-LinkedIn URLs
+  matched 0 results and were scored anyway on an empty description, landing on `Scraped` with a
+  fabricated-looking score and no cached JD. Fixed: `scripts/sources.py` gained
+  `enrich_job_url()` — dispatches Greenhouse/Lever/Ashby URLs to their direct per-job JSON APIs,
+  everything else to a best-effort `generic_url_fetch()` HTML scrape; `ingest_interested_from_notion()`
+  now partitions by actual `linkedin.com` domain (not the old digit-run regex, which
+  false-matched non-LinkedIn URLs too) and never scores a job whose enrichment returned no
+  description — it's left as `Interested` for the next run instead. Verified by re-running
+  ingest against the same 3 rows: all landed on `Scraped` with real cached JD text and
+  differentiated scores. **Known residual gap:** `generic_url_fetch()`'s title/company
+  extraction is weak (page `<title>` tag, no company parsing) and JS-rendered career sites
+  (SPAs) will return too little text and fail enrichment outright — not something worth
+  building against speculatively; revisit only if a real `Interested` URL is observed failing
+  this way.
 - ~~**Known gaps characterized (not fixed) by the Step 9 test suite**~~ — fixed:
   `score_jobs_batch` now clamps `int(entry.get("score", 0))` to `[0, 100]`
   (`scripts/stage1_scrape.py`); stage 3's `_draft_cold_email_single` fallback now reuses
