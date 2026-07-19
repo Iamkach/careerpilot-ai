@@ -160,6 +160,13 @@ SPONSORSHIP_CONFIRMED_MARKER = "sponsorship confirmed"
 # Set to 0 to disable the filter.
 MIN_ATS_SCORE = 30
 
+# --- Auto-review gate (stage 1) -------------------------------
+# Jobs at/above this ATS score whose JD explicitly offers visa sponsorship skip the manual
+# Scraped→Reviewed gate and land in "Reviewed" directly (see stage1 _auto_review_status).
+# Everything less certain (silent/"unknown" sponsorship, or a lower score) stays in "Scraped"
+# for a human second-eye pass.
+AUTO_REVIEW_MIN_SCORE = 35
+
 # --- Scoring reliability (stage 1) ----------------------------
 # A job whose AI scoring call fails (after ai_chat's internal retries) is written to Notion
 # with Status="Retry" and an empty ATS score instead of the old fabricated score=50. It is
