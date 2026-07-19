@@ -17,9 +17,10 @@ implemented and retired; their content is summarized in [`../CHANGELOG.md`](../C
   an added `--metered-provider` flag and a new `openrouter` provider beyond the original spec.
   Deleted.
 
-One plan remains and still describes unimplemented work. Open scope is tracked in
+Two plans remain and still describe unimplemented work. Open scope is tracked in
 [`../TODO.md`](../TODO.md).
 
 | Plan | Status | Covers |
 |---|---|---|
 | [`communications/communications-subsystem.md`](communications/communications-subsystem.md) | not started | Stages 7-8: LinkedIn leads + Hunter-verified cold email (Step 7) |
+| [`onboarding/forkable-setup.md`](onboarding/forkable-setup.md) | not started | One-time `--init` wizard, `config/profile.json`, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning (Step 11) |
