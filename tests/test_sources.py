@@ -7,6 +7,7 @@ whatever config/settings.py currently has — these functions are pure given the
 the tests shouldn't break just because someone edits TARGET_ROLES for their own job search.
 """
 import datetime
+import json
 
 import pytest
 
@@ -209,3 +210,207 @@ def test_parse_salary_checks_fields_in_priority_order():
     # "salaryRange" is checked before "pay" per the function's key order.
     job = {"pay": "ignored", "salaryRange": "$100k"}
     assert sources._parse_salary(job) == "$100k"
+
+
+# ── _extract_jobposting_jsonld ──────────────────────────────────────────────
+# Closes gap #1/#2 from docs/refinement-plans/sourcing/career-site-enrichment-fallback.md:
+# generic_url_fetch()'s raw-tag-stripping fallback returns blank company/location and can
+# come back near-empty on a JS-rendered SPA shell. JSON-LD JobPosting data is often present
+# in the server-rendered <head> even when the visible DOM is client-hydrated.
+
+_JOB_DESCRIPTION = (
+    "We are looking for a Senior Backend Engineer to help scale our platform. "
+    "Experience with Python, AWS, and distributed systems required. " * 3
+)
+
+
+def _jsonld_html(payload) -> str:
+    return (
+        "<html><head><title>Careers</title>"
+        f'<script type="application/ld+json">{json.dumps(payload)}</script>'
+        "</head><body><div id=\"root\"></div></body></html>"
+    )
+
+
+def _job_posting_node(**overrides) -> dict:
+    node = {
+        "@context": "https://schema.org/",
+        "@type": "JobPosting",
+        "title": "Senior Backend Engineer",
+        "hiringOrganization": {"@type": "Organization", "name": "Acme Corp"},
+        "jobLocation": {
+            "@type": "Place",
+            "address": {"addressLocality": "Austin", "addressRegion": "TX"},
+        },
+        "description": _JOB_DESCRIPTION,
+    }
+    node.update(overrides)
+    return node
+
+
+def test_extract_jobposting_jsonld_single_object():
+    html = _jsonld_html(_job_posting_node())
+    result = sources._extract_jobposting_jsonld(html)
+    assert result == {
+        "title": "Senior Backend Engineer",
+        "company": "Acme Corp",
+        "location": "Austin, TX",
+        "description": _JOB_DESCRIPTION.strip(),
+    }
+
+
+def test_extract_jobposting_jsonld_graph_wrapped():
+    html = _jsonld_html({
+        "@context": "https://schema.org/",
+        "@graph": [
+            {"@type": "Organization", "name": "Acme Corp"},
+            _job_posting_node(),
+        ],
+    })
+    result = sources._extract_jobposting_jsonld(html)
+    assert result["title"] == "Senior Backend Engineer"
+    assert result["company"] == "Acme Corp"
+
+
+def test_extract_jobposting_jsonld_list_wrapped():
+    html = _jsonld_html([
+        {"@type": "WebSite", "name": "Acme Careers"},
+        _job_posting_node(),
+    ])
+    result = sources._extract_jobposting_jsonld(html)
+    assert result["company"] == "Acme Corp"
+
+
+def test_extract_jobposting_jsonld_type_as_list():
+    html = _jsonld_html(_job_posting_node(**{"@type": ["JobPosting", "Thing"]}))
+    result = sources._extract_jobposting_jsonld(html)
+    assert result is not None
+    assert result["title"] == "Senior Backend Engineer"
+
+
+def test_extract_jobposting_jsonld_no_job_posting_type_returns_none():
+    html = _jsonld_html({"@type": "Organization", "name": "Acme Corp"})
+    assert sources._extract_jobposting_jsonld(html) is None
+
+
+def test_extract_jobposting_jsonld_malformed_json_does_not_raise():
+    html = (
+        "<html><head>"
+        '<script type="application/ld+json">{not valid json</script>'
+        "</head><body></body></html>"
+    )
+    assert sources._extract_jobposting_jsonld(html) is None
+
+
+def test_extract_jobposting_jsonld_no_script_tag_returns_none():
+    assert sources._extract_jobposting_jsonld("<html><body>hi</body></html>") is None
+
+
+# ── generic_url_fetch ───────────────────────────────────────────────────────
+
+class _FakeResponse:
+    def __init__(self, text: str):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def _forbid_headless(monkeypatch):
+    """Assert the (expensive) headless-render fallback is never reached when the static
+    JSON-LD/raw-text path already succeeded."""
+    def _raise(*a, **k):
+        raise AssertionError("_headless_fetch should not be called when the static path succeeds")
+    monkeypatch.setattr(sources, "_headless_fetch", _raise)
+
+
+def test_generic_url_fetch_uses_jsonld_even_when_visible_text_is_a_near_empty_spa_shell(
+    monkeypatch,
+):
+    """The core gap-2 fix: a JS-rendered shell whose hydrated body is nearly empty (would
+    fail the 200-char guard) still enriches correctly because the JobPosting JSON-LD lives
+    in the server-rendered <head> — no need to fall through to a headless render at all."""
+    html = _jsonld_html(_job_posting_node())
+    monkeypatch.setattr(sources.requests, "get", lambda *a, **k: _FakeResponse(html))
+    _forbid_headless(monkeypatch)
+
+    result = sources.generic_url_fetch("https://careers.example.com/job/123")
+
+    assert result == {
+        "title": "Senior Backend Engineer",
+        "company": "Acme Corp",
+        "location": "Austin, TX",
+        "description": _JOB_DESCRIPTION.strip(),
+    }
+
+
+def test_generic_url_fetch_falls_back_to_raw_text_when_no_jsonld_present(monkeypatch):
+    html = (
+        "<html><head><title>Senior Backend Engineer - Job ID 123 | Acme</title></head>"
+        f"<body><p>{_JOB_DESCRIPTION}</p></body></html>"
+    )
+    monkeypatch.setattr(sources.requests, "get", lambda *a, **k: _FakeResponse(html))
+    _forbid_headless(monkeypatch)
+
+    result = sources.generic_url_fetch("https://careers.example.com/job/123")
+
+    assert result["title"] == "Senior Backend Engineer - Job ID 123 | Acme"
+    assert result["company"] == ""
+    assert result["location"] == ""
+    assert _JOB_DESCRIPTION.strip() in result["description"]
+
+
+def test_generic_url_fetch_falls_back_to_headless_render_when_static_path_is_too_short(
+    monkeypatch,
+):
+    """Option B: a genuine SPA shell (no JSON-LD, near-empty static text) still enriches
+    once the headless-rendered HTML is run back through the same JSON-LD/raw-text logic."""
+    shell_html = "<html><head><title>Careers</title></head><body><div id=\"root\"></div></body></html>"
+    rendered_html = _jsonld_html(_job_posting_node())
+    monkeypatch.setattr(sources.requests, "get", lambda *a, **k: _FakeResponse(shell_html))
+    monkeypatch.setattr(sources, "_headless_fetch", lambda url, **k: rendered_html)
+
+    result = sources.generic_url_fetch("https://careers.example.com/job/123")
+
+    assert result == {
+        "title": "Senior Backend Engineer",
+        "company": "Acme Corp",
+        "location": "Austin, TX",
+        "description": _JOB_DESCRIPTION.strip(),
+    }
+
+
+def test_generic_url_fetch_returns_none_when_headless_render_also_comes_up_short(monkeypatch):
+    shell_html = "<html><head><title>Careers</title></head><body><div id=\"root\"></div></body></html>"
+    monkeypatch.setattr(sources.requests, "get", lambda *a, **k: _FakeResponse(shell_html))
+    monkeypatch.setattr(sources, "_headless_fetch", lambda url, **k: shell_html)
+
+    assert sources.generic_url_fetch("https://careers.example.com/job/123") is None
+
+
+def test_generic_url_fetch_returns_none_when_headless_fetch_itself_fails(monkeypatch):
+    shell_html = "<html><head><title>Careers</title></head><body><div id=\"root\"></div></body></html>"
+    monkeypatch.setattr(sources.requests, "get", lambda *a, **k: _FakeResponse(shell_html))
+    monkeypatch.setattr(sources, "_headless_fetch", lambda url, **k: None)
+
+    assert sources.generic_url_fetch("https://careers.example.com/job/123") is None
+
+
+# ── _headless_fetch ──────────────────────────────────────────────────────────
+
+def test_headless_fetch_returns_none_gracefully_when_playwright_not_installed(monkeypatch):
+    """Playwright is an optional dependency (requirements.txt) — its absence must degrade to
+    a None return, never a hard ImportError bubbling up to the caller. Blocks the import
+    regardless of whether playwright happens to be installed in whatever environment runs
+    this test, so the test is deterministic either way."""
+    import builtins
+    real_import = builtins.__import__
+
+    def _blocked_import(name, *a, **k):
+        if name.startswith("playwright"):
+            raise ImportError("simulated: playwright not installed")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
+
+    assert sources._headless_fetch("https://careers.example.com/job/123") is None

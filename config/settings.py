@@ -176,6 +176,14 @@ AUTO_REVIEW_MIN_SCORE = 35
 # promoted to "Scraped" with an empty score rather than retried forever.
 MAX_SCORING_ATTEMPTS = 3
 
+# --- Enrichment reliability ("Interested" intake) --------------
+# A hand-picked "Interested" job whose URL enrichment fails (enrich_job_url() returns None or
+# no description -- e.g. a JS-rendered career page generic_url_fetch() can't extract text
+# from) is left as "Interested" and retried on the next --ingest run. After this many failed
+# enrichment passes, it's given up on and promoted to "Scraped" with a Notes marker asking the
+# human to add the JD manually, rather than retried forever. Mirrors MAX_SCORING_ATTEMPTS.
+MAX_ENRICHMENT_ATTEMPTS = 3
+
 # Company types the scoring call classifies via `company_type` (in addition to score/
 # sponsorship) that should be dropped like a SKIP_COMPANIES hit. Deliberately does NOT
 # include "agency" (recruiting agencies sometimes post real product-company roles) — only
