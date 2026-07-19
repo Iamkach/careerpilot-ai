@@ -12,6 +12,7 @@ the AI Job Search Pipeline across three change horizons: **`main`** (baseline) �
 | **`architecture-analysis.md`** | The canonical document (Mermaid diagrams as fenced code). Edit this. |
 | **`architecture-analysis.html`** | Self-contained rendered report — open in a browser; **print to PDF**. Generated from the `.md`. |
 | **`build_report.py`** | Regenerates the HTML from the `.md`. Run after any edit. |
+| **`job-status-flow.md`** | Standalone reference: every Notion `Status` value, in flow order, with which stage (or human) moves a job between them. Not part of the generated report — edit directly. |
 
 ## View it / export to PDF
 
