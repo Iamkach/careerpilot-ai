@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat, load_resume,
+    claude_chat, load_resume, wrap_consecutive_li,
     db_update_status, db_get_job_by_company, db_get_job_description,
     log, today, ensure_dirs,
 )
@@ -93,6 +93,7 @@ def render_html(content: str, job: dict) -> str:
     html_body = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html_body, flags=re.MULTILINE)
     html_body = re.sub(r'^\* (.+)$',  r'<li>\1</li>', html_body, flags=re.MULTILINE)
     html_body = re.sub(r'^\- (.+)$',  r'<li>\1</li>', html_body, flags=re.MULTILINE)
+    html_body = wrap_consecutive_li(html_body)
     html_body = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html_body)
     html_body = html_body.replace("\n\n", "</p><p>")
 

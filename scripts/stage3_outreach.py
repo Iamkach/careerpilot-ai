@@ -123,9 +123,7 @@ Rules:
 Return JSON: {{"subject": "...", "body": "..."}}"""
     raw = claude_chat(prompt, system=SYSTEM_OUTREACH)
     try:
-        import json
-        clean = raw.strip().strip("```json").strip("```").strip()
-        return {"company": job["company"], **json.loads(clean)}
+        return {"company": job["company"], **parse_json_response(raw)}
     except Exception:
         return {"company": job["company"], "subject": f"Interest in {job['title']} at {job['company']}", "body": raw}
 

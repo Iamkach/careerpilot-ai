@@ -2,8 +2,9 @@
 Phase 1 — unit tests for the pure, AI-independent markdown→HTML regex converters:
 stage5_interview_prep.render_html and stage6_negotiate.render_brief.
 
-Includes characterization tests (not fixes) for the known gap that consecutive `<li>` lines
-are never wrapped in `<ul>`/`<ol>` — see docs/backlog/step-9-evals-testing.md's non-goals.
+Includes tests for consecutive `<li>` lines being wrapped in `<ul>`/`</ul>` (formerly a
+documented gap in docs/backlog/step-9-evals-testing.md's non-goals — fixed via
+scripts/utils.wrap_consecutive_li).
 """
 from scripts import stage5_interview_prep as stage5
 from scripts import stage6_negotiate as stage6
@@ -43,15 +44,14 @@ def test_render_html_includes_job_metadata():
     assert JOB["url"] in html
 
 
-def test_render_html_characterization_consecutive_li_not_wrapped_in_ul():
-    # Known gap (documented, not fixed): two consecutive bullet lines each become a bare
-    # <li>, with no enclosing <ul>/<ol> — invalid list HTML today. This test locks in that
-    # current behavior so a future fix has one place to update.
+def test_render_html_wraps_consecutive_li_in_ul():
     html = stage5.render_html("* First\n* Second", JOB)
     assert "<li>First</li>" in html
     assert "<li>Second</li>" in html
-    assert "<ul>" not in html
-    assert "</ul>" not in html
+    assert "<ul>" in html
+    assert "</ul>" in html
+    # both bullets share a single enclosing <ul>, not one each
+    assert html.count("<ul>") == 1
 
 
 # ── stage6_negotiate.render_brief ──────────────────────────────────────────
@@ -82,8 +82,9 @@ def test_render_brief_characterization_asterisk_bullets_not_converted():
     assert "* Not converted" in html
 
 
-def test_render_brief_characterization_consecutive_li_not_wrapped_in_ul():
+def test_render_brief_wraps_consecutive_li_in_ul():
     html = stage6.render_brief("- First\n- Second", "Acme Corp", "Senior PM", 180000.0)
     assert "<li>First</li>" in html
     assert "<li>Second</li>" in html
-    assert "<ul>" not in html
+    assert "<ul>" in html
+    assert html.count("<ul>") == 1

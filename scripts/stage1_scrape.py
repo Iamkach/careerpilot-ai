@@ -292,7 +292,7 @@ Reply with ONLY a JSON array, one entry per job, in the same order:
                 company_type = "unknown"
             results.append({
                 "url":              job["url"],
-                "score":            int(entry.get("score", 0)),
+                "score":            max(0, min(100, int(entry.get("score", 0)))),
                 "scored":           True,
                 "missing_keywords": entry.get("missing_keywords", []),
                 "sponsorship":      sponsorship,

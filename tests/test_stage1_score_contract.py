@@ -159,20 +159,26 @@ def test_chunk_level_malformed_response_only_blanks_out_that_chunks_jobs(monkeyp
     assert by_url[last_job_url]["score"] is None
 
 
-# ── Characterization test: unclamped ATS score (documented, not fixed) ─────
+# ── ATS score is clamped to [0, 100] ────────────────────────────────────────
 
-def test_unclamped_ats_score_is_a_known_gap_not_a_regression(patch_ai_chat):
-    """Characterization test, not a bug fix: _score_jobs_chunk does int(entry["score"]) with
-    no 0-100 clamp. A model reply outside that range (150, or negative) passes straight
-    through unclamped — documented in docs/backlog/step-9-evals-testing.md's non-goals as a
-    known gap. If this test starts failing, either the gap was fixed (update this test) or a
-    clamp regressed silently (also worth knowing)."""
-    jobs = make_recorded_jobs(1)
-    canned = [{"url": jobs[0]["url"], "score": 150, "missing_keywords": [],
-               "sponsorship": "unknown", "company_type": "product"}]
+def test_ats_score_is_clamped_to_valid_range(patch_ai_chat):
+    """_score_jobs_chunk clamps int(entry["score"]) to [0, 100], so a hallucinated model
+    reply outside that range (150, or negative) can no longer pass straight through
+    unclamped (formerly a documented gap in docs/backlog/step-9-evals-testing.md's
+    non-goals — fixed)."""
+    jobs = make_recorded_jobs(2)
+    canned = [
+        {"url": jobs[0]["url"], "score": 150, "missing_keywords": [],
+         "sponsorship": "unknown", "company_type": "product"},
+        {"url": jobs[1]["url"], "score": -10, "missing_keywords": [],
+         "sponsorship": "unknown", "company_type": "product"},
+    ]
     patch_ai_chat(stage1_scrape, response=json.dumps(canned))
 
     results = stage1_scrape.score_jobs_batch(jobs, "resume text")
 
-    assert results[0]["scored"] is True
-    assert results[0]["score"] == 150  # not clamped to 100 — the documented gap
+    by_url = {r["url"]: r for r in results}
+    assert by_url[jobs[0]["url"]]["scored"] is True
+    assert by_url[jobs[0]["url"]]["score"] == 100  # clamped down from 150
+    assert by_url[jobs[1]["url"]]["scored"] is True
+    assert by_url[jobs[1]["url"]]["score"] == 0    # clamped up from -10
