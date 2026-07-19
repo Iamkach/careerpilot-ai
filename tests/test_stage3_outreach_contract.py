@@ -92,27 +92,20 @@ def test_draft_inmail_batch_falls_back_to_per_job_on_malformed_response(patch_ai
 
 # ── Characterization test: cold-email single fallback's ad-hoc JSON stripping ──────────────
 
-def test_cold_email_single_fallback_leaks_prose_preamble_into_body(patch_ai_chat):
-    """Characterization test, not a bug fix (documented gap in
-    docs/backlog/step-9-evals-testing.md's non-goals). _draft_cold_email_single parses its
-    response with raw.strip().strip("```json").strip("```").strip() + json.loads — unlike
-    parse_json_response, it does NOT recover embedded JSON from a response with a prose
-    preamble (str.strip(chars) only trims character-set matches from each end, it does not
-    remove a substring or search for an embedded '{'). A response with any text before the
-    JSON object fails to parse entirely, and the except branch falls back to using the whole
-    raw response text as the email body — leaking the preamble into what would be sent to a
-    real hiring contact."""
+def test_cold_email_single_fallback_recovers_json_from_prose_preamble(patch_ai_chat):
+    """_draft_cold_email_single now parses its response with parse_json_response (formerly
+    an ad-hoc raw.strip().strip("```json").strip("```") that could not recover embedded JSON
+    from a response with a prose preamble — documented gap in
+    docs/backlog/step-9-evals-testing.md's non-goals, now fixed). A response with text before
+    the JSON object should have that JSON recovered rather than leaking the preamble into
+    what would be sent to a real hiring contact."""
     job = make_recorded_jobs(1)[0]
     raw = 'Sure, here\'s the email:\n\n{"subject": "Hi there", "body": "Great opportunity"}'
     patch_ai_chat(stage3_outreach, response=raw)
 
     result = stage3_outreach._draft_cold_email_single(job, "my background")
 
-    # Documents today's actual (undesirable) behavior: falls through to the except branch,
-    # subject gets the generic fallback, and body is the full raw text — preamble included.
-    assert result["subject"] == f"Interest in {job['title']} at {job['company']}"
-    assert result["body"] == raw
-    assert "Sure, here's the email" in result["body"]
+    assert result == {"company": job["company"], "subject": "Hi there", "body": "Great opportunity"}
 
 
 def test_cold_email_single_fallback_handles_a_clean_fenced_response(patch_ai_chat):

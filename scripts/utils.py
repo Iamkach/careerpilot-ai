@@ -328,6 +328,18 @@ def parse_json_response(text: str) -> dict:
             return json.loads(s[start:end + 1])
         raise ValueError(f"Could not parse JSON from response:\n{text[:500]}")
 
+
+def wrap_consecutive_li(html: str) -> str:
+    """Wrap each run of consecutive <li>...</li> lines in a <ul>...</ul>, so markdown→HTML
+    bullet conversion produces valid list HTML instead of bare sibling <li> tags."""
+    return re.sub(
+        r'(?:^<li>.*</li>\n?)+',
+        lambda m: f"<ul>\n{m.group(0)}</ul>\n",
+        html,
+        flags=re.MULTILINE,
+    )
+
+
 def ensure_dirs():
     for d in [OUTPUT_DIR, RESUMES_DIR, PREP_GUIDES_DIR]:
         (ROOT / d).mkdir(parents=True, exist_ok=True)
