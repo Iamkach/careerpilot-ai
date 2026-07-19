@@ -352,6 +352,144 @@ def ashby_source(company: str, token: str) -> list[dict]:
     return results
 
 
+# ── Single-URL enrichment (Notion "Interested"/scratch-note intake) ──
+# Unlike the board sources above (list a whole company board), these fetch exactly one
+# job the user hand-picked, keyed off the URL they pasted. Greenhouse/Lever/Ashby have a
+# direct per-job (or per-board, matched by URL) JSON endpoint; anything else falls back to
+# a best-effort HTML text scrape since there's no ATS API to call.
+
+_HTML_TAG_RE   = re.compile(r"<[^>]+>")
+_HTML_WS_RE    = re.compile(r"[ \t]+")
+
+
+def _strip_html(html: str) -> str:
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    lines = [_HTML_WS_RE.sub(" ", ln).strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
+
+
+def greenhouse_job_by_url(url: str) -> dict | None:
+    """Fetch one Greenhouse job by its board token + job id, both parsed from the URL
+    (e.g. job-boards.greenhouse.io/{token}/jobs/{job_id})."""
+    m = re.search(r"greenhouse\.io/(?:embed/job_app\?for=)?([^/?]+)/jobs/(\d+)", url)
+    if not m:
+        return None
+    token, job_id = m.group(1), m.group(2)
+    try:
+        r = requests.get(
+            f"https://api.greenhouse.io/v1/boards/{token}/jobs/{job_id}?content=true",
+            timeout=15,
+        )
+        r.raise_for_status()
+        job = r.json()
+    except Exception as e:
+        log(f"  ✗ Greenhouse job fetch failed for {url}: {e}")
+        return None
+    return {
+        "title":       job.get("title", ""),
+        "company":     token.replace("-", " ").title(),
+        "location":    (job.get("location") or {}).get("name", ""),
+        "description": _strip_html(job.get("content", "")),
+    }
+
+
+def lever_job_by_url(url: str) -> dict | None:
+    """Fetch one Lever posting by its token + posting id, both parsed from the URL
+    (e.g. jobs.lever.co/{token}/{posting_id})."""
+    m = re.search(r"lever\.co/([^/]+)/([0-9a-fA-F-]{20,})", url)
+    if not m:
+        return None
+    token, posting_id = m.group(1), m.group(2)
+    try:
+        r = requests.get(
+            f"https://api.lever.co/v0/postings/{token}/{posting_id}?mode=json",
+            timeout=15,
+        )
+        r.raise_for_status()
+        job = r.json()
+    except Exception as e:
+        log(f"  ✗ Lever job fetch failed for {url}: {e}")
+        return None
+    categories = job.get("categories") or {}
+    return {
+        "title":       job.get("text", ""),
+        "company":     token.replace("-", " ").title(),
+        "location":    categories.get("location", "") or "",
+        "description": job.get("descriptionPlain") or job.get("description") or "",
+    }
+
+
+def ashby_job_by_url(url: str) -> dict | None:
+    """Ashby has no per-job endpoint, so fetch the whole board and match by URL —
+    same token-scoped fetch as ashby_source(), just filtered to one posting."""
+    m = re.search(r"jobs\.ashbyhq\.com/([^/]+)/", url)
+    if not m:
+        return None
+    token = m.group(1)
+    try:
+        r = requests.get(
+            f"https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=true",
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        log(f"  ✗ Ashby board fetch failed for {url}: {e}")
+        return None
+    target = url.split("?")[0].rstrip("/")
+    for job in data.get("jobs", []) or []:
+        job_url = (job.get("jobUrl") or job.get("applyUrl") or "").split("?")[0].rstrip("/")
+        if job_url and job_url == target:
+            return {
+                "title":       job.get("title", ""),
+                "company":     token.replace("-", " ").title(),
+                "location":    job.get("location", "") or "",
+                "description": job.get("descriptionPlain") or job.get("descriptionHtml") or "",
+            }
+    return None
+
+
+def generic_url_fetch(url: str) -> dict | None:
+    """Best-effort fallback for any career-site URL with no dedicated ATS API
+    (e.g. amazon.jobs, explore.jobs.netflix.net): GET the page and strip HTML tags.
+    Quality varies a lot — a JS-rendered SPA returns near-empty text, which is treated
+    as a failure (returns None) so the caller doesn't score against nothing."""
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+    except Exception as e:
+        log(f"  ✗ Generic fetch failed for {url}: {e}")
+        return None
+    title_m = re.search(r"(?is)<title[^>]*>(.*?)</title>", r.text)
+    title = _strip_html(title_m.group(1)).strip() if title_m else ""
+    text = _strip_html(r.text)
+    if len(text) < 200:
+        log(f"  ⚠ Generic fetch for {url} returned too little text ({len(text)} chars) — "
+            f"likely a JS-rendered page; treating as enrichment failure")
+        return None
+    return {
+        "title":       title,
+        "company":     "",
+        "location":    "",
+        "description": text[:8000],
+    }
+
+
+def enrich_job_url(url: str) -> dict | None:
+    """Dispatch one hand-picked job URL to the right enrichment path by domain.
+    Returns {title, company, location, description}, or None if enrichment failed —
+    callers must treat None as 'leave for retry', never as an empty-but-scorable job."""
+    if "greenhouse.io" in url:
+        return greenhouse_job_by_url(url)
+    if "lever.co" in url:
+        return lever_job_by_url(url)
+    if "ashbyhq.com" in url:
+        return ashby_job_by_url(url)
+    return generic_url_fetch(url)
+
+
 # ── Registries ────────────────────────────────────────────────
 
 KEYWORD_SOURCES = {

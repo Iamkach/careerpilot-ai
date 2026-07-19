@@ -37,7 +37,7 @@ from scripts.utils import (
 )
 from scripts.sources import (
     KEYWORD_SOURCES, BOARD_SOURCES, job_fingerprint, collapse_by_fingerprint,
-    _is_fresh, discover_tokens, _apify_run,
+    _is_fresh, discover_tokens, _apify_run, enrich_job_url,
 )
 
 APIFY_BASE = "https://api.apify.com/v2"
@@ -356,14 +356,30 @@ def ingest_interested_from_notion(resume: str) -> int:
     if not fresh:
         return 0
 
-    enriched = scrape_job_urls([p["url"] for p in fresh])
-    if enriched is None:
-        log("  ✗ Enrichment failed for all Interested jobs this run — leaving them as-is for the next run")
-        return 0
+    # LinkedIn URLs go through the batched Apify actor; everything else (Greenhouse/Lever/
+    # Ashby direct APIs, or a best-effort HTML scrape) has no batch endpoint, so it's
+    # enriched one URL at a time via enrich_job_url().
+    linkedin_pages = [p for p in fresh if "linkedin.com" in p["url"]]
+    other_pages    = [p for p in fresh if "linkedin.com" not in p["url"]]
+
+    enriched: dict[str, dict] = {}
+    if linkedin_pages:
+        li_enriched = scrape_job_urls([p["url"] for p in linkedin_pages])
+        if li_enriched:
+            enriched.update(li_enriched)
+    for page in other_pages:
+        e = enrich_job_url(page["url"])
+        if e:
+            enriched[page["url"]] = e
 
     candidates = []
     for page in fresh:
-        e = enriched.get(page["url"], {})
+        e = enriched.get(page["url"])
+        # No real JD text means nothing to score against — leave the row as "Interested"
+        # for the next run rather than writing a confident-looking score off blank input.
+        if not e or not e.get("description"):
+            log(f"  ⏳ Enrichment failed, leaving as Interested for next run: {page['url']}")
+            continue
         candidates.append({
             "url":            page["url"],
             "notion_page_id": page["notion_page_id"],
@@ -374,6 +390,9 @@ def ingest_interested_from_notion(resume: str) -> int:
             "applicant_count": None,
             "salary_range":    "",
         })
+
+    if not candidates:
+        return 0
 
     log(f"  Scoring {len(candidates)} Interested job(s) in one batch call...")
     score_by_url = {s["url"]: s for s in score_jobs_batch(candidates, resume)}
