@@ -24,3 +24,4 @@ Two plans remain and still describe unimplemented work. Open scope is tracked in
 |---|---|---|
 | [`communications/communications-subsystem.md`](communications/communications-subsystem.md) | not started | Stages 7-8: LinkedIn leads + Hunter-verified cold email (Step 7) |
 | [`onboarding/forkable-setup.md`](onboarding/forkable-setup.md) | not started | One-time `--init` wizard, `config/profile.json`, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning (Step 11) |
+| [`sourcing/career-site-enrichment-fallback.md`](sourcing/career-site-enrichment-fallback.md) | deferred — not queued, see trigger criteria | `generic_url_fetch()` gaps: no structured fields, JS-rendered SPAs return near-empty, no retry ceiling |
