@@ -12,6 +12,7 @@ Open stories:
 |---|---|---|---|
 | [step-7-communications-subsystem.md](step-7-communications-subsystem.md) | Stages 7-8: LinkedIn leads + Hunter-verified cold email, new Leads DB, GitHub Actions | Step 6 (done) | XL |
 | [step-11-forkable-setup.md](step-11-forkable-setup.md) | One-time `python run.py --init` wizard: profile.json, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning, de-personalize tracked files | current setup surface | M |
+| [step-12-sponsorship-restriction-marker.md](step-12-sponsorship-restriction-marker.md) | Per-job Notion Notes marker to hold a specific posting from sponsorship tailoring, replacing the hardcoded `RESTRICTED_SPONSORSHIP_COMPANIES` list | Stage 2 sponsorship gate (done) | S |
 
 Read `docs/TODO.md` first — it's the current index of exactly what's left, cross-referenced
 to file:line. Each story here is the full spec for one TODO section.
