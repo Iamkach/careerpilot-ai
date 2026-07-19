@@ -53,7 +53,9 @@ def test_rescore_retry_jobs_applies_the_same_post_scoring_gates_as_a_fresh_scrap
 
     assert counters == {"recovered": 1, "filtered": 3, "given_up": 0, "still_retrying": 0}
 
-    assert fake_db._pages[good]["status"] == "Scraped"
+    # "good" has the default sponsorship="unknown" (silent JD) at score 70, which now
+    # auto-promotes straight to "Reviewed" — silence isn't treated as a red flag.
+    assert fake_db._pages[good]["status"] == "Reviewed"
 
     for page_id, reason_snippet in (
         (no_sponsor, "no-sponsor"),
@@ -65,23 +67,26 @@ def test_rescore_retry_jobs_applies_the_same_post_scoring_gates_as_a_fresh_scrap
         assert reason_snippet in rec["notes"]
 
 
-def test_rescore_retry_jobs_recovers_normally_when_nothing_is_gated(
+def test_rescore_retry_jobs_recovers_and_auto_reviews_when_nothing_is_gated(
     monkeypatch, patch_ai_chat, patch_notion_db,
 ):
     monkeypatch.setattr(stage1_scrape, "EXCLUDE_NO_SPONSORSHIP", True)
     monkeypatch.setattr(stage1_scrape, "SKIP_COMPANY_TYPES", {"staffing_or_consulting"})
     monkeypatch.setattr(stage1_scrape, "MIN_ATS_SCORE", 30)
+    monkeypatch.setattr(stage1_scrape, "AUTO_REVIEW_MIN_SCORE", 35)
 
     fake_db = patch_notion_db(stage1_scrape)
     page_id = fake_db.seed(status="Retry", title="Backend Engineer", company="Acme Corp",
                             url="u1", description="jd", scoring_attempts=1)
+    # sponsorship defaults to "unknown" (silent JD) — silence isn't a red flag, so a
+    # qualifying score still auto-promotes straight to "Reviewed".
     patch_ai_chat(stage1_scrape, response=json.dumps([_score_entry("u1", 80)]))
 
     counters = stage1_scrape.rescore_retry_jobs("resume text")
 
     assert counters["recovered"] == 1
     assert counters["filtered"] == 0
-    assert fake_db._pages[page_id]["status"] == "Scraped"
+    assert fake_db._pages[page_id]["status"] == "Reviewed"
     assert fake_db._pages[page_id]["ats_score"] == 80
 
 

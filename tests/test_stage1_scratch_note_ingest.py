@@ -147,8 +147,10 @@ def test_scratch_note_wired_before_existing_interested_ingest_in_run(
     monkeypatch.setattr(stage1_scrape, "enrich_job_url", lambda url: dict(_enriched))
     monkeypatch.setattr(stage1_scrape, "scrape_job_urls",
                         lambda urls: {u: dict(_enriched) for u in urls})
+    # Score kept below AUTO_REVIEW_MIN_SCORE so this wiring-order test isn't coupled to the
+    # auto-review gate's routing behavior (see test_stage1_auto_review_gate.py for that).
     canned = [{
-        "url": "https://example.com/jobs/new", "score": 80, "missing_keywords": [],
+        "url": "https://example.com/jobs/new", "score": 20, "missing_keywords": [],
         "sponsorship": "unknown", "company_type": "product",
     }]
     patch_ai_chat(stage1_scrape, response=json.dumps(canned))
