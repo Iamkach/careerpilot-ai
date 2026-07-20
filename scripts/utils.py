@@ -113,10 +113,17 @@ def _chat_claude_code(prompt: str, system: str, max_tokens: int, quality: bool =
     SDK (no metered API key). The SDK spawns the `claude` CLI as its transport, so it uses
     the logged-in subscription (interactive login or CLAUDE_CODE_OAUTH_TOKEN for headless/CI
     auth) as long as ANTHROPIC_API_KEY is not in the environment.
-    Note: prompt caching is unavailable over this path; `max_tokens` has no SDK knob."""
+    Note: prompt caching is unavailable over this path; `max_tokens` has no SDK knob.
+
+    ANTHROPIC_API_KEY is removed from os.environ only for the duration of this call (the SDK
+    spawns the CLI as a subprocess, which would otherwise inherit it and bill metered), then
+    restored. Leaving it popped mutated process-global state for every later call — harmless
+    today only because each backend passes its key explicitly, which is not a property a
+    future backend is obliged to preserve. This matters under hybrid tiering, where metered
+    and subscription calls interleave in one process."""
     import asyncio
-    os.environ.pop("ANTHROPIC_API_KEY", None)  # force subscription auth, never metered
     _find_claude_cli()  # fail fast with a clear message if the CLI is missing
+    saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)  # force subscription auth, never metered
     try:
         return asyncio.run(_sdk_text(prompt, system, _resolve_model(quality, "claude_code")))
     except Exception as e:
@@ -128,6 +135,9 @@ def _chat_claude_code(prompt: str, system: str, max_tokens: int, quality: bool =
                 "Re-running is safe — stages are idempotent via Notion status."
             ) from e
         raise
+    finally:
+        if saved_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
 
 
 def _chat_gemini(prompt: str, system: str, max_tokens: int, quality: bool = False) -> str:
@@ -204,8 +214,14 @@ _RETRY_DELAYS = (2, 8)  # seconds; len(_RETRY_DELAYS) + 1 total attempts
 
 _TRANSIENT_ERROR_PATTERNS = (
     "timeout", "timed out", "connection", "temporarily unavailable", "overloaded",
-    "429", "500", "502", "503", "504", "rate limit",
+    "rate limit",
 )
+
+# HTTP status codes worth retrying. Matched with a word boundary rather than as a bare
+# substring: a plain `"500" in msg` also fires on any error text that happens to contain
+# those digits (a token count, a job id, a salary), silently turning a permanent failure
+# into three retries.
+_TRANSIENT_STATUS_RE = re.compile(r"\b(429|500|502|503|504)\b")
 
 
 def _is_usage_cap_error(e: Exception) -> bool:
@@ -215,7 +231,9 @@ def _is_usage_cap_error(e: Exception) -> bool:
 
 def _is_transient_error(e: Exception) -> bool:
     msg = str(e).lower()
-    return any(p in msg for p in _TRANSIENT_ERROR_PATTERNS)
+    if any(p in msg for p in _TRANSIENT_ERROR_PATTERNS):
+        return True
+    return bool(_TRANSIENT_STATUS_RE.search(msg))
 
 
 def _call_with_retry(call):
@@ -245,7 +263,10 @@ def _active_provider(quality: bool = False) -> str:
     precedence when either differs from AI_PROVIDER (e.g. a nightly CI run splitting bulk
     calls onto metered and low-volume calls onto the subscription); otherwise falls through
     to STAGE_AI_PROVIDER or AI_PROVIDER, preserving today's single-provider behavior."""
-    from config.settings import STAGE_AI_PROVIDER
+    # getattr, not a hard `from config.settings import` — every other setting read in this
+    # module is optional-by-default, and a hard import turns a removed/renamed setting into
+    # an ImportError on every AI call rather than a fallback to AI_PROVIDER.
+    STAGE_AI_PROVIDER = getattr(_settings, "STAGE_AI_PROVIDER", "")
     fast    = getattr(_settings, "FAST_PROVIDER", "") or AI_PROVIDER
     quality_provider = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
     if fast != AI_PROVIDER or quality_provider != AI_PROVIDER:
@@ -469,8 +490,7 @@ def _notion_write_job(job: dict) -> str | None:
     if not NOTION_API_KEY:
         return None
     try:
-        from notion_client import Client as NotionClient
-        notion = NotionClient(auth=NOTION_API_KEY)
+        notion = _notion()
         props = {
             "Job Title":    {"title": [{"text": {"content": job.get("title", "")}}]},
             "Company":      {"rich_text": [{"text": {"content": job.get("company", "")}}]},
@@ -529,8 +549,7 @@ def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
     if not NOTION_API_KEY or not notion_page_id:
         return
     try:
-        from notion_client import Client as NotionClient
-        notion = NotionClient(auth=NOTION_API_KEY)
+        notion = _notion()
         props = {"Status": {"select": {"name": status}}}
         for k, v in (extra_props or {}).items():
             converter = _EXTRA_TO_NOTION.get(k)
@@ -562,35 +581,34 @@ def _notion_plain_text(prop: dict) -> str:
 def get_notion_jobs_by_status(status: str) -> list[dict]:
     """Return Notion pages with the given Status (e.g. 'Interested') that the
     user added by hand. Each dict: {notion_page_id, url, title, company, location}.
-    Skips rows without a Job URL. Returns [] if Notion isn't configured."""
+    Skips rows without a Job URL. Returns [] if Notion isn't configured.
+
+    Goes through _query_db() like every other reader, so it follows pagination (the old
+    raw single-POST read silently truncated at Notion's 100-row page size) and **raises**
+    RuntimeError on a failed read instead of returning []. A read failure that looked
+    identical to "no jobs with this status" is the same silent-empty hazard
+    db_get_all_jobs() was hardened against."""
     if not NOTION_API_KEY:
         return []
-    jobs = []
     try:
-        import requests
-        headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
-        body = {"filter": {"property": "Status", "select": {"equals": status}}}
-        resp = requests.post(
-            f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
-            json=body,
-            headers=headers,
-        )
-        results = resp.json().get("results", []) if resp.ok else []
-        for page in results:
-            props = page.get("properties", {})
-            url = (props.get("Job URL") or {}).get("url")
-            if not url:
-                continue
-            jobs.append({
-                "notion_page_id": page["id"],
-                "url":            url,
-                "title":          _notion_plain_text(props.get("Job Title")),
-                "company":        _notion_plain_text(props.get("Company")),
-                "location":       _notion_plain_text(props.get("Location")),
-                "enrichment_attempts": _prop_number(props, "Enrichment Attempts"),
-            })
+        pages = _query_db(filter_={"property": "Status", "select": {"equals": status}})
     except Exception as e:
-        log(f"[get_notion_jobs_by_status] warning: {e}")
+        log(f"[get_notion_jobs_by_status] read failed for status={status!r}: {e}")
+        raise RuntimeError(f"get_notion_jobs_by_status({status!r}) read failed: {e}") from e
+    jobs = []
+    for page in pages:
+        props = page.get("properties", {})
+        url = (props.get("Job URL") or {}).get("url")
+        if not url:
+            continue
+        jobs.append({
+            "notion_page_id": page["id"],
+            "url":            url,
+            "title":          _notion_plain_text(props.get("Job Title")),
+            "company":        _notion_plain_text(props.get("Company")),
+            "location":       _notion_plain_text(props.get("Location")),
+            "enrichment_attempts": _prop_number(props, "Enrichment Attempts"),
+        })
     return jobs
 
 
@@ -662,8 +680,7 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Sc
     if not NOTION_API_KEY or not notion_page_id:
         return
     try:
-        from notion_client import Client as NotionClient
-        notion = NotionClient(auth=NOTION_API_KEY)
+        notion = _notion()
         props = {
             "Status":       {"select": {"name": status}},
             "Date Scraped": {"date": {"start": today()}},
@@ -724,18 +741,22 @@ def db_find_job_by_url(url: str, exclude_page_id: str = "") -> str | None:
 
     `exclude_page_id` skips a hit whose id matches it — needed when checking a manually-added
     row against the rest of the DB, since that row already holds its own Job URL and would
-    otherwise match itself."""
+    otherwise match itself.
+
+    **Raises** RuntimeError on a failed read rather than returning None. None means "no such
+    job exists", which callers act on by creating a new row — so swallowing a read failure
+    here duplicates the tracker, the same failure mode db_get_all_jobs() raises to prevent."""
     if not url:
         return None
     try:
         pages = _query_db(filter_={"property": "Job URL", "url": {"equals": url}})
-        for page in pages:
-            if page["id"] != exclude_page_id:
-                return page["id"]
-        return None
     except Exception as e:
-        log(f"[db_find_job_by_url] warning: {e}")
-        return None
+        log(f"[db_find_job_by_url] read failed for {url}: {e}")
+        raise RuntimeError(f"db_find_job_by_url({url!r}) read failed: {e}") from e
+    for page in pages:
+        if page["id"] != exclude_page_id:
+            return page["id"]
+    return None
 
 
 def db_add_job(job: dict) -> str:

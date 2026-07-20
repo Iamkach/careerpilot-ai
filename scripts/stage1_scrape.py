@@ -335,7 +335,15 @@ def ingest_from_scratch_note() -> int:
     added = 0
     for entry in entries:
         url, page_id = entry["url"], entry["page_id"]
-        if db_find_job_by_url(url):
+        try:
+            already_tracked = db_find_job_by_url(url)
+        except RuntimeError as e:
+            # db_find_job_by_url now raises rather than reporting a failed read as "no such
+            # job". Skip this URL and leave its scratch row un-archived — that's already the
+            # retry mechanism — instead of creating a row we can't prove isn't a duplicate.
+            log(f"  ✗ Dedup check failed, leaving in note for retry: {url} ({e})")
+            continue
+        if already_tracked:
             log(f"  ⊘ Already tracked, dropping from note: {url}")
             archive_scratch_note_entry(page_id)
             continue
@@ -572,7 +580,8 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set
 
     `seen_urls`/`existing_fps` dedup within this run and against Notion respectively;
     `existing_urls` is a one-shot snapshot of every URL already in Notion, so the two
-    together cover this run and all prior ones."""
+    together cover this run and all prior ones. (The within-run `seen_urls` check itself
+    lives in the caller, which is what maintains the set.)"""
     url             = job.get("url", "")
     title           = job.get("title", "")
     company         = job.get("company", "")
@@ -581,8 +590,6 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set
     applicant_count = job.get("applicant_count")
 
     if not url:
-        return False
-    if url in seen_urls:
         return False
     if not _is_fresh(job.get("posted_date")):
         counters["stale"] += 1
@@ -623,16 +630,28 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set
 # ── 8. Main pipeline ─────────────────────────────────────────
 
 def run():
+    """Open today's drop log and run one scrape pass, closing the log whatever happens.
+
+    The close lives here in a `finally` rather than at the end of the pass: db_add_job()
+    raises on a failed Notion write, and any such error used to leak the handle *and* lose
+    the drop log's summary — the record of what got filtered is most valuable precisely on
+    the runs that failed partway."""
+    drop_log_path, drop_fh = _open_drop_log()
+    try:
+        _scrape_pass(drop_log_path, drop_fh)
+    finally:
+        drop_fh.close()
+
+
+def _scrape_pass(drop_log_path, drop_fh):
     resume   = load_resume()
     added    = 0
     ingested = 0
     counters = {
         "company": 0, "title": 0, "location": 0, "stale": 0,
         "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
-        "staffing_ai": 0, "retry": 0, "auto_reviewed": 0,
+        "staffing_ai": 0, "retry": 0, "auto_reviewed": 0, "write_failed": 0,
     }
-
-    drop_log_path, drop_fh = _open_drop_log()
 
     # 8a-pre. Promote scratch-note URL drops to Interested rows
     try:
@@ -660,17 +679,21 @@ def run():
         log(f"  ✗ Retry-queue rescoring failed: {e}")
 
     # 8a-ter. One-shot Notion snapshot for dedup (replaces per-job db_find_job_by_url).
-    # Taken after ingestion so freshly-promoted "Interested" rows are included. Excludes
-    # not-yet-settled statuses (Interested, Retry) so a queued row doesn't dedup
-    # against itself. A failed read means dedup state is unknown — abort rather than
-    # proceeding as if the DB were empty, which would mass-duplicate the tracker.
-    UNSETTLED_STATUSES = {"Interested", "Retry"}
+    # Taken after ingestion so freshly-promoted "Interested" rows are included. A failed
+    # read means dedup state is unknown — abort rather than proceeding as if the DB were
+    # empty, which would mass-duplicate the tracker.
+    #
+    # Only "Interested" is excluded, and only because ingest_interested_from_notion()
+    # promotes that row *in place* — it would otherwise dedup against itself. "Retry" must
+    # NOT be excluded: the fresh-scrape path below calls db_add_job(), which creates a brand
+    # new page, so a job left at Retry by rescore_retry_jobs()'s still_retrying branch would
+    # get a second Notion page on the very next run.
+    UNSETTLED_STATUSES = {"Interested"}
     try:
         existing_jobs = db_get_all_jobs()
     except RuntimeError as e:
         log(f"  ✗ ABORTING scrape — Notion snapshot read failed, dedup state unknown: {e}")
         drop_fh.write(f"\nABORTED: {e}\n")
-        drop_fh.close()
         return
     existing_urls = {j["url"] for j in existing_jobs if j["url"] and j["status"] not in UNSETTLED_STATUSES}
     existing_fps  = {
@@ -741,20 +764,26 @@ def run():
                 sal    = job.get("salary_range", "")
                 posted = job.get("posted_date")
                 src    = job.get("source", "")
-                db_add_job({
-                    "title":            job["title"],
-                    "company":          job["company"],
-                    "location":         job["location"],
-                    "url":              job["url"],
-                    "status":           "Retry",
-                    "sponsorship":      "unknown",
-                    "scoring_attempts": 1,
-                    "description":      job["description"],
-                    "applicant_count":  ac,
-                    "salary_range":     sal,
-                    "posted_date":      posted,
-                    "source":           src,
-                })
+                try:
+                    db_add_job({
+                        "title":            job["title"],
+                        "company":          job["company"],
+                        "location":         job["location"],
+                        "url":              job["url"],
+                        "status":           "Retry",
+                        "sponsorship":      "unknown",
+                        "scoring_attempts": 1,
+                        "description":      job["description"],
+                        "applicant_count":  ac,
+                        "salary_range":     sal,
+                        "posted_date":      posted,
+                        "source":           src,
+                    })
+                except Exception as e:
+                    counters["write_failed"] += 1
+                    _log_drop(drop_fh, "write-failed", job)
+                    log(f"  ✗ [write-failed]  {job['company']} — {job['title']}: {e}")
+                    continue
                 counters["retry"] += 1
                 log(f"  ⏳ [retry]         {job['company']} — {job['title']} (scoring failed)")
                 continue
@@ -786,21 +815,30 @@ def run():
             posted = job.get("posted_date")
             src  = job.get("source", "")
             status = _auto_review_status(sponsorship, score)
-            db_add_job({
-                "title":           job["title"],
-                "company":         job["company"],
-                "location":        job["location"],
-                "url":             job["url"],
-                "status":          status,
-                "ats_score":       score,
-                "sponsorship":     sponsorship,
-                "description":     job["description"],
-                "missing_keywords": s["missing_keywords"],
-                "applicant_count": ac,
-                "salary_range":    sal,
-                "posted_date":     posted,
-                "source":          src,
-            })
+            try:
+                db_add_job({
+                    "title":           job["title"],
+                    "company":         job["company"],
+                    "location":        job["location"],
+                    "url":             job["url"],
+                    "status":          status,
+                    "ats_score":       score,
+                    "sponsorship":     sponsorship,
+                    "description":     job["description"],
+                    "missing_keywords": s["missing_keywords"],
+                    "applicant_count": ac,
+                    "salary_range":    sal,
+                    "posted_date":     posted,
+                    "source":          src,
+                })
+            except Exception as e:
+                # One bad Notion write must not abort the rest of the scrape. The job simply
+                # isn't tracked this run; it has no page, so the next run re-scrapes it
+                # normally (nothing to dedup against) rather than losing it silently.
+                counters["write_failed"] += 1
+                _log_drop(drop_fh, "write-failed", job)
+                log(f"  ✗ [write-failed]  {job['company']} — {job['title']}: {e}")
+                continue
             added  += 1
             if status == "Reviewed":
                 counters["auto_reviewed"] += 1
@@ -819,11 +857,10 @@ def run():
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
         f"staffing/AI:{counters['staffing_ai']}  "
         f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}  "
-        f"low-ats-score:{counters['low_score']}\n"
+        f"low-ats-score:{counters['low_score']}  write-failed:{counters['write_failed']}\n"
         f"Drop log saved -> {drop_log_path}"
     )
     drop_fh.write(f"\n{'='*70}\nSUMMARY\n{summary}\n")
-    drop_fh.close()
 
     log(summary)
     log(f"View tracker: https://www.notion.so/{NOTION_DB_ID.replace('-', '')}")

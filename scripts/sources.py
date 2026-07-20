@@ -35,6 +35,7 @@ shape. See docs/backlog/step-6-multi-source-phase1.md's "Backup plan" section.
 
 import sys, time, re, json, datetime, requests
 from pathlib import Path
+from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import (
@@ -59,30 +60,50 @@ LINKEDIN_MAX = 25
 INDEED_MAX   = 25
 
 
+APIFY_HTTP_TIMEOUT = 30  # seconds per HTTP call; the poll loop bounds total wall time
+
+
 def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
-    """Start an Apify actor run, poll until done, return dataset items."""
+    """Start an Apify actor run, poll until done, return dataset items.
+
+    Raises RuntimeError if the run fails, is aborted, or is still running when the poll
+    budget runs out. Exhausting the budget must NOT fall through to the dataset fetch:
+    a still-running run's dataset is partial, and returning it silently looks identical
+    to a genuinely empty search — the same class of silent-partial-success the scoring
+    path deliberately avoids by never fabricating a score."""
     run_url = f"{APIFY_BASE}/acts/{actor}/runs"
-    r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN})
+    r = requests.post(run_url, json=payload, params={"token": APIFY_API_TOKEN},
+                      timeout=APIFY_HTTP_TIMEOUT)
     r.raise_for_status()
     run_id = r.json()["data"]["id"]
 
+    run_data = None
     for _ in range(poll):
         time.sleep(10)
         status_r = requests.get(
             f"{APIFY_BASE}/actor-runs/{run_id}",
             params={"token": APIFY_API_TOKEN},
+            timeout=APIFY_HTTP_TIMEOUT,
         )
-        status = status_r.json()["data"]["status"]
+        run_data = status_r.json()["data"]
+        status = run_data["status"]
         log(f"  Apify [{actor}] status: {status}")
         if status == "SUCCEEDED":
             break
         if status in ("FAILED", "ABORTED"):
             raise RuntimeError(f"Apify run {status}")
+    else:
+        last = run_data["status"] if run_data else "never polled"
+        raise RuntimeError(
+            f"Apify run {run_id} for '{actor}' did not finish within {poll} polls "
+            f"(last status: {last}) — treating as failure rather than returning a "
+            f"partial dataset"
+        )
 
-    dataset_id = status_r.json()["data"]["defaultDatasetId"]
     items_r = requests.get(
-        f"{APIFY_BASE}/datasets/{dataset_id}/items",
+        f"{APIFY_BASE}/datasets/{run_data['defaultDatasetId']}/items",
         params={"token": APIFY_API_TOKEN},
+        timeout=APIFY_HTTP_TIMEOUT,
     )
     return items_r.json() or []
 
@@ -110,7 +131,9 @@ def _to_iso_date(value) -> str | None:
     if isinstance(value, (int, float)):
         try:
             secs = value / 1000 if value > 10_000_000_000 else value
-            return datetime.datetime.utcfromtimestamp(secs).date().isoformat()
+            return datetime.datetime.fromtimestamp(
+                secs, datetime.timezone.utc
+            ).date().isoformat()
         except (ValueError, OSError, OverflowError):
             return None
     s = str(value).strip()
@@ -604,15 +627,32 @@ def generic_url_fetch(url: str) -> dict | None:
     return None
 
 
+def url_host(url: str) -> str:
+    """Hostname of `url`, lowercased and without a port. '' if it can't be parsed."""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def host_matches(url: str, domain: str) -> bool:
+    """True if `url`'s host is `domain` or a subdomain of it — a real label-boundary
+    check, not a substring one. Matched on the parsed hostname so neither a lookalike
+    registrable domain ("evilgreenhouse.io") nor the path/query ("acme.com/?x=lever.co")
+    can route a URL to the wrong ATS enrichment path."""
+    host = url_host(url)
+    return host == domain or host.endswith("." + domain)
+
+
 def enrich_job_url(url: str) -> dict | None:
     """Dispatch one hand-picked job URL to the right enrichment path by domain.
     Returns {title, company, location, description}, or None if enrichment failed —
     callers must treat None as 'leave for retry', never as an empty-but-scorable job."""
-    if "greenhouse.io" in url:
+    if host_matches(url, "greenhouse.io"):
         return greenhouse_job_by_url(url)
-    if "lever.co" in url:
+    if host_matches(url, "lever.co"):
         return lever_job_by_url(url)
-    if "ashbyhq.com" in url:
+    if host_matches(url, "ashbyhq.com"):
         return ashby_job_by_url(url)
     return generic_url_fetch(url)
 
@@ -800,7 +840,7 @@ def discover_tokens(companies: list[str], max_new_probes: int = 20) -> dict:
                 continue  # already have at least one hit — no need to re-probe
 
         if probed >= max_new_probes:
-            continue
+            break  # budget spent; remaining companies get probed on a later run
 
         slug = _slugify(company)
         gh = _probe_greenhouse(company, slug)
