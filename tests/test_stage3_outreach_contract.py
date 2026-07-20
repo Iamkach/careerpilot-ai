@@ -6,6 +6,8 @@ Tests the plumbing: cold-email/InMail batch-to-single fallback, InMail's subject
 truncation boundaries, and a documented (not fixed) characterization test for the cold-email
 single fallback's ad-hoc JSON-fence stripping — not AI judgment quality.
 """
+import json
+
 from scripts import stage3_outreach
 from tests.conftest import load_recorded, make_recorded_jobs
 
@@ -41,6 +43,80 @@ def test_draft_cold_emails_batch_falls_back_to_per_job_on_malformed_response(pat
     assert len(results) == 2
     assert results[0] == {"company": "Acme Corp", "subject": "Hi Acme", "body": "Body one"}
     assert results[1] == {"company": "Beta Inc", "subject": "Hi Beta", "body": "Body two"}
+
+
+def test_draft_cold_emails_batch_detects_positional_misalignment_and_falls_back(patch_ai_chat):
+    """If the model's JSON array order doesn't match the requested job order (e.g. a shifted
+    response), draft_cold_emails_batch must not blindly trust position — it validates each
+    entry's own "company" field and, since both companies here are unique in the batch, can
+    still resolve the shift via a company-keyed lookup instead of cross-assigning."""
+    jobs = make_recorded_jobs(2)  # Acme Corp, Beta Inc — both unique companies
+    fake = patch_ai_chat(stage3_outreach)
+    # Beta Inc's entry comes first — data[0] would wrongly land on jobs[0] (Acme Corp) under
+    # pure positional trust.
+    fake.set_response(json.dumps([
+        {"company": jobs[1]["company"], "subject": "Hi Beta", "body": "Body for Beta"},
+        {"company": jobs[0]["company"], "subject": "Hi Acme", "body": "Body for Acme"},
+    ]))
+
+    results = stage3_outreach.draft_cold_emails_batch(jobs, "my background")
+
+    by_company = {r["company"]: r for r in results}
+    assert by_company[jobs[0]["company"]]["body"] == "Body for Acme"
+    assert by_company[jobs[1]["company"]]["body"] == "Body for Beta"
+
+
+def test_draft_cold_emails_batch_same_company_ambiguous_falls_back_per_job(patch_ai_chat):
+    """Two jobs at the same company, with a batch response that matches neither by position
+    nor by company (so the company-keyed fallback is correctly refused as ambiguous), must
+    fall back to a per-job call for each rather than cross-assigning the same wrong entry."""
+    jobs = [
+        {**make_recorded_jobs(1)[0], "company": "Acme Corp", "title": "Backend Engineer"},
+        {**make_recorded_jobs(1)[0], "company": "Acme Corp", "title": "Frontend Engineer"},
+    ]
+    fake = patch_ai_chat(stage3_outreach)
+    fake.set_responses([
+        json.dumps([
+            {"company": "Zeta Corp", "subject": "s1", "body": "b1"},
+            {"company": "Zeta Corp", "subject": "s2", "body": "b2"},
+        ]),
+        '{"subject": "Hi Backend", "body": "Backend body"}',
+        '{"subject": "Hi Frontend", "body": "Frontend body"}',
+    ])
+
+    results = stage3_outreach.draft_cold_emails_batch(jobs, "my background")
+
+    assert len(fake.calls) == 3  # 1 batch call + 2 per-job fallback calls
+    assert results[0]["body"] == "Backend body"
+    assert results[1]["body"] == "Frontend body"
+
+
+def test_run_same_company_jobs_do_not_cross_assign_emails(monkeypatch, tmp_path):
+    """run()'s cold-email path must attach each drafted email to its own job even when two
+    jobs share a company — a company-keyed dict re-lookup would let the second job's entry
+    silently overwrite the first's in the lookup table."""
+    jobs = [
+        {"page_id": "p1", "company": "Acme Corp", "title": "Backend Engineer", "url": "https://x/1"},
+        {"page_id": "p2", "company": "Acme Corp", "title": "Frontend Engineer", "url": "https://x/2"},
+    ]
+    monkeypatch.setattr(stage3_outreach, "db_get_ready_to_apply", lambda: jobs)
+    monkeypatch.setattr(stage3_outreach, "OUTREACH_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        stage3_outreach, "draft_cold_emails_batch",
+        lambda js, bio: [
+            {"company": j["company"], "subject": f"subj-{j['title']}", "body": f"body-for-{j['title']}"}
+            for j in js
+        ],
+    )
+
+    stage3_outreach.run(no_confirm=True)
+
+    files = sorted(tmp_path.glob("*.txt"))
+    assert len(files) == 2
+    backend_file = next(f for f in files if "Backend_Engineer" in f.name)
+    frontend_file = next(f for f in files if "Frontend_Engineer" in f.name)
+    assert "body-for-Backend Engineer" in backend_file.read_text()
+    assert "body-for-Frontend Engineer" in frontend_file.read_text()
 
 
 def test_draft_inmail_batch_replays_recorded(patch_ai_chat):
@@ -91,6 +167,37 @@ def test_draft_inmail_batch_falls_back_to_per_job_on_malformed_response(patch_ai
 
 
 # ── Characterization test: cold-email single fallback's ad-hoc JSON stripping ──────────────
+
+def test_run_inmail_same_company_jobs_do_not_cross_assign(monkeypatch, tmp_path):
+    """run_inmail() must attach each drafted InMail to its own job even when two eligible
+    jobs share a company — same company-keyed-dict collision pattern as the cold-email path."""
+    jobs = [
+        {"page_id": "p1", "company": "Acme Corp", "title": "Backend Engineer",
+         "url": "https://x/1", "ats_score": 90},
+        {"page_id": "p2", "company": "Acme Corp", "title": "Frontend Engineer",
+         "url": "https://x/2", "ats_score": 90},
+    ]
+    monkeypatch.setattr(stage3_outreach, "db_get_ready_to_apply", lambda: jobs)
+    monkeypatch.setattr(stage3_outreach, "INMAIL_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        stage3_outreach, "draft_inmail_batch",
+        lambda js, bio: [
+            {"company": j["company"], "subject": f"subj-{j['title']}", "body": f"body-for-{j['title']}"}
+            for j in js
+        ],
+    )
+    import config.settings as settings
+    monkeypatch.setattr(settings, "INMAIL_ATS_THRESHOLD", 0, raising=False)
+
+    stage3_outreach.run_inmail(no_confirm=True)
+
+    files = sorted(tmp_path.glob("*.txt"))
+    assert len(files) == 2
+    backend_file = next(f for f in files if "Backend_Engineer" in f.name)
+    frontend_file = next(f for f in files if "Frontend_Engineer" in f.name)
+    assert "body-for-Backend Engineer" in backend_file.read_text()
+    assert "body-for-Frontend Engineer" in frontend_file.read_text()
+
 
 def test_cold_email_single_fallback_recovers_json_from_prose_preamble(patch_ai_chat):
     """_draft_cold_email_single now parses its response with parse_json_response (formerly

@@ -90,15 +90,54 @@ Return ONLY a JSON array, one entry per job in the same order:
                     break
         if not isinstance(data, list):
             raise ValueError("Expected JSON array")
-        # Align by position; fall back gracefully for missing entries
-        results = []
+
+        # A dropped or reordered entry shifts every subsequent position, so positional trust
+        # alone can silently attach the wrong company's email to a job. Validate each entry's
+        # own "company" field before trusting its position; if that fails, fall back to a
+        # company-keyed lookup — but only when that company is unique in this batch, since two
+        # jobs at the same company can't be safely disambiguated that way either. Anything
+        # left unresolved gets its own single-job call instead of a silent misassignment.
+        company_counts: dict[str, int] = {}
+        for job in jobs:
+            key = job["company"].strip().lower()
+            company_counts[key] = company_counts.get(key, 0) + 1
+
+        by_company: dict[str, dict] = {}
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            key = (entry.get("company") or "").strip().lower()
+            if key:
+                by_company[key] = entry
+
+        results: list[dict | None] = []
+        unresolved: list[int] = []
         for i, job in enumerate(jobs):
-            entry = data[i] if i < len(data) else {}
-            results.append({
-                "company": job["company"],
-                "subject": entry.get("subject") or f"Interest in {job['title']} at {job['company']}",
-                "body":    entry.get("body") or "",
-            })
+            key = job["company"].strip().lower()
+            positional = data[i] if i < len(data) and isinstance(data[i], dict) else None
+            if positional and (positional.get("company") or "").strip().lower() == key:
+                entry = positional
+            elif company_counts[key] == 1:
+                entry = by_company.get(key)
+            else:
+                entry = None
+
+            if entry is None:
+                unresolved.append(i)
+                results.append(None)
+            else:
+                results.append({
+                    "company": job["company"],
+                    "subject": entry.get("subject") or f"Interest in {job['title']} at {job['company']}",
+                    "body":    entry.get("body") or "",
+                })
+
+        if unresolved:
+            log(f"  ⚠ {len(unresolved)} job(s) could not be confidently matched in the batch "
+                f"response — falling back to per-job calls for those")
+            for i in unresolved:
+                results[i] = _draft_cold_email_single(jobs[i], bio)
+
         return results
     except Exception:
         # Full fallback — individual calls so nothing is silently dropped
@@ -180,13 +219,9 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "",
         # Cold emails — draft all in a single batched API call
         log(f"  Drafting {len(jobs)} cold email(s) in one batch call…")
         emails = draft_cold_emails_batch(jobs, YOUR_BIO)
-        email_by_company = {e["company"]: e for e in emails}
 
-        for job in jobs:
+        for job, email in zip(jobs, emails):
             log(f"\n→ {job['company']} — {job['title']}")
-            email = email_by_company.get(job["company"]) or {
-                "subject": f"Interest in {job['title']} at {job['company']}", "body": ""
-            }
             file_path = save_draft(
                 f"COLD EMAIL — {job['company']} — {job['title']}\n"
                 f"Subject: {email['subject']}\n\n{email['body']}",
@@ -327,13 +362,11 @@ def run_inmail(target_company: str = None, no_confirm: bool = False):
         f"(ATS >= {INMAIL_ATS_THRESHOLD}, out of {len(jobs)} Resume Tailored)"
     )
 
-    inmails     = draft_inmail_batch(eligible, YOUR_BIO)
-    inmail_map  = {m["company"]: m for m in inmails}
+    inmails = draft_inmail_batch(eligible, YOUR_BIO)
 
     Path(INMAIL_DIR).mkdir(parents=True, exist_ok=True)
-    for job in eligible:
+    for job, msg in zip(eligible, inmails):
         log(f"\n→ {job['company']} — {job['title']}  (ATS: {job.get('ats_score', '?')})")
-        msg  = inmail_map.get(job["company"]) or _draft_inmail_single(job, YOUR_BIO)
         safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").strip().replace(" ", "_")
         fname = f"{today()}_inmail_{safe(job['company'])}_{safe(job['title'])}.txt"
         fpath = Path(INMAIL_DIR) / fname

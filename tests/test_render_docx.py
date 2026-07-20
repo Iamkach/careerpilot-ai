@@ -114,12 +114,13 @@ def test_apply_docx_edits_core_properties_fallback_without_job(fixture_docx_path
     assert props.keywords == ""
 
 
-# ── apply_docx_edits — documented characterization tests (not fixes) ───
+# ── apply_docx_edits — run-level formatting preservation ────────────────
 
-def test_characterization_run_collapsing_loses_formatting_on_rest_of_paragraph(fixture_docx_path, tmp_path):
-    """Known gap: a partial-paragraph edit collapses all runs in that paragraph into the
-    first run's style, losing run-level formatting (e.g. bold) on the rest of the paragraph.
-    Locks in today's behavior — not a fix."""
+def test_apply_docx_edits_preserves_bold_run_on_mid_run_edit(fixture_docx_path, tmp_path):
+    """A mid-run edit must not flatten the paragraph's other runs into the matched run's
+    style. Fixture paragraph is "Led " (normal) + "critical" (bold) + " system migrations."
+    (normal) — replacing "critical" must keep the bold run bold and leave the surrounding
+    normal runs untouched and un-bold."""
     from docx import Document
     out_path = tmp_path / "edited.docx"
     edits = [{"old": "critical", "new": "highly critical and complex"}]
@@ -129,10 +130,30 @@ def test_characterization_run_collapsing_loses_formatting_on_rest_of_paragraph(f
     doc = Document(str(out_path))
     edited_para = next(p for p in doc.paragraphs if "highly critical and complex" in p.text)
     assert edited_para.text == "Led highly critical and complex system migrations."
-    # Everything landed in the first run, which was never bold — the word "critical" was
-    # bold in the fixture, but that formatting is gone from the merged text.
-    assert len(edited_para.runs) >= 1
-    assert edited_para.runs[0].text == "Led highly critical and complex system migrations."
+
+    bold_runs = [r for r in edited_para.runs if r.bold]
+    assert len(bold_runs) == 1
+    assert bold_runs[0].text == "highly critical and complex"
+
+    non_bold_text = "".join(r.text for r in edited_para.runs if not r.bold)
+    assert non_bold_text == "Led  system migrations."
+
+
+def test_apply_docx_edits_preserves_formatting_when_edit_spans_run_boundary(fixture_docx_path, tmp_path):
+    """An edit whose "old" text crosses a run boundary (here: the bold "critical" run and
+    part of the following normal run) must still produce correct text, with the runs before
+    the match left fully untouched."""
+    from docx import Document
+    out_path = tmp_path / "edited.docx"
+    edits = [{"old": "critical system", "new": "urgent infrastructure"}]
+
+    apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
+
+    doc = Document(str(out_path))
+    edited_para = next(p for p in doc.paragraphs if "urgent infrastructure" in p.text)
+    assert edited_para.text == "Led urgent infrastructure migrations."
+    # The leading "Led " run is entirely before the match — must survive untouched.
+    assert edited_para.runs[0].text == "Led "
     assert not edited_para.runs[0].bold
 
 
