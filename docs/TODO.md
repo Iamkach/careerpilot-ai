@@ -44,6 +44,41 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   knowledge only and can go stale, pointing at `scripts/run_evals.py --comp-check` as the manual
   spot-check.
 
+## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
+
+Both surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
+actioned in commit `7d460ba`, which fixed the other ten findings. Neither is a one-line
+cleanup; both want a decision before any code moves. Nothing here is committed to yet.
+
+- **`_prop_number()` conflates "absent" with a real `0`** (`scripts/utils.py`). It returns
+  `(props.get(name) or {}).get("number") or 0`, so a row with an empty `ATS Match Score` and a
+  row genuinely scored `0` read back identically. That sits at odds with the contract the rest
+  of stage 1 is built on — `score_jobs_batch()` returns `scored: False` rather than fabricate a
+  number, and `_unscored()` exists specifically so a missing score never becomes a numeric one.
+  Once it passes through `_page_to_job()`, that distinction is gone anyway.
+  **Why it wasn't just fixed:** returning `None` is a regression, not a fix. `db_get_jobs()`
+  sorts on the value, `rescore_retry_jobs()` and stage 2 compare it against `MIN_ATS_SCORE` /
+  `MIN_TAILORED_ATS_SCORE`, and the same helper backs `Scoring Attempts` / `Enrichment
+  Attempts` / `Applicant Count`, where `0` is the correct default and `None` would break the
+  `(x or 0) + 1` increments. A real fix needs a separate nullable reader used only at the
+  score call sites, plus a decision on what a `None` score means to each consumer (skip? sort
+  last? treat as unscored and re-queue?).
+  **Open questions:** is the ambiguity actually causing observable harm today, or is it
+  theoretical? Does any real row sit at a legitimate `0`, or does `MIN_ATS_SCORE` mean a 0 is
+  always dropped before it's written? Cheapest correct fix might be at the *write* side
+  (never write `0`, write nothing) rather than the read side.
+
+- **`tests.yml` has never actually run** — every Actions run on `feature/god-speed` is
+  `startup_failure` at 0s with no job name (runs `29711371199` pull_request, `29711381997`
+  push). Both workflow files parse fine and the suite is green locally (212 passed), so this
+  is environmental, not a code defect: most likely Actions disabled for the repo, or a
+  spending/billing limit on the private repo — the only check reporting on the PR is a stale
+  Supabase Preview integration, itself vestigial now that `sync_notion_to_supabase()` is a
+  no-op. Until it's resolved, "CI gate on every PR/push" is a claim the repo doesn't hold up,
+  and the local `pytest` run is the only evidence the suite passes.
+  **Needs a human with repo settings access:** check Settings → Actions and the billing page.
+  Separately, decide whether to remove the Supabase integration.
+
 ## Step 7 — Communications subsystem (not started)
 
 Two new stages (LinkedIn leads discovery + Hunter-verified cold email), a new ~22-property
