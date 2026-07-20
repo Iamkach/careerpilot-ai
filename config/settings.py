@@ -269,7 +269,10 @@ HUNTER_API_KEY    = os.environ.get("HUNTER_API_KEY", "")   # set in your env (St
 LEAD_ACTOR = "coregent~linkedin-recruiter-job-poster-finder"
 
 # --- Notion IDs (already created for you) -------------------
-NOTION_DB_ID      = "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
+# Env-overridable like every other id/key here, with the existing tracker as the default so
+# nothing changes for the current setup. A fork points at its own tracker by setting
+# NOTION_DB_ID in .env — no source edit (see docs/backlog/step-11-forkable-setup.md).
+NOTION_DB_ID      = os.environ.get("NOTION_DB_ID", "") or "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
 
 # --- Notion scratch-note intake (optional) -------------------
 # Database id of a small Notion database (a "list" view works well) where each row's
