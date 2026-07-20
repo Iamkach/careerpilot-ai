@@ -79,6 +79,15 @@ cleanup; both want a decision before any code moves. Nothing here is committed t
   **Needs a human with repo settings access:** check Settings → Actions and the billing page.
   Separately, decide whether to remove the Supabase integration.
 
+- **Other `run.py` routines still traceback on a failed Notion read** — `--ingest` now reports
+  a clean message and exits 1 (commit below), but `--retry-only`, `--stage 2/3/4` and
+  `--evaluate` reach `db_get_jobs()` → `_query_db()`, which has always propagated. **This is
+  pre-existing, not introduced by the PR #11 review fixes** — `db_get_jobs()` never caught. The
+  question is whether to give every CLI entry point the same clean-message + non-zero-exit
+  treatment `ingest_routine()` now has, or leave the raw traceback (which at least exits
+  non-zero, so the nightly workflow does fail correctly either way). Not actioned because it
+  changes the exit behavior of five more CLI paths, which is a decision rather than a fix.
+
 ## Step 7 — Communications subsystem (not started)
 
 Two new stages (LinkedIn leads discovery + Hunter-verified cold email), a new ~22-property

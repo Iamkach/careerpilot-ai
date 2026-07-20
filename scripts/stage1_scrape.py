@@ -37,7 +37,7 @@ from scripts.utils import (
 )
 from scripts.sources import (
     KEYWORD_SOURCES, BOARD_SOURCES, job_fingerprint, collapse_by_fingerprint,
-    _is_fresh, discover_tokens, _apify_run, enrich_job_url,
+    _is_fresh, discover_tokens, _apify_run, enrich_job_url, host_matches,
 )
 
 APIFY_BASE = "https://api.apify.com/v2"
@@ -368,7 +368,16 @@ def ingest_interested_from_notion(resume: str) -> int:
 
     fresh = []
     for page in pages:
-        if db_find_job_by_url(page["url"], exclude_page_id=page["notion_page_id"]):
+        try:
+            duplicate = db_find_job_by_url(page["url"], exclude_page_id=page["notion_page_id"])
+        except RuntimeError as e:
+            # db_find_job_by_url raises on a failed read. Skip this row rather than abort the
+            # batch: it stays 'Interested' and is retried next run, which is strictly safer
+            # than promoting a row we can't prove isn't already tracked. Mirrors the same
+            # per-row handling in ingest_from_scratch_note().
+            log(f"  ✗ Dedup check failed, leaving as Interested for next run: {page['url']} ({e})")
+            continue
+        if duplicate:
             log(f"  ⊘ Already in DB, retiring Notion row: {page['url']}")
             _notion_promote_to_scraped(page["notion_page_id"], page)
             continue
@@ -379,9 +388,11 @@ def ingest_interested_from_notion(resume: str) -> int:
 
     # LinkedIn URLs go through the batched Apify actor; everything else (Greenhouse/Lever/
     # Ashby direct APIs, or a best-effort HTML scrape) has no batch endpoint, so it's
-    # enriched one URL at a time via enrich_job_url().
-    linkedin_pages = [p for p in fresh if "linkedin.com" in p["url"]]
-    other_pages    = [p for p in fresh if "linkedin.com" not in p["url"]]
+    # enriched one URL at a time via enrich_job_url(). Partitioned on the parsed hostname,
+    # not a substring: "acme.com/?ref=linkedin.com" is not a LinkedIn URL and would be sent
+    # to an actor that can't enrich it (same check enrich_job_url() routes ATS URLs with).
+    linkedin_pages = [p for p in fresh if host_matches(p["url"], "linkedin.com")]
+    other_pages    = [p for p in fresh if not host_matches(p["url"], "linkedin.com")]
 
     enriched: dict[str, dict] = {}
     if linkedin_pages:

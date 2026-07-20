@@ -258,3 +258,101 @@ def test_active_provider_still_honours_per_tier_overrides(monkeypatch):
 
     assert utils._active_provider(quality=False) == "claude"
     assert utils._active_provider(quality=True) == "claude_code"
+
+
+# ── 7. Interested intake tolerates the raise per-row, and partitions by host ──
+
+def test_interested_intake_skips_only_the_row_whose_dedup_check_fails(monkeypatch):
+    """Same contract as the scratch-note ingest: a failed dedup read skips that one row
+    (it stays 'Interested' and is retried next run) rather than aborting the whole batch or
+    promoting a row we can't prove isn't already tracked."""
+    from scripts import stage1_scrape
+
+    pages = [
+        {"notion_page_id": "p1", "url": "https://example.com/bad",
+         "title": "", "company": "", "location": "", "enrichment_attempts": 0},
+        {"notion_page_id": "p2", "url": "https://example.com/good",
+         "title": "", "company": "", "location": "", "enrichment_attempts": 0},
+    ]
+    monkeypatch.setattr(stage1_scrape, "get_notion_jobs_by_status", lambda s: pages)
+
+    def flaky_find(url, exclude_page_id=""):
+        if url.endswith("/bad"):
+            raise RuntimeError("db_find_job_by_url read failed")
+        return None
+
+    enriched_urls = []
+
+    def fake_enrich(url):
+        enriched_urls.append(url)
+        return {"title": "T", "company": "C", "location": "L", "description": "d" * 300}
+
+    monkeypatch.setattr(stage1_scrape, "db_find_job_by_url", flaky_find)
+    monkeypatch.setattr(stage1_scrape, "enrich_job_url", fake_enrich)
+    monkeypatch.setattr(stage1_scrape, "score_jobs_batch", lambda jobs, resume: [
+        {"url": j["url"], "score": 80, "scored": True, "missing_keywords": [],
+         "sponsorship": "unknown", "company_type": "product"} for j in jobs
+    ])
+    promoted = []
+    monkeypatch.setattr(stage1_scrape, "db_add_job_linked",
+                        lambda job, pid, status="Scraped": promoted.append((pid, status)))
+    monkeypatch.setattr(stage1_scrape, "AUTO_REVIEW_MIN_SCORE", 35)
+
+    ingested = stage1_scrape.ingest_interested_from_notion("resume")
+
+    assert ingested == 1, "one bad row aborted the whole batch"
+    assert enriched_urls == ["https://example.com/good"]
+    assert [pid for pid, _ in promoted] == ["p2"]
+
+
+def test_interested_intake_partitions_linkedin_by_host_not_substring(monkeypatch):
+    """A URL merely *containing* 'linkedin.com' (in a path or query) is not a LinkedIn job
+    and must go to enrich_job_url(), not to the batched LinkedIn actor that can't enrich it."""
+    from scripts import stage1_scrape
+
+    pages = [
+        {"notion_page_id": "p1", "url": "https://www.linkedin.com/jobs/view/123",
+         "title": "", "company": "", "location": "", "enrichment_attempts": 0},
+        {"notion_page_id": "p2", "url": "https://acme.com/careers?ref=linkedin.com",
+         "title": "", "company": "", "location": "", "enrichment_attempts": 0},
+    ]
+    monkeypatch.setattr(stage1_scrape, "get_notion_jobs_by_status", lambda s: pages)
+    monkeypatch.setattr(stage1_scrape, "db_find_job_by_url", lambda u, exclude_page_id="": None)
+
+    to_actor, to_generic = [], []
+    monkeypatch.setattr(stage1_scrape, "scrape_job_urls",
+                        lambda urls: (to_actor.extend(urls), {})[1])
+    monkeypatch.setattr(stage1_scrape, "enrich_job_url",
+                        lambda url: (to_generic.append(url), None)[1])
+    monkeypatch.setattr(stage1_scrape, "db_update_status", lambda *a, **k: None)
+    monkeypatch.setattr(stage1_scrape, "MAX_ENRICHMENT_ATTEMPTS", 3)
+
+    stage1_scrape.ingest_interested_from_notion("resume")
+
+    assert to_actor == ["https://www.linkedin.com/jobs/view/123"]
+    assert to_generic == ["https://acme.com/careers?ref=linkedin.com"]
+
+
+# ── 8. --ingest reports a failed read cleanly instead of tracebacking ─────────
+
+def test_ingest_routine_exits_nonzero_with_a_clean_message(monkeypatch, capsys):
+    """The readers now raise. `run.py --ingest` must turn that into a message + non-zero
+    exit, not a raw traceback -- and never into a silent 'Ingested 0 jobs'."""
+    import run as run_module
+    from scripts import stage1_scrape
+
+    monkeypatch.setattr(stage1_scrape, "ingest_from_scratch_note", lambda: 0)
+
+    def boom(resume):
+        raise RuntimeError("get_notion_jobs_by_status('Interested') read failed: 503")
+
+    monkeypatch.setattr(stage1_scrape, "ingest_interested_from_notion", boom)
+    monkeypatch.setattr("scripts.utils.load_resume", lambda: "resume")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_module.ingest_routine(object())
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "Ingest aborted" in out
+    assert "Ingested 0" not in out, "a failed read must never read as a successful empty run"
