@@ -193,7 +193,18 @@ def ingest_routine(args):
     promoted = ingest_from_scratch_note()
     if promoted:
         print(f"   Promoted {promoted} scratch-note URL(s) to Interested")
-    n = ingest_interested_from_notion(load_resume())
+    try:
+        n = ingest_interested_from_notion(load_resume())
+    except RuntimeError as e:
+        # The Notion readers raise on a failed read rather than reporting an empty result
+        # (see db_get_all_jobs' contract). Surface that as a clean message + non-zero exit
+        # instead of a traceback: "Ingested 0 jobs" on an unreadable tracker is the exact
+        # silent-success this pipeline treats as unacceptable, and the nightly workflow
+        # needs the non-zero exit to actually fail the run.
+        print(f"\n❌ Ingest aborted — could not read the Notion tracker: {e}")
+        print("   Nothing was changed. Check NOTION_API_KEY and that the integration is")
+        print("   still shared with the database, then re-run — ingest is idempotent.")
+        sys.exit(1)
     print(f"\n✅ Ingested {n} 'Interested' job(s) → Scraped.")
     print("   → Review them in Notion, set Status=Reviewed, then run: python run.py --evaluate")
 
