@@ -8,8 +8,50 @@ empty-result synthesis — not AI judgment quality.
 """
 import json
 
+import requests
+
 from scripts import stage2_tailor
 from tests.conftest import load_recorded, make_recorded_jobs
+
+
+# ── fetch_jd HTML stripping ──────────────────────────────────────────────────
+
+class _FakeJDResponse:
+    def __init__(self, text: str, status_code: int = 200):
+        self.text = text
+        self.status_code = status_code
+
+
+def test_fetch_jd_strips_script_and_style_content(monkeypatch):
+    """PR #11 review item #8: fetch_jd() must not leak raw <script>/<style> body text into
+    the job description sent to the AI model. It now reuses sources._strip_html(), which
+    drops script/style blocks entirely before stripping the remaining tags, instead of a
+    second/weaker inline regex that only stripped tags and left their contents behind."""
+    html = """
+    <html>
+      <head>
+        <style>.hero { color: red; } body { display: none; }</style>
+        <script>var trackingId = "abc123"; function evil() { alert('x'); }</script>
+      </head>
+      <body>
+        <script>console.log("more js that must not leak");</script>
+        <h1>Senior Backend Engineer</h1>
+        <p>We are looking for an experienced engineer to join our team.</p>
+        <style>.footer { font-size: 10px; }</style>
+      </body>
+    </html>
+    """
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeJDResponse(html))
+
+    jd = stage2_tailor.fetch_jd("https://careers.example.com/job/123")
+
+    assert "trackingId" not in jd
+    assert "evil" not in jd
+    assert "console.log" not in jd
+    assert "color: red" not in jd
+    assert "font-size" not in jd
+    assert "Senior Backend Engineer" in jd
+    assert "experienced engineer to join our team" in jd
 
 
 def test_tailor_resumes_batch_replays_recorded_batch(patch_ai_chat):
