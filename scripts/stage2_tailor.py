@@ -590,10 +590,33 @@ def run(min_score: int = 0):
             log(f"  ⚠ Post-tailor verification scoring failed for {job['company']} — leaving as-is.")
 
         # NOTE: do NOT set date_applied here — tailoring is not applying.
-        db_update_status(job["page_id"], "Resume Tailored", {
-            "tailored_resume_link": f"file://{Path(file_path).resolve()}",
-        })
-        log(f"  ✓ Status updated → Resume Tailored")
+        if not edits:
+            # Zero edits means save_resume() only produced a renamed copy of the base resume —
+            # nothing was actually tailored. Advancing to "Resume Tailored" here would be a
+            # false positive, the same failure mode stage 7's "Never Applied" rule guards
+            # against. Zero edits isn't a transient failure worth an automatic retry (re-running
+            # the same AI call against the same resume/JD would likely reproduce it) — it needs
+            # a human to look at *why* (JD already matched, or something upstream is thin/
+            # garbled), so mirror _sponsorship_gate()'s pattern: park it in "Human Review" with
+            # a guidance note rather than "Retry".
+            notes = job.get("notes") or ""
+            guidance = (
+                "⚠ Zero-edit tailoring: the AI suggested no ATS keyword edits for this JD, so "
+                "the saved resume is an unmodified copy of the base resume, not an actually-"
+                "tailored one. Review the JD manually — either the base resume already matches "
+                "well, or something went wrong upstream (e.g. a thin/garbled cached JD) — then "
+                "move Status back to 'Reviewed' to retry tailoring."
+            )
+            db_update_status(job["page_id"], "Human Review", {
+                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "notes": f"{notes}\n{guidance}" if notes else guidance,
+            })
+            log(f"  ⚠ Zero edits suggested — left in 'Human Review' instead of 'Resume Tailored'")
+        else:
+            db_update_status(job["page_id"], "Resume Tailored", {
+                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+            })
+            log(f"  ✓ Status updated → Resume Tailored")
 
     log(f"\nAll done. Resumes saved to ./{RESUMES_DIR}/")
 
