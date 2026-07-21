@@ -399,7 +399,7 @@ def test_generic_url_fetch_returns_none_when_headless_fetch_itself_fails(monkeyp
 # ── _headless_fetch ──────────────────────────────────────────────────────────
 
 def test_headless_fetch_returns_none_gracefully_when_playwright_not_installed(monkeypatch):
-    """Playwright is an optional dependency (requirements.txt) — its absence must degrade to
+    """Playwright is an optional dependency (requirements-optional.txt) — its absence must degrade to
     a None return, never a hard ImportError bubbling up to the caller. Blocks the import
     regardless of whether playwright happens to be installed in whatever environment runs
     this test, so the test is deterministic either way."""

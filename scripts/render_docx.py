@@ -126,14 +126,28 @@ def render_resume_docx(data: dict, template_path: str, out_path: str) -> str:
     return out_path
 
 
+def _iter_all_paragraphs(container):
+    """Yield every paragraph in a python-docx Document (or table cell), including those
+    inside table cells — recursively, so a nested table's cells are covered too.
+    `doc.paragraphs` alone skips table content entirely, which silently drops any resume
+    section built as a table (e.g. a two-column skills/experience layout)."""
+    for p in container.paragraphs:
+        yield p
+    for table in container.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from _iter_all_paragraphs(cell)
+
+
 def extract_docx_text(docx_path: str) -> str:
-    """Return all non-empty paragraph text from a .docx, one line per paragraph."""
+    """Return all non-empty paragraph text from a .docx, one line per paragraph —
+    including paragraphs inside table cells."""
     try:
         from docx import Document
     except ImportError as e:
         raise ImportError("python-docx is required. Install with: pip install python-docx") from e
     doc = Document(docx_path)
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    return "\n".join(p.text for p in _iter_all_paragraphs(doc) if p.text.strip())
 
 
 def _apply_para_edits(para, replacements: list) -> None:
@@ -241,7 +255,7 @@ def apply_docx_edits(base_path: str, edits: list, out_path: str, job: dict | Non
     shutil.copy2(base_path, out_path)
     doc = Document(out_path)
 
-    paragraphs = doc.paragraphs
+    paragraphs = list(_iter_all_paragraphs(doc))
     # Snapshot every paragraph's ORIGINAL text once, up front, and resolve every edit's
     # match position against that fixed snapshot rather than the document's live (possibly
     # already-edited-by-an-earlier-edit) text. This is what prevents two edits landing in
