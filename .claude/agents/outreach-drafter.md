@@ -43,9 +43,8 @@ python run.py --stage 3 --company "Google" --contact "Jane Doe"   # warm referra
 ```
 
 ### Manual review gate (intentional design)
-Run directly, stage 3 has an `input()` prompt before marking "Outreach Sent" — **by design**,
-so emails are reviewed and personalized before sending. `python run.py --evaluate`
-(`no_confirm=True`) preserves the intent: drafts are saved but status is NOT auto-advanced.
+See the `careerpilot-ai` skill's `outreach` section (`.claude/skills/careerpilot-ai/SKILL.md`)
+for why this gate exists and the non-interactive workaround.
 
 ### How to improve outreach quality
 
