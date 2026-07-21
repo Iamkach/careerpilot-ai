@@ -210,6 +210,17 @@ class AIUsageCapError(AIChatError):
     is hit — retrying a capped session just burns more of the same exhausted window."""
 
 
+class NotionReadError(RuntimeError):
+    """Raised when a read of the Notion jobs DB fails (network/API error). A *failed read*
+    must never be reported as a *successful empty result* — callers act on emptiness by
+    creating rows, so a swallowed failure duplicates the tracker (see db_get_all_jobs).
+
+    Typed so run.py's CLI dispatch can turn a read failure into a clean message + non-zero
+    exit for every entry point, without also swallowing the unrelated RuntimeErrors raised
+    by Apify (scripts/sources.py) or provider/CLI setup. Subclasses RuntimeError so existing
+    `except RuntimeError` handlers and read-failure tests keep working unchanged."""
+
+
 _RETRY_DELAYS = (2, 8)  # seconds; len(_RETRY_DELAYS) + 1 total attempts
 
 _TRANSIENT_ERROR_PATTERNS = (
@@ -398,6 +409,13 @@ def _prop_url(props: dict, name: str) -> str:
 def _prop_number(props: dict, name: str):
     return (props.get(name) or {}).get("number") or 0
 
+def _prop_number_opt(props: dict, name: str):
+    """Like _prop_number but preserves the absent/0 distinction: returns None when the
+    property is empty, the real number otherwise. Used ONLY for scores, where 'unscored'
+    must stay distinct from a genuine 0 (see _unscored()/score_jobs_batch's contract).
+    Counters keep using _prop_number, whose 0 default backs their (x or 0)+1 increments."""
+    return (props.get(name) or {}).get("number")  # None when absent; a real 0 stays 0
+
 def _prop_date(props: dict, name: str):
     d = (props.get(name) or {}).get("date")
     return d.get("start") if d else None
@@ -449,7 +467,7 @@ def matches_company_list(company: str, names: list[str]) -> bool:
 def _page_to_job(page: dict) -> dict:
     """Map a Notion page to the job dict shape every stage/tool expects."""
     props = page.get("properties", {})
-    ats = _prop_number(props, "ATS Match Score")
+    ats = _prop_number_opt(props, "ATS Match Score")
     return {
         "page_id":     page["id"],
         "id":          page["id"],
@@ -605,7 +623,7 @@ def get_notion_jobs_by_status(status: str) -> list[dict]:
         pages = _query_db(filter_={"property": "Status", "select": {"equals": status}})
     except Exception as e:
         log(f"[get_notion_jobs_by_status] read failed for status={status!r}: {e}")
-        raise RuntimeError(f"get_notion_jobs_by_status({status!r}) read failed: {e}") from e
+        raise NotionReadError(f"get_notion_jobs_by_status({status!r}) read failed: {e}") from e
     jobs = []
     for page in pages:
         props = page.get("properties", {})
@@ -728,23 +746,32 @@ def _notion_promote_to_scraped(notion_page_id: str, job: dict, status: str = "Sc
 # `job_id` / `page_id` everywhere is the Notion page id.
 
 def _query_db(filter_=None, sorts=None) -> list:
-    """Query the Notion jobs database, following pagination. Returns raw pages."""
-    pages, cursor = [], None
-    while True:
-        kwargs = {"database_id": NOTION_DB_ID}
-        if filter_:
-            kwargs["filter"] = filter_
-        if sorts:
-            kwargs["sorts"] = sorts
-        if cursor:
-            kwargs["start_cursor"] = cursor
-        res = _notion().databases.query(**kwargs)
-        pages.extend(res.get("results", []))
-        if res.get("has_more"):
-            cursor = res.get("next_cursor")
-        else:
-            break
-    return pages
+    """Query the Notion jobs database, following pagination. Returns raw pages.
+
+    The single funnel every reader goes through, so it's where a failed read is turned into a
+    typed NotionReadError — that covers even the readers that don't wrap it themselves
+    (db_get_jobs, db_get_ready_to_apply), and never lets a read failure masquerade as an empty
+    result."""
+    try:
+        pages, cursor = [], None
+        while True:
+            kwargs = {"database_id": NOTION_DB_ID}
+            if filter_:
+                kwargs["filter"] = filter_
+            if sorts:
+                kwargs["sorts"] = sorts
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().databases.query(**kwargs)
+            pages.extend(res.get("results", []))
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return pages
+    except Exception as e:
+        log(f"[_query_db] read failed: {e}")
+        raise NotionReadError(f"Notion read failed: {e}") from e
 
 
 def db_find_job_by_url(url: str, exclude_page_id: str = "") -> str | None:
@@ -763,7 +790,7 @@ def db_find_job_by_url(url: str, exclude_page_id: str = "") -> str | None:
         pages = _query_db(filter_={"property": "Job URL", "url": {"equals": url}})
     except Exception as e:
         log(f"[db_find_job_by_url] read failed for {url}: {e}")
-        raise RuntimeError(f"db_find_job_by_url({url!r}) read failed: {e}") from e
+        raise NotionReadError(f"db_find_job_by_url({url!r}) read failed: {e}") from e
     for page in pages:
         if page["id"] != exclude_page_id:
             return page["id"]
@@ -893,7 +920,7 @@ def db_get_all_jobs() -> list[dict]:
         pages = _query_db()  # no filter → all rows, follows pagination
     except Exception as e:
         log(f"[db_get_all_jobs] read failed: {e}")
-        raise RuntimeError(f"db_get_all_jobs() read failed: {e}") from e
+        raise NotionReadError(f"db_get_all_jobs() read failed: {e}") from e
     jobs = []
     for p in pages:
         props = p.get("properties", {})
@@ -904,7 +931,7 @@ def db_get_all_jobs() -> list[dict]:
             "location":  _notion_plain_text(props.get("Location")),
             "url":       _prop_url(props, "Job URL"),
             "status":    ((props.get("Status") or {}).get("select") or {}).get("name") or "",
-            "ats_score": _prop_number(props, "ATS Match Score"),
+            "ats_score": _prop_number_opt(props, "ATS Match Score"),
         })
     return jobs
 

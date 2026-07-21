@@ -295,7 +295,7 @@ def draft_inmail_batch(jobs: list[dict], bio: str) -> list[dict]:
         return []
 
     job_list = "\n\n".join(
-        f"{i+1}. Company: {j['company']}\n   Role: {j['title']}\n   ATS: {j.get('ats_score', '?')}"
+        f"{i+1}. Company: {j['company']}\n   Role: {j['title']}\n   ATS: {j.get('ats_score') or '?'}"
         for i, j in enumerate(jobs)
     )
     prompt = f"""Write a LinkedIn InMail for EACH job below. I am a senior software engineer.
@@ -399,13 +399,13 @@ def run_inmail(target_company: str = None, no_confirm: bool = False):
 
     Path(INMAIL_DIR).mkdir(parents=True, exist_ok=True)
     for job, msg in zip(eligible, inmails):
-        log(f"\n→ {job['company']} — {job['title']}  (ATS: {job.get('ats_score', '?')})")
+        log(f"\n→ {job['company']} — {job['title']}  (ATS: {job.get('ats_score') or '?'})")
         safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").strip().replace(" ", "_")
         fname = f"{today()}_inmail_{safe(job['company'])}_{safe(job['title'])}.txt"
         fpath = Path(INMAIL_DIR) / fname
         fpath.write_text(
             f"LINKEDIN INMAIL — {job['company']} — {job['title']}\n"
-            f"ATS Score : {job.get('ats_score', '?')}\n"
+            f"ATS Score : {job.get('ats_score') or '?'}\n"
             f"Applicants: {job.get('applicant_count', 'unknown')}\n"
             f"Salary    : {job.get('salary_range', 'unknown')}\n"
             f"\nSubject ({len(msg['subject'])} chars): {msg['subject']}\n"

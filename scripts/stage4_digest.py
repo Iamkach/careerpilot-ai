@@ -23,7 +23,7 @@ from scripts.utils import claude_chat, db_get_ready_to_apply, db_get_jobs, log, 
 # ── Build digest content ──────────────────────────────────────
 
 def action_suggestion(job: dict) -> str:
-    score = job.get("ats", 0)
+    score = job.get("ats") or 0
     if score >= 80:
         return "🔥 High match — apply directly today"
     elif score >= 60:
@@ -47,7 +47,7 @@ def build_html_digest(jobs: list) -> str:
           <td>{job['company']}</td>
           <td>{job['title']}</td>
           <td>{job.get('location') or '—'}</td>
-          <td style="text-align:center"><strong>{int(job.get('ats', 0))}</strong></td>
+          <td style="text-align:center"><strong>{int(job.get('ats') or 0)}</strong></td>
           <td>{resume_cell}</td>
           <td style="font-size:12px;color:#555">{action}</td>
         </tr>"""
@@ -94,7 +94,7 @@ def build_html_review_digest(jobs: list) -> str:
     date_str = datetime.date.today().strftime("%B %d, %Y")
     rows = ""
     for job in jobs:
-        score = int(job.get("ats_score", 0))
+        score = int(job.get("ats_score") or 0)
         if score >= 80:
             badge = "🔥"
         elif score >= 60:
@@ -161,7 +161,7 @@ def build_plain_digest(jobs: list) -> str:
     for job in jobs:
         lines.append(f"  {job['company']} — {job['title']}")
         lines.append(f"    Location:     {job.get('location') or '—'}")
-        lines.append(f"    ATS Score:    {int(job.get('ats', 0))}")
+        lines.append(f"    ATS Score:    {int(job.get('ats') or 0)}")
         lines.append(f"    Resume:       {job.get('resume_link', '—')}")
         lines.append(f"    Job URL:      {job.get('url', '—')}")
         lines.append(f"    Action:       {action_suggestion(job)}")
@@ -179,7 +179,7 @@ def build_plain_review_digest(jobs: list) -> str:
     for job in jobs:
         lines.append(f"  {job['company']} — {job['title']}")
         lines.append(f"    Location:  {job.get('location') or '—'}")
-        lines.append(f"    ATS Score: {int(job.get('ats_score', 0))}")
+        lines.append(f"    ATS Score: {int(job.get('ats_score') or 0)}")
         lines.append(f"    URL:       {job.get('url', '—')}")
         lines.append("")
     lines.append(f"Notion Tracker: https://www.notion.so/{NOTION_DB_ID.replace('-','')}")
@@ -228,7 +228,7 @@ def run(send: bool = False, mode: str = "ready"):
         if not jobs:
             log("No new scraped jobs to review.")
             return
-        jobs_sorted = sorted(jobs, key=lambda x: x.get("ats_score", 0), reverse=True)
+        jobs_sorted = sorted(jobs, key=lambda x: x.get("ats_score") or 0, reverse=True)
         html  = build_html_review_digest(jobs_sorted)
         plain = build_plain_review_digest(jobs_sorted)
         filename = f"review_digest_{today()}.html"
@@ -238,7 +238,7 @@ def run(send: bool = False, mode: str = "ready"):
         if not jobs:
             log("No jobs ready to apply. Run --evaluate first.")
             return
-        jobs_sorted = sorted(jobs, key=lambda x: x.get("ats", 0), reverse=True)
+        jobs_sorted = sorted(jobs, key=lambda x: x.get("ats") or 0, reverse=True)
         html  = build_html_digest(jobs_sorted)
         plain = build_plain_digest(jobs_sorted)
         filename = f"digest_{today()}.html"

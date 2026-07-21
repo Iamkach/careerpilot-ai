@@ -131,6 +131,26 @@ logic.
 
 ## Not in any refinement plan, but shipped
 
+- **Typed `NotionReadError` — clean read-failure handling across every CLI path (2026-07-21).**
+  Closes the `docs/TODO.md` "Open for review" item where only `--ingest` turned a failed Notion
+  read into a clean message + non-zero exit, while `--retry-only`, `--evaluate`, and
+  `--stage 2/3/4` (via the previously-unguarded `db_get_jobs()` / `db_get_ready_to_apply()`)
+  dumped a raw traceback. `scripts/utils._query_db()` — the single funnel every reader uses —
+  now raises `NotionReadError` (a `RuntimeError` subclass) on failure; `run.py`'s `main()`
+  catches it once around the whole dispatch. Typed on purpose so the unrelated `RuntimeError`s
+  from Apify / provider setup / stage 5 are **not** mislabeled as a tracker read failure. Tests:
+  `tests/test_run_notion_read_failure.py` + contract cases in
+  `tests/test_utils_read_failure_contract.py`.
+- **`_prop_number_opt()` — absent-vs-real-`0` score reads (2026-07-21).** Closes the other
+  `docs/TODO.md` "Open for review" item: `_prop_number()` returned `0` for both an empty
+  property and a genuine `0`, colliding with stage 1's "never fabricate a score" contract. A new
+  nullable reader `_prop_number_opt()` returns `None` for absent / the real number otherwise, and
+  is used **only** for `ATS Match Score` in `_page_to_job()` / `db_get_all_jobs()`; `_prop_number`
+  still backs the counters (`Scoring Attempts`/`Enrichment Attempts`/`Applicant Count`/`Apply
+  Attempts`) where `0` is the right default. Score consumers in `stage4_digest.py` /
+  `stage3_outreach.py` hardened to `… or 0` so an unscored `None` can't `int(None)`-crash the
+  digest. No behavior change in practice (`MIN_ATS_SCORE=30` already drops any 0-score job before
+  write); future-proofs the read path. Tests: new cases in `tests/test_utils.py`.
 - Stage 2 sponsorship gate (`RESTRICTED_SPONSORSHIP_COMPANIES`, `_sponsorship_gate()` in
   `scripts/stage2_tailor.py`) — holds jobs at companies known to sponsor only existing
   employees, moving them to `Human Review` instead of tailoring a resume.
