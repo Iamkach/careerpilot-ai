@@ -538,7 +538,7 @@ def run(min_score: int = 0):
             batch_results[pid] = (edits, keywords)
 
     # Phase 3: Apply edits + save a tailored resume for every job (no AI calls)
-    tailored: list[tuple[dict, str, str, str]] = []  # (job, tailored_text, jd, file_path)
+    tailored: list[tuple[dict, str, str, str, list]] = []  # (job, tailored_text, jd, file_path, edits)
     for job, jd in jobs_and_jds:
         pid = job.get("page_id") or job.get("id")
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
@@ -557,12 +557,12 @@ def run(min_score: int = 0):
         log(f"  ✓ Saved: {file_path}")
 
         tailored_text = extract_docx_text(file_path)
-        tailored.append((job, tailored_text, jd, file_path))
+        tailored.append((job, tailored_text, jd, file_path, edits))
 
     # Phase 4: ONE batch AI call to verify ALL tailored resumes (mirrors Phase 2's batching)
     log(f"\nBatch verifying {len(tailored)} tailored resume(s) in 1 AI call…")
     verify_results = verify_tailored_scores_batch(
-        [(job, tailored_text, jd) for job, tailored_text, jd, _ in tailored]
+        [(job, tailored_text, jd) for job, tailored_text, jd, _, _ in tailored]
     )
 
     verify_missing = [
@@ -570,13 +570,13 @@ def run(min_score: int = 0):
     ]
     if verify_missing:
         log(f"  ↳ Batch verification missed {len(verify_missing)} job(s) — falling back to per-job calls")
-        for job, tailored_text, jd, _ in verify_missing:
+        for job, tailored_text, jd, _, _ in verify_missing:
             pid = job.get("page_id") or job.get("id")
             log(f"    → {job['company']} — single-job verification fallback")
             verify_results[pid] = verify_tailored_score(tailored_text, jd, job)
 
     # Phase 5: Log verification results + update Notion
-    for job, _, _, file_path in tailored:
+    for job, _, _, file_path, edits in tailored:
         pid = job.get("page_id") or job.get("id")
         verify = verify_results.get(pid) or {"url": job["url"], "score": None, "scored": False}
         before = job["ats_score"]
