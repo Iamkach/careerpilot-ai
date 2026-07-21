@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-render_docx.py — render a tailored resume into a .docx template
+render_docx.py — in-place .docx text edits for tailored resumes
 ────────────────────────────────────────────────────────────────
-Given structured resume data (a dict) and a Word template that uses
-docxtpl / Jinja2 placeholders, produce a formatted .docx. The template
-owns ALL formatting (fonts, spacing, colours) so every tailored resume
-looks identical — only the content changes per job.
+Primary role today: `extract_docx_text()` / `apply_docx_edits()` apply targeted
+`{old → new}` text replacements directly to a copy of the base resume `.docx`
+(`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) via python-docx,
+preserving the original document's formatting (fonts, spacing, run-level
+bold/italic, ...) — this is the default flow stage 2 uses.
 
-Expected `data` schema (see RESUME_SCHEMA_DOC below):
+`render_resume_docx()` below is a legacy Jinja2/docxtpl template-render path
+(paired with `scripts/make_resume_template.py`'s scaffolded
+`config/resume_template.docx`) kept for reference but no longer used by the
+default flow; it requires the optional `docxtpl` package to be installed
+separately.
+
+Expected `data` schema for `render_resume_docx()` (see RESUME_SCHEMA_DOC below):
     {
       "name": str,
       "contact": str,                 # single contact line

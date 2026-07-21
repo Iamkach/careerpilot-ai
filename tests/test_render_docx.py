@@ -7,7 +7,24 @@ golden-file/snapshot-testing target. The fixture itself is built in code by
 tests/fixtures/build_fixture_docx.py (see `fixture_docx_path` in conftest.py) rather than
 committed as an opaque binary, so its exact structure stays reviewable in a diff.
 """
+import scripts.render_docx as render_docx
 from scripts.render_docx import extract_docx_text, apply_docx_edits
+
+
+# ── module docstring / python-docx dependency (PR #11 review item #7/#14) ──
+
+def test_module_docstring_describes_python_docx_as_primary_path():
+    # Importing the module at all proves python-docx is importable in this environment
+    # (extract_docx_text/apply_docx_edits both `from docx import Document` internally) —
+    # requirements.txt declaring python-docx is what makes that true on a fresh install.
+    doc = render_docx.__doc__
+    assert doc is not None
+    assert "python-docx" in doc
+    # The docstring must no longer present docxtpl as the module's primary/default role —
+    # it's fine for the legacy render_resume_docx() path to still be mentioned by name.
+    assert "render a tailored resume into a .docx template" not in doc
+    first_line = doc.strip().splitlines()[0]
+    assert "docxtpl" not in first_line.lower()
 
 
 # ── extract_docx_text ────────────────────────────────────────────────────
