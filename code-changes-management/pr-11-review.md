@@ -114,38 +114,49 @@ non-interactive.
 
 ---
 
-## 4. Worth fixing
+## 4. Worth fixing — ✅ ALL RESOLVED (2026-07-21, PRs #13–#18, merged to `feature/god-speed`)
 
-All re-confirmed still present against `feature/god-speed` in the 2026-07-21 pass —
-none touched by PR #12, which was scoped to the two blocking items above.
+Items #6–#11 were fixed in six independent branches off `feature/god-speed`, each with
+its own test coverage, then merged in dependency order (batched verify first, since the
+zero-edit gate touches the same `run()` loop it restructures):
 
-- **`stage2_tailor.py:422`** — status advances to `Resume Tailored` even when `edits` is
-  empty. A zero-edit run produces a renamed copy of the base resume presented as
-  tailored — the same "don't claim success you didn't achieve" principle stage 7's
-  *Never `Applied`* rule already enforces, applied inconsistently here.
-- **`python-docx` is undeclared.** `render_docx.py` imports it directly, but
-  `requirements.txt` only lists `docxtpl` (CLAUDE.md documents that path as dead/legacy).
-  Add `python-docx`; remove `docxtpl` once confirmed unused elsewhere. A fresh clone
-  running `pip install -r requirements.txt` today would be missing the package the
-  now-fixed, hardened `render_docx.py` path actually needs.
-- **`stage2_tailor.py:94`** `fetch_jd()` strips tags without removing
-  `<script>`/`<style>` first, so JS/CSS text can land in the JD sent to the model.
-  `sources._strip_html()` already handles this correctly — reuse it instead of a second,
-  weaker implementation.
-- **`verify_tailored_score()`** (`stage2_tailor.py:345`) issues one AI call per job,
-  undercutting the "one batch AI call" design used everywhere else in stage 2/3. N jobs
-  → N extra quality-tier calls.
-- ~~**`draft_cold_emails_batch`**'s `except` falls back to N individual calls. On a real
-  outage this turns 1 failed call into N more, each with its own 3-attempt retry —
-  amplifies the failure instead of degrading gracefully.~~ ✅ Fixed — the batch AI call
-  (`claude_chat(...)`) is now wrapped in its own `try`/`except`, separate from response
-  parsing. A hard exception from the call itself (post-retry `AIChatError`, etc.) no longer
-  triggers per-job fallback calls; it returns a `_draft_failed()` placeholder per job
-  (empty subject/body, mirroring `stage1_scrape.py`'s `_unscored()` contract) and `run()`
-  skips writing a draft / prompting for that job, leaving it for the next run. The
-  legitimate "response received but unparseable/entry missing" fallback (parse errors,
-  positional-misalignment resolution) is unchanged and still falls back per-job. See
+- ~~**#6 — `stage2_tailor.py:422`** — status advances to `Resume Tailored` even when
+  `edits` is empty.~~ ✅ Fixed (PR #13, `fix/pr11-issue6-zero-edit-status`). A zero-edit
+  job is now left in `Human Review` with a guidance note instead of `Resume Tailored`,
+  mirroring `_sponsorship_gate()`'s pattern. (Rebasing this onto PR #18's batched-verify
+  restructuring surfaced a real bug: the zero-edit check was reading a stale `edits`
+  variable left over from a different loop phase due to Python's loop-scoping, gating
+  every job in a run on one arbitrary job's edit count. Fixed by threading `edits`
+  through the `tailored` tuple so each job's own value is used.)
+- ~~**#7 — `python-docx` is undeclared.**~~ ✅ Fixed (PR #15,
+  `fix/pr11-issue7-python-docx-dependency`). `requirements.txt` now lists `python-docx`;
+  `docxtpl` confirmed unused in any active path and removed. Also fixed #14 (stale
+  module docstring) in the same PR.
+- ~~**#8 — `stage2_tailor.py:94`** `fetch_jd()` strips tags without removing
+  `<script>`/`<style>` first.~~ ✅ Fixed (PR #14,
+  `fix/pr11-issue8-fetch-jd-strip-script-style`). `fetch_jd()` now reuses
+  `sources._strip_html()` instead of a second, weaker inline regex.
+- ~~**#9 — `verify_tailored_score()`** issues one AI call per job.~~ ✅ Fixed (PR #18,
+  `fix/pr11-issue9-batch-verify-tailored-score`). New `verify_tailored_scores_batch()`
+  mirrors `tailor_resumes_batch()`'s batching pattern (one call, chunked at 20 jobs,
+  per-job fallback only for entries missing from the response). `run()`'s loop was
+  restructured into distinct tailor/verify/update phases to support it.
+- ~~**#10 — Double-edit-in-one-paragraph clobber** in `render_docx.py`.~~ ✅ Fixed (PR
+  #16, `fix/pr11-issue10-same-paragraph-double-edit-clobber`). `apply_docx_edits()` now
+  resolves every paragraph's edits against a fixed original-text snapshot instead of
+  sequentially-mutated text, and rejects genuinely overlapping spans rather than
+  guessing. See `test_apply_docx_edits_sequential_same_paragraph_edits_dont_clobber`.
+- ~~**#11 — `draft_cold_emails_batch`**'s `except` falls back to N individual calls on a
+  hard failure.~~ ✅ Fixed (PR #17, `fix/pr11-issue11-cold-email-batch-failure-fallback`).
+  The batch AI call is now wrapped in its own `try`/`except`, separate from response
+  parsing. A hard exception from the call itself (post-retry `AIChatError`, etc.) no
+  longer triggers per-job fallback calls; it returns a `_draft_failed()` placeholder per
+  job (mirroring `stage1_scrape.py`'s `_unscored()` contract) and `run()` skips writing a
+  draft for that job, leaving it for the next run. The legitimate "response received but
+  unparseable/entry missing" fallback is unchanged. See
   `tests/test_stage3_outreach_contract.py::test_draft_cold_emails_batch_does_not_amplify_on_hard_batch_failure`.
+
+Full suite (243 tests) green on `feature/god-speed` with all six merged.
 
 ---
 
@@ -192,15 +203,19 @@ open from this review, re-verified 2026-07-21:
 | 3 | Positional outreach misalignment | `scripts/stage3_outreach.py:96` | ✅ Fixed (PR #12) |
 | 4 | Same-company email collision | `scripts/stage3_outreach.py:183` | ✅ Fixed (PR #12) |
 | 5 | Nightly `stage3`/`stage5` dispatch modes crash on `input()` | `.github/workflows/nightly-pipeline.yml`, `run.py:158`, `stage5_interview_prep.py:144` | ⏳ Open |
-| 6 | Zero-edit tailoring still marked `Resume Tailored` | `stage2_tailor.py:422` | ⏳ Open |
-| 7 | `python-docx` undeclared in `requirements.txt` | `requirements.txt` | ⏳ Open |
-| 8 | `fetch_jd()` doesn't strip `<script>`/`<style>` before the AI call | `stage2_tailor.py:94` | ⏳ Open |
-| 9 | `verify_tailored_score()` is N calls, not batched | `stage2_tailor.py:345` | ⏳ Open |
-| 10 | Double-edit-in-one-paragraph clobber | `render_docx.py` (see `test_apply_docx_edits_sequential_same_paragraph_edits_dont_clobber`) | ✅ Fixed (`fix/pr11-issue10-same-paragraph-double-edit-clobber`) |
+| 6 | Zero-edit tailoring still marked `Resume Tailored` | `stage2_tailor.py` | ✅ Fixed (PR #13) |
+| 7 | `python-docx` undeclared in `requirements.txt` | `requirements.txt` | ✅ Fixed (PR #15) |
+| 8 | `fetch_jd()` doesn't strip `<script>`/`<style>` before the AI call | `stage2_tailor.py` | ✅ Fixed (PR #14) |
+| 9 | `verify_tailored_score()` is N calls, not batched | `stage2_tailor.py` | ✅ Fixed (PR #18) |
+| 10 | Double-edit-in-one-paragraph clobber | `render_docx.py` | ✅ Fixed (PR #16) |
+| 11 | `draft_cold_emails_batch` amplifies failure on hard batch exception | `stage3_outreach.py` | ✅ Fixed (PR #17) |
+| 12 | Dependencies unpinned except `notion-client` | `requirements.txt` | ⏳ Open (minor) |
+| 13 | `playwright` installed unconditionally despite being optional | `requirements.txt` | ⏳ Open (minor) |
+| 14 | Module docstring still described `docxtpl` renderer | `scripts/render_docx.py` | ✅ Fixed (PR #15) |
+| 15 | `doc.tables` ignored in docx text extraction/edits (latent) | `scripts/render_docx.py` | ⏳ Open (minor) |
 
-**Plan:** items #5–#9 are smaller and independent of one another — worth a follow-up
-branch off `feature/god-speed` per the "every change ships with a test" rule, same as
-the PR #12 fixes did for #1–#4 and the follow-up branch did for #10.
+**Remaining:** only #5 (nightly workflow's `input()` crash on unattended `stage3`/`stage5`
+dispatch) and the minor cleanup items #12/#13/#15 are still open.
 
 ---
 
