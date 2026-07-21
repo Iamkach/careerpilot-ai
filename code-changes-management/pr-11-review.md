@@ -51,13 +51,22 @@ locked in the buggy behavior on purpose) was replaced with
 `test_apply_docx_edits_preserves_formatting_when_edit_spans_run_boundary`, asserting the
 new correct behavior.
 
-**Still open, unrelated to this fix:** `test_characterization_same_paragraph_double_edit_clobber`
-remains — two edits landing in the same paragraph still apply sequentially against the
-paragraph's *already-edited* text, so a `new` string that reintroduces an earlier `old`
-substring causes the second edit to clobber the wrong occurrence. Correctly still
-documented as a known, not a fixed, gap. Low real-world likelihood (requires two edits
-in one job's edit list targeting the same paragraph with an overlapping substring), but
-worth a follow-up given `render_docx.py` is now demonstrably being hardened.
+**Item #10 (double-edit-in-one-paragraph clobber) also fixed**, on branch
+`fix/pr11-issue10-same-paragraph-double-edit-clobber`: `apply_docx_edits()` now snapshots
+every paragraph's original text once up front and resolves each edit's match position
+against that fixed snapshot, instead of re-scanning the paragraph's live (possibly
+already-edited) text edit-by-edit. Edits sharing a paragraph are grouped, sorted by their
+original-text position, and spliced into the paragraph's original run layout in one pass
+via the new `_apply_para_edits()` (generalizing `_replace_para_text()`, which is now a
+thin single-span wrapper around it) — so a later edit's `old` match can never be thrown
+off by an earlier edit's `new` text, and formatting is preserved exactly as PR #12 left
+it. A genuine overlap between two edits' spans in the original text (no correct
+simultaneous resolution) is reported via `unmatched` rather than corrupting the
+paragraph. The old `test_characterization_same_paragraph_double_edit_clobber` test (which
+locked in the buggy behavior on purpose) was replaced with
+`test_apply_docx_edits_sequential_same_paragraph_edits_dont_clobber` plus three more
+covering reversed edit order, an earlier edit shifting text length before a later one,
+and genuinely overlapping spans.
 
 ---
 
@@ -179,11 +188,11 @@ open from this review, re-verified 2026-07-21:
 | 7 | `python-docx` undeclared in `requirements.txt` | `requirements.txt` | ⏳ Open |
 | 8 | `fetch_jd()` doesn't strip `<script>`/`<style>` before the AI call | `stage2_tailor.py:94` | ⏳ Open |
 | 9 | `verify_tailored_score()` is N calls, not batched | `stage2_tailor.py:345` | ⏳ Open |
-| 10 | Double-edit-in-one-paragraph clobber (documented, not fixed) | `render_docx.py` (see `test_characterization_same_paragraph_double_edit_clobber`) | ⏳ Open |
+| 10 | Double-edit-in-one-paragraph clobber | `render_docx.py` (see `test_apply_docx_edits_sequential_same_paragraph_edits_dont_clobber`) | ✅ Fixed (`fix/pr11-issue10-same-paragraph-double-edit-clobber`) |
 
-**Plan:** items #5–#10 are smaller and independent of one another — worth a follow-up
+**Plan:** items #5–#9 are smaller and independent of one another — worth a follow-up
 branch off `feature/god-speed` per the "every change ships with a test" rule, same as
-the PR #12 fixes did for #1–#4.
+the PR #12 fixes did for #1–#4 and the follow-up branch did for #10.
 
 ---
 
