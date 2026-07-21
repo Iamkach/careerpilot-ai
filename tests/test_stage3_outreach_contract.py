@@ -45,6 +45,26 @@ def test_draft_cold_emails_batch_falls_back_to_per_job_on_malformed_response(pat
     assert results[1] == {"company": "Beta Inc", "subject": "Hi Beta", "body": "Body two"}
 
 
+def test_draft_cold_emails_batch_does_not_amplify_on_hard_batch_failure(patch_ai_chat):
+    """PR #11 issue 11: when the batch AI call itself raises (e.g. AIChatError after ai_chat's
+    own 3-attempt retry budget is exhausted — a real outage), draft_cold_emails_batch must NOT
+    fall back to N individually-retried calls, which would turn 1 failed call into up to 3N
+    more against an already-failing service. It should make exactly one call, log the failure,
+    and return a "not drafted this run" placeholder per job instead."""
+    jobs = make_recorded_jobs(3)
+    fake = patch_ai_chat(stage3_outreach)
+    fake.raises = RuntimeError("AI call failed after retries: connection timeout")
+
+    results = stage3_outreach.draft_cold_emails_batch(jobs, "my background")
+
+    assert len(fake.calls) == 1  # no per-job amplification
+    assert len(results) == 3
+    for job, r in zip(jobs, results):
+        assert r["company"] == job["company"]
+        assert r["subject"] == ""
+        assert r["body"] == ""
+
+
 def test_draft_cold_emails_batch_detects_positional_misalignment_and_falls_back(patch_ai_chat):
     """If the model's JSON array order doesn't match the requested job order (e.g. a shifted
     response), draft_cold_emails_batch must not blindly trust position — it validates each
@@ -117,6 +137,26 @@ def test_run_same_company_jobs_do_not_cross_assign_emails(monkeypatch, tmp_path)
     frontend_file = next(f for f in files if "Frontend_Engineer" in f.name)
     assert "body-for-Backend Engineer" in backend_file.read_text()
     assert "body-for-Frontend Engineer" in frontend_file.read_text()
+
+
+def test_run_skips_writing_a_draft_when_batch_call_fails(monkeypatch, tmp_path):
+    """run()'s cold-email path must not write a blank draft file or offer to mark a job
+    'Outreach Sent' when draft_cold_emails_batch()'s outage placeholder (empty subject/body)
+    comes back for a job — it should log and leave the job for the next run to retry."""
+    jobs = [
+        {"page_id": "p1", "company": "Acme Corp", "title": "Backend Engineer", "url": "https://x/1"},
+    ]
+    monkeypatch.setattr(stage3_outreach, "db_get_ready_to_apply", lambda: jobs)
+    monkeypatch.setattr(stage3_outreach, "OUTREACH_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        stage3_outreach, "draft_cold_emails_batch",
+        lambda js, bio: [stage3_outreach._draft_failed(j) for j in js],
+    )
+
+    stage3_outreach.run(no_confirm=True)
+
+    files = sorted(tmp_path.glob("*.txt"))
+    assert files == []
 
 
 def test_draft_inmail_batch_replays_recorded(patch_ai_chat):
