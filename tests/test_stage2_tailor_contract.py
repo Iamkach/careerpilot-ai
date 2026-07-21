@@ -306,10 +306,14 @@ def _stub_run_dependencies(monkeypatch, jobs, description="Some JD text"):
     monkeypatch.setattr(stage2_tailor, "get_reviewed_jobs", lambda min_score=0: jobs)
     monkeypatch.setattr(stage2_tailor, "_sponsorship_gate", lambda js: js)
     monkeypatch.setattr(stage2_tailor, "db_get_job_description", lambda pid: description)
+    # Non-empty edits so these verify-batching tests don't also trip the zero-edit
+    # "Human Review" gate (tested separately in tests/test_stage2_zero_edit_gate.py) —
+    # every job here should land on "Resume Tailored" per the assertions below.
     monkeypatch.setattr(
         stage2_tailor, "tailor_resumes_batch",
         lambda resume_text, jobs_and_jds: {
-            (j.get("page_id") or j.get("id")): ([], []) for j, _ in jobs_and_jds
+            (j.get("page_id") or j.get("id")): ([{"old": "x", "new": "y", "reason": "r"}], [])
+            for j, _ in jobs_and_jds
         },
     )
     monkeypatch.setattr(stage2_tailor, "save_resume", lambda edits, job, resume_text: f"/fake/{job['page_id']}.docx")

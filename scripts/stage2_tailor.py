@@ -538,7 +538,7 @@ def run(min_score: int = 0):
             batch_results[pid] = (edits, keywords)
 
     # Phase 3: Apply edits + save a tailored resume for every job (no AI calls)
-    tailored: list[tuple[dict, str, str, str]] = []  # (job, tailored_text, jd, file_path)
+    tailored: list[tuple[dict, str, str, str, list]] = []  # (job, tailored_text, jd, file_path, edits)
     for job, jd in jobs_and_jds:
         pid = job.get("page_id") or job.get("id")
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
@@ -557,12 +557,12 @@ def run(min_score: int = 0):
         log(f"  ✓ Saved: {file_path}")
 
         tailored_text = extract_docx_text(file_path)
-        tailored.append((job, tailored_text, jd, file_path))
+        tailored.append((job, tailored_text, jd, file_path, edits))
 
     # Phase 4: ONE batch AI call to verify ALL tailored resumes (mirrors Phase 2's batching)
     log(f"\nBatch verifying {len(tailored)} tailored resume(s) in 1 AI call…")
     verify_results = verify_tailored_scores_batch(
-        [(job, tailored_text, jd) for job, tailored_text, jd, _ in tailored]
+        [(job, tailored_text, jd) for job, tailored_text, jd, _, _ in tailored]
     )
 
     verify_missing = [
@@ -570,13 +570,13 @@ def run(min_score: int = 0):
     ]
     if verify_missing:
         log(f"  ↳ Batch verification missed {len(verify_missing)} job(s) — falling back to per-job calls")
-        for job, tailored_text, jd, _ in verify_missing:
+        for job, tailored_text, jd, _, _ in verify_missing:
             pid = job.get("page_id") or job.get("id")
             log(f"    → {job['company']} — single-job verification fallback")
             verify_results[pid] = verify_tailored_score(tailored_text, jd, job)
 
     # Phase 5: Log verification results + update Notion
-    for job, _, _, file_path in tailored:
+    for job, _, _, file_path, edits in tailored:
         pid = job.get("page_id") or job.get("id")
         verify = verify_results.get(pid) or {"url": job["url"], "score": None, "scored": False}
         before = job["ats_score"]
@@ -590,10 +590,33 @@ def run(min_score: int = 0):
             log(f"  ⚠ Post-tailor verification scoring failed for {job['company']} — leaving as-is.")
 
         # NOTE: do NOT set date_applied here — tailoring is not applying.
-        db_update_status(job["page_id"], "Resume Tailored", {
-            "tailored_resume_link": f"file://{Path(file_path).resolve()}",
-        })
-        log(f"  ✓ Status updated → Resume Tailored")
+        if not edits:
+            # Zero edits means save_resume() only produced a renamed copy of the base resume —
+            # nothing was actually tailored. Advancing to "Resume Tailored" here would be a
+            # false positive, the same failure mode stage 7's "Never Applied" rule guards
+            # against. Zero edits isn't a transient failure worth an automatic retry (re-running
+            # the same AI call against the same resume/JD would likely reproduce it) — it needs
+            # a human to look at *why* (JD already matched, or something upstream is thin/
+            # garbled), so mirror _sponsorship_gate()'s pattern: park it in "Human Review" with
+            # a guidance note rather than "Retry".
+            notes = job.get("notes") or ""
+            guidance = (
+                "⚠ Zero-edit tailoring: the AI suggested no ATS keyword edits for this JD, so "
+                "the saved resume is an unmodified copy of the base resume, not an actually-"
+                "tailored one. Review the JD manually — either the base resume already matches "
+                "well, or something went wrong upstream (e.g. a thin/garbled cached JD) — then "
+                "move Status back to 'Reviewed' to retry tailoring."
+            )
+            db_update_status(job["page_id"], "Human Review", {
+                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "notes": f"{notes}\n{guidance}" if notes else guidance,
+            })
+            log(f"  ⚠ Zero edits suggested — left in 'Human Review' instead of 'Resume Tailored'")
+        else:
+            db_update_status(job["page_id"], "Resume Tailored", {
+                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+            })
+            log(f"  ✓ Status updated → Resume Tailored")
 
     log(f"\nAll done. Resumes saved to ./{RESUMES_DIR}/")
 
