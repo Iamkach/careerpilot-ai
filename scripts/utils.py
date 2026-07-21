@@ -467,6 +467,10 @@ def _page_to_job(page: dict) -> dict:
         "enrichment_attempts": _prop_number(props, "Enrichment Attempts"),
         "notes":       _notion_plain_text(props.get("Notes")),
         "missing_keywords": [k.strip() for k in _notion_plain_text(props.get("Missing Keywords")).split(",") if k.strip()],
+        "apply_channel":     _prop_select(props, "Apply Channel"),
+        "apply_attempts":    _prop_number(props, "Apply Attempts"),
+        "needs_human_reason": _notion_plain_text(props.get("Needs Human Reason")),
+        "application_log":   _notion_plain_text(props.get("Application Log")),
     }
 
 
@@ -542,6 +546,13 @@ _EXTRA_TO_NOTION = {
     "scoring_attempts":        lambda v: {"Scoring Attempts": {"number": float(v)}},
     "enrichment_attempts":     lambda v: {"Enrichment Attempts": {"number": float(v)}},
     "missing_keywords":        lambda v: {"Missing Keywords": {"rich_text": [{"text": {"content": ", ".join(v)}}]}},
+    # Stage 7 (auto-apply). Like every entry above, these are only written when the caller
+    # supplies the key, so a tracker without these columns keeps working — the values just
+    # don't land.
+    "apply_channel":           lambda v: {"Apply Channel": {"select": {"name": v}}},
+    "apply_attempts":          lambda v: {"Apply Attempts": {"number": float(v)}},
+    "needs_human_reason":      lambda v: {"Needs Human Reason": {"rich_text": [{"text": {"content": v[:1900]}}]}},
+    "application_log":         lambda v: {"Application Log": {"rich_text": [{"text": {"content": v[:1900]}}]}},
 }
 
 def _notion_update(notion_page_id: str, status: str, extra_props: dict = None):
@@ -791,6 +802,37 @@ def db_add_job_linked(job: dict, notion_page_id: str, status: str = "Scraped") -
 def db_update_status(job_id: str, status: str, extra_props: dict = None):
     """Update a job's Status (+ mapped extra props) on its Notion page."""
     _notion_update(job_id, status, extra_props)
+
+
+def db_update_status_verified(job_id: str, status: str, extra_props: dict = None) -> bool:
+    """Update a job's Status, then read it back and confirm it actually applied.
+
+    Notion does NOT auto-create `Status` select options via the API. Writing a status the
+    select doesn't already offer fails *silently*: the page updates (other properties land),
+    the Status property just isn't changed, and `pages.update` returns 200. For stage 7's new
+    statuses (Application Queued / Needs Human: * / Apply Failed) that silence is dangerous —
+    the job would keep its old status and be re-processed on every run, which is exactly how an
+    auto-applier ends up double-submitting.
+
+    Returns True if the readback shows `status`, False (loudly logged) otherwise. Callers must
+    treat False as "this job was NOT transitioned" and skip it rather than proceeding.
+    """
+    _notion_update(job_id, status, extra_props)
+    if not NOTION_API_KEY or not job_id:
+        return False
+    try:
+        from notion_client import Client as NotionClient
+        page = NotionClient(auth=NOTION_API_KEY).pages.retrieve(page_id=job_id)
+        actual = _prop_select(page.get("properties", {}), "Status")
+    except Exception as e:
+        log(f"[db_update_status_verified] readback failed for {job_id}: {e}")
+        return False
+    if actual == status:
+        return True
+    log(f"  ✗ Notion did not apply Status={status!r} (still {actual!r}). The Status select is "
+        f"missing that option — add it by hand in the tracker, then re-run. Skipping this job "
+        f"rather than leaving it to be re-processed.")
+    return False
 
 
 def db_get_ready_to_apply() -> list:

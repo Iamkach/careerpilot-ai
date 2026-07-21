@@ -99,3 +99,50 @@ run before any Phase 1+ code.
 Full spec: `docs/backlog/step-7-communications-subsystem.md` and
 `docs/refinement-plans/communications/communications-subsystem.md`.
 
+## Step 10 — Auto-Apply subsystem (Phases 1–2 landed 2026-07-19)
+
+Stage 7 (`scripts/autoapply.py` + `scripts/autoapply_browser.py`, wired as `run.py --stage 7`
+/ `--stage 7 --fill`) now plans every application answer, gates on anything it can't answer
+confidently, emits an HTML answer sheet, and optionally pre-fills the live form in Chromium.
+**It never submits** — `WRITABLE_STATUSES` excludes `Applied` on purpose, and the browser
+module contains no submit code path at all. Confirmed during research: no candidate-usable
+submit API exists (Greenhouse's endpoint authenticates as the *employer*), so this is
+irreducibly a browser problem.
+
+**Open residual gaps:**
+
+- **Live schema fetch validated once; fill path still not run live, and mapping gaps found.**
+  The Greenhouse `?questions=true` fetch was run for the first time against a real tracker job
+  (SmithRx, "Senior Staff Automation Engineer") and **worked** — 25 fields returned and mapped,
+  confirming the core Phase-1 read premise on a live board. But it surfaced real mapping gaps not
+  yet closed: (a) the whole structured-address block is unmapped (`Legal First/Last Name`,
+  `Address Line 1/2`, `City`, `State`, `Country`, `Zip Code`, `Address Type`) because
+  `APPLICATION_PROFILE` has only a freeform `location` and `_FIELD_MAP` keys on field *name*;
+  (b) Greenhouse emits **two rows per attachment question** (an `input_file` and a textarea), so
+  the planner double-counts "Resume/CV" / "Cover Letter" and blocks on the text copy even once the
+  upload is satisfied. Result on that job: only 5/25 fields `ready`, 17 required blockers, ~10 of
+  which are these two bugs rather than genuine human judgment. **The Layer-2 fill path has still
+  never run against a live form** (only the bundled sample and a local `file://` fixture). Highest-
+  value next checks: fix the address/attachment mapping, then exercise the fill path on one real
+  Greenhouse job. Note the tracker currently holds only **one** Greenhouse row (413 LinkedIn / 90
+  Indeed / 4 unknown of 508), both of which are manual-only — so weighting `ENABLED_SOURCES`
+  toward ATS boards is a prerequisite for Stage 7 to matter at volume.
+- **No docx→PDF conversion.** Stage 2 emits `.docx` only, and a converter needs LibreOffice or
+  Word. A PDF-only upload field currently stops as `pdf_only` and asks the human to convert.
+  Only worth building if PDF-only forms turn out to be common in practice.
+- **Phase 3 (deliberate submit) deferred by choice** pending real use of the fill path. The
+  research argues against rushing it: ATSes now score application velocity and flag high-volume
+  submitters as low-intent before a human reads the application, so the marginal value of
+  automating the final click is lower than it looks.
+- **Phase 4 (Workday/agentic long tail) not started.** Workday runs a separate tenant per
+  company and its resume parser fails ~30% of the time; account provisioning is the real cost.
+- **Schema migration must be run once** before stage 7 can transition anything:
+  `python scripts/setup_notion_schema.py --apply` adds the six new `Status` options and the four
+  new properties. (`databases.update` can extend the schema even though `pages.update` silently
+  ignores an unknown select option — so only the per-page write is unscriptable.) Idempotent and
+  dry-run by default. If skipped, `db_update_status_verified()` fails loudly rather than silently
+  no-opping, so it surfaces on first run rather than corrupting state.
+
+Full spec + the research findings that shaped the design:
+`docs/backlog/step-10-auto-apply-subsystem.md` §11.
+

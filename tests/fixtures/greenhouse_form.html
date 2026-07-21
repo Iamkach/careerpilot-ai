@@ -1,0 +1,66 @@
+<!doctype html>
+<!--
+  Fixture application form for tests/test_autoapply_browser.py.
+
+  Mirrors the shape of a Greenhouse-hosted form closely enough to exercise the filler's real
+  selector strategy: inputs carry the exact `name` the public ?questions=true schema reports,
+  a file input constrains `accept`, and one field is reachable only via its <label> text (no
+  usable name/id) so the label-based fallback is genuinely covered.
+
+  It also carries a submit button on purpose — the filler must leave it untouched.
+-->
+<html>
+<head><meta charset="utf-8"><title>Apply — Fixture Corp</title></head>
+<body>
+<h1>Senior Backend Engineer</h1>
+
+<form id="application_form" action="/submitted" method="post">
+  <label for="first_name">First Name</label>
+  <input type="text" id="first_name" name="first_name">
+
+  <label for="last_name">Last Name</label>
+  <input type="text" id="last_name" name="last_name">
+
+  <label for="email">Email</label>
+  <input type="text" id="email" name="email">
+
+  <label for="phone">Phone</label>
+  <input type="text" id="phone" name="phone">
+
+  <label for="resume">Resume/CV</label>
+  <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx,.txt">
+
+  <label for="question_workauth">Are you legally authorized to work in the United States?</label>
+  <select id="question_workauth" name="question_workauth">
+    <option value=""></option>
+    <option value="1">Yes</option>
+    <option value="0">No</option>
+  </select>
+
+  <label for="question_sponsor">Will you now or in the future require sponsorship for employment visa status?</label>
+  <select id="question_sponsor" name="question_sponsor">
+    <option value=""></option>
+    <option value="1">Yes</option>
+    <option value="0">No</option>
+  </select>
+
+  <!-- Reachable only by label text: no name, no id. Exercises the fallback selectors. -->
+  <label>How did you hear about this job?
+    <input type="text">
+  </label>
+
+  <label for="question_why">Why do you want to work here?</label>
+  <textarea id="question_why" name="question_why"></textarea>
+
+  <button type="submit" id="submit_app">Submit Application</button>
+</form>
+
+<script>
+  // Records a submit if one ever happens, so the test can prove the filler never fired it.
+  document.getElementById('application_form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    window.__submitted = true;
+  });
+</script>
+</body>
+</html>

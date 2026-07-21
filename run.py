@@ -19,6 +19,10 @@ Two-step daily flow:
     python run.py --stage 4 --send
     python run.py --stage 5 --company "Google" --role "Senior PM"
     python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
+    python run.py --setup-profile          # One-time: capture your application answers
+    python run.py --stage 7 --dry-run --limit 3   # Sample it: real sheets, no Notion writes
+    python run.py --stage 7                # Auto-apply prep: answer sheets, never submits
+    python run.py --stage 7 --fill         # ...and pre-fill the form in a browser
     python run.py --setup                  # Check config & install deps
 """
 
@@ -181,6 +185,18 @@ def stage6(args):
     from scripts.stage6_negotiate import run
     run(company=args.company, role=args.role, offer=args.offer)
 
+def stage7(args):
+    print("\n📮 STAGE 7 — Auto-apply prep (never submits)")
+    print("─" * 45)
+    from scripts.autoapply import run
+    run(min_score=args.min_score, fill=args.fill, limit=args.limit, dry_run=args.dry_run)
+
+
+def setup_profile_routine(args):
+    """One-time interactive capture of the Stage 7 application answers."""
+    from scripts.autoapply_profile import main as profile_main
+    return profile_main([])
+
 
 # ── Full morning routine ──────────────────────────────────────
 
@@ -263,7 +279,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument("--stage",        type=int, default=None,   help="Run specific stage (1–6)")
+    parser.add_argument("--stage",        type=int, default=None,   help="Run specific stage (1–7)")
+    parser.add_argument("--fill",         action="store_true",
+                        help="Stage 7: also pre-fill the form in a browser (stops before submit)")
+    parser.add_argument("--dry-run",      action="store_true", dest="dry_run",
+                        help="Stage 7: plan and write answer sheets, but make NO Notion writes")
+    parser.add_argument("--limit",        type=int, default=0,
+                        help="Stage 7: cap how many jobs to process this run (overrides AUTOAPPLY_DAILY_CAP)")
+    parser.add_argument("--setup-profile", action="store_true", dest="setup_profile",
+                        help="One-time interactive setup of your Stage 7 application answers")
     parser.add_argument("--setup",        action="store_true",       help="Check config & dependencies")
     parser.add_argument("--min-score",    type=int, default=0,       help="Min ATS score for tailoring")
     parser.add_argument("--company",      type=str, default=None)
@@ -317,7 +341,10 @@ def main():
         check_setup()
         return
 
-    stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6}
+    if args.setup_profile:
+        sys.exit(setup_profile_routine(args))
+
+    stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6, 7: stage7}
 
     if args.ingest:
         ingest_routine(args)
@@ -328,7 +355,7 @@ def main():
     elif args.stage:
         fn = stages.get(args.stage)
         if not fn:
-            print(f"Unknown stage: {args.stage}. Choose 1–6.")
+            print(f"Unknown stage: {args.stage}. Choose 1–7.")
             sys.exit(1)
         fn(args)
     else:

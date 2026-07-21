@@ -108,6 +108,11 @@ class FakeNotionDB:
         self._pages: dict[str, dict] = {}
         self._next_id = 1
         self._scratch_rows: dict[str, str] = {}  # page_id -> url, mirrors the scratch-note DB
+        # Statuses the fake "Status" select offers. None = accept anything (the default, so
+        # existing tests are unaffected). Set to a concrete set to reproduce real Notion's
+        # behavior of silently ignoring a select option that hasn't been created by hand —
+        # the page updates, the Status just doesn't change, and the API still returns 200.
+        self.known_statuses: set[str] | None = None
 
     def _new_id(self) -> str:
         page_id = f"fake-page-{self._next_id}"
@@ -134,6 +139,10 @@ class FakeNotionDB:
             "enrichment_attempts": rec.get("enrichment_attempts", 0) or 0,
             "notes":            rec.get("notes", ""),
             "missing_keywords": list(rec.get("missing_keywords") or []),
+            "apply_channel":    rec.get("apply_channel", ""),
+            "apply_attempts":   rec.get("apply_attempts", 0) or 0,
+            "needs_human_reason": rec.get("needs_human_reason", ""),
+            "application_log":  rec.get("application_log", ""),
         }
 
     # ── seeding helpers (not real db_* functions — used to set up test state) ──
@@ -173,8 +182,18 @@ class FakeNotionDB:
 
     def db_update_status(self, job_id: str, status: str, extra_props: dict | None = None):
         rec = self._pages.setdefault(job_id, {"status": status, "description": ""})
-        rec["status"] = status
+        # Mirror Notion: an unregistered select option is silently ignored, but every other
+        # property in the same call still lands.
+        if self.known_statuses is None or status in self.known_statuses:
+            rec["status"] = status
         rec.update(extra_props or {})
+
+    def db_update_status_verified(self, job_id: str, status: str,
+                                  extra_props: dict | None = None) -> bool:
+        """Mirror of utils.db_update_status_verified: write, then read back and report whether
+        the status actually applied."""
+        self.db_update_status(job_id, status, extra_props)
+        return self._pages.get(job_id, {}).get("status") == status
 
     def db_get_ready_to_apply(self) -> list[dict]:
         rows = [
@@ -245,6 +264,7 @@ class FakeNotionDB:
 # the ones actually present on the target module.
 _NOTION_METHOD_NAMES = (
     "db_add_job", "db_add_job_linked", "db_find_job_by_url", "db_update_status",
+    "db_update_status_verified",
     "db_get_ready_to_apply", "db_get_job_description", "db_get_jobs", "db_get_all_jobs",
     "db_get_job_by_company", "get_notion_jobs_by_status",
     "get_scratch_note_entries", "archive_scratch_note_entry", "db_add_interested_url",
