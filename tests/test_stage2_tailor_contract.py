@@ -56,6 +56,32 @@ def test_tailor_resumes_batch_missing_entry_signals_caller_fallback(monkeypatch,
     assert "p3" not in results  # caller must fall back to _tailor_resume_single for this one
 
 
+def test_tailor_resumes_batch_same_company_does_not_cross_assign(patch_ai_chat):
+    """Two Reviewed jobs at the same company must never receive each other's edits. Simulate a
+    response where neither entry's job_index lines up with its job's position — before the fix,
+    the company-keyed fallback silently handed both jobs the same (wrong) entry."""
+    jobs = [
+        {**make_recorded_jobs(1)[0], "page_id": "p1", "company": "Acme Corp"},
+        {**make_recorded_jobs(1)[0], "page_id": "p2", "company": "Acme Corp"},
+    ]
+    jobs_and_jds = [(j, j["description"]) for j in jobs]
+    canned = [
+        {"job_index": 5, "company": "Acme Corp", "keywords_injected": ["kA"],
+         "edits": [{"old": "x", "new": "role-A-edit", "reason": "r"}]},
+        {"company": "Acme Corp", "keywords_injected": ["kB"],
+         "edits": [{"old": "x", "new": "role-B-edit", "reason": "r"}]},
+    ]
+    patch_ai_chat(stage2_tailor, response=json.dumps(canned))
+
+    results = stage2_tailor.tailor_resumes_batch("resume text", jobs_and_jds)
+
+    # Neither job can be safely matched (ambiguous company, no reliable index) — both must be
+    # left out so the caller's per-job fallback handles them individually, rather than both
+    # silently receiving the same wrong entry.
+    assert "p1" not in results
+    assert "p2" not in results
+
+
 def test_tailor_resumes_batch_full_parse_failure_returns_empty_dict(patch_ai_chat):
     """A response that isn't parseable JSON at all must not raise — tailor_resumes_batch
     returns {} so every job falls back to the per-job single-call path."""

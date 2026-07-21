@@ -130,19 +130,41 @@ def extract_docx_text(docx_path: str) -> str:
 
 
 def _replace_para_text(para, old: str, new: str) -> None:
-    """Replace old with new inside a paragraph, collapsing runs into the first one.
+    """Replace the first occurrence of old with new inside a paragraph, touching only the
+    run(s) that overlap the matched span.
 
-    Paragraph-level formatting (indent, bullet style, spacing) is preserved.
-    Run-level formatting within the paragraph is collapsed to the first run's style —
-    acceptable for resume bullets where a whole bullet shares the same style.
+    Paragraph-level formatting (indent, bullet style, spacing) is preserved, as is each
+    run's own formatting (bold, italic, ...) — a run entirely outside the matched span is
+    never modified. The replacement text is written into the first run overlapping the
+    match, so it inherits that run's style rather than the paragraph's first run.
     """
-    full = para.text.replace(old, new, 1)
-    if para.runs:
-        para.runs[0].text = full
+    runs = para.runs
+    if not runs:
+        para.add_run(para.text.replace(old, new, 1))
+        return
+
+    full = "".join(r.text for r in runs)
+    start = full.find(old)
+    if start == -1:
+        # Shouldn't happen — caller already checked `old in para.text` — but fall back to
+        # a whole-paragraph replace rather than silently doing nothing.
+        para.runs[0].text = full.replace(old, new, 1)
         for run in para.runs[1:]:
             run.text = ""
-    else:
-        para.add_run(full)
+        return
+    end = start + len(old)
+
+    pos = 0
+    replaced = False
+    for run in runs:
+        run_start, run_end = pos, pos + len(run.text)
+        pos = run_end
+        if run_end <= start or run_start >= end:
+            continue  # entirely outside the matched span — leave untouched
+        prefix = run.text[:max(0, start - run_start)]
+        suffix = run.text[max(0, end - run_start):]
+        run.text = (prefix + new + suffix) if not replaced else (prefix + suffix)
+        replaced = True
 
 
 def apply_docx_edits(base_path: str, edits: list, out_path: str, job: dict | None = None) -> tuple[str, list]:

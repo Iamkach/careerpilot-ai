@@ -274,10 +274,21 @@ Return ONLY a JSON array (no markdown fences, no commentary):
         if company:
             by_company[company] = entry
 
+    # Two Reviewed jobs at the same company is a normal outcome of a real job search — the
+    # company-keyed fallback below must never be trusted for a company that isn't unique in
+    # this batch, or it silently hands one job's edits to another job at the same employer.
+    company_counts: dict[str, int] = {}
+    for job, _ in jobs_and_jds:
+        key = job["company"].lower()
+        company_counts[key] = company_counts.get(key, 0) + 1
+
     results: dict[str, tuple[list, list]] = {}
     for i, (job, _) in enumerate(jobs_and_jds):
         pid = job.get("page_id") or job.get("id")
-        entry = by_index.get(i + 1) or by_company.get(job["company"].lower())
+        company_key = job["company"].lower()
+        entry = by_index.get(i + 1)
+        if entry is None and company_counts[company_key] == 1:
+            entry = by_company.get(company_key)
         if entry and isinstance(entry.get("edits"), list):
             results[pid] = (entry["edits"], entry.get("keywords_injected", []))
     return results
