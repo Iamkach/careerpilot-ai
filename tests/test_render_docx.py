@@ -174,25 +174,79 @@ def test_apply_docx_edits_preserves_formatting_when_edit_spans_run_boundary(fixt
     assert not edited_para.runs[0].bold
 
 
-def test_characterization_same_paragraph_double_edit_clobber(fixture_docx_path, tmp_path):
-    """Known gap: two edits in the same paragraph are applied sequentially against the
-    paragraph's *current* (already-edited) text, not the original. If the first edit's `new`
-    text happens to reintroduce the second edit's `old` substring earlier in the paragraph,
-    the second edit clobbers the wrong occurrence instead of the one it was meant for.
+def test_apply_docx_edits_sequential_same_paragraph_edits_dont_clobber(fixture_docx_path, tmp_path):
+    """Two edits landing in the same paragraph must each resolve against the paragraph's
+    ORIGINAL text, not get applied sequentially against each other's output. Previously,
+    edit A's `new` text reintroducing edit B's `old` substring caused B to clobber A's
+    freshly-inserted text instead of the original occurrence it was meant for.
 
     Fixture paragraph: "Skilled in Python and Java."
-      Edit A: old="Python", new="Java"   → "Skilled in Java and Java."
-      Edit B: old="Java",   new="Kotlin" → replaces the FIRST "Java" (the one edit A just
-              introduced), not the original second one.
-    Result: "Skilled in Kotlin and Java." — the original "Java" survives untouched, and the
-    text edit A introduced gets clobbered by edit B instead. Locks in today's behavior."""
+      Edit A: old="Python", new="Java"   → intends "Skilled in Java and Java."
+      Edit B: old="Java",   new="Kotlin" → must target the ORIGINAL "Java" at the end, not
+              the one edit A introduces.
+    Correct result: "Skilled in Java and Kotlin." — both edits land on their own,
+    independently-resolved occurrence."""
     out_path = tmp_path / "edited.docx"
     edits = [
         {"old": "Python", "new": "Java"},
         {"old": "Java", "new": "Kotlin"},
     ]
 
-    apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
+    result_path, unmatched = apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
 
+    assert unmatched == []
     text = extract_docx_text(str(out_path))
-    assert "Skilled in Kotlin and Java." in text
+    assert "Skilled in Java and Kotlin." in text
+    assert "Skilled in Kotlin and Java." not in text  # the old, buggy result
+
+
+def test_apply_docx_edits_same_paragraph_edit_order_reversed_still_correct(fixture_docx_path, tmp_path):
+    """Same scenario as above but with the edits given in the opposite order, to confirm the
+    fix isn't relying on edit A happening to be processed (and thus resolved) first."""
+    out_path = tmp_path / "edited.docx"
+    edits = [
+        {"old": "Java", "new": "Kotlin"},
+        {"old": "Python", "new": "Java"},
+    ]
+
+    _, unmatched = apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
+
+    assert unmatched == []
+    text = extract_docx_text(str(out_path))
+    assert "Skilled in Java and Kotlin." in text
+
+
+def test_apply_docx_edits_same_paragraph_earlier_edit_shifts_length_before_later_one(fixture_docx_path, tmp_path):
+    """An earlier edit in the same paragraph that changes text length (here, a much longer
+    replacement) must not throw off where the later edit's match is applied — positions are
+    resolved against the original text up front, so length deltas from earlier edits in the
+    same paragraph never shift a later edit's target."""
+    out_path = tmp_path / "edited.docx"
+    edits = [
+        {"old": "Python", "new": "a very long and verbose Python-adjacent phrase"},
+        {"old": "Java", "new": "Kotlin"},
+    ]
+
+    _, unmatched = apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
+
+    assert unmatched == []
+    text = extract_docx_text(str(out_path))
+    assert "Skilled in a very long and verbose Python-adjacent phrase and Kotlin." in text
+
+
+def test_apply_docx_edits_genuinely_overlapping_same_paragraph_edits_second_is_skipped(fixture_docx_path, tmp_path):
+    """Two edits whose `old` substrings genuinely overlap in the ORIGINAL paragraph text have
+    no correct simultaneous resolution — the second (in edit-list order) must be reported as
+    unmatched rather than corrupting the paragraph, and the first must still apply cleanly."""
+    out_path = tmp_path / "edited.docx"
+    edits = [
+        {"old": "Skilled in Python", "new": "Proficient in Python"},
+        {"old": "in Python and", "new": "in Rust and"},  # overlaps the first edit's span
+    ]
+
+    _, unmatched = apply_docx_edits(str(fixture_docx_path), edits, str(out_path))
+
+    assert len(unmatched) == 1
+    assert unmatched[0]["old"] == "in Python and"
+    text = extract_docx_text(str(out_path))
+    assert "Proficient in Python and Java." in text
