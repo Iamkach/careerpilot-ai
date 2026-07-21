@@ -126,9 +126,17 @@ none touched by PR #12, which was scoped to the two blocking items above.
 - **`verify_tailored_score()`** (`stage2_tailor.py:345`) issues one AI call per job,
   undercutting the "one batch AI call" design used everywhere else in stage 2/3. N jobs
   → N extra quality-tier calls.
-- **`draft_cold_emails_batch`**'s `except` falls back to N individual calls. On a real
+- ~~**`draft_cold_emails_batch`**'s `except` falls back to N individual calls. On a real
   outage this turns 1 failed call into N more, each with its own 3-attempt retry —
-  amplifies the failure instead of degrading gracefully.
+  amplifies the failure instead of degrading gracefully.~~ ✅ Fixed — the batch AI call
+  (`claude_chat(...)`) is now wrapped in its own `try`/`except`, separate from response
+  parsing. A hard exception from the call itself (post-retry `AIChatError`, etc.) no longer
+  triggers per-job fallback calls; it returns a `_draft_failed()` placeholder per job
+  (empty subject/body, mirroring `stage1_scrape.py`'s `_unscored()` contract) and `run()`
+  skips writing a draft / prompting for that job, leaving it for the next run. The
+  legitimate "response received but unparseable/entry missing" fallback (parse errors,
+  positional-misalignment resolution) is unchanged and still falls back per-job. See
+  `tests/test_stage3_outreach_contract.py::test_draft_cold_emails_batch_does_not_amplify_on_hard_batch_failure`.
 
 ---
 

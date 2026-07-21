@@ -82,6 +82,20 @@ Return ONLY a JSON array, one entry per job in the same order:
 ]"""
     try:
         raw = claude_chat(prompt, system=SYSTEM_OUTREACH)
+    except Exception as exc:
+        # The batch call itself failed — ai_chat() already retried transient errors 3x with
+        # exponential backoff before raising (see AIChatError in scripts/utils.py), so this
+        # is strong evidence of a real outage, not a transient blip that a fresh N calls
+        # (each retrying 3x again) would likely recover from. Falling back to N individual
+        # calls here would turn 1 failed call into up to 3N more against an already-failing
+        # service — the wrong failure mode. Log clearly and degrade gracefully instead,
+        # mirroring stage1_scrape.py's score_jobs_batch()/_unscored() "don't fabricate,
+        # don't retry-storm" contract: no email drafted this run, next run tries again.
+        log(f"  ⚠ Batch email draft call failed ({exc}) — not retrying via "
+            f"{len(jobs)} individual calls; skipping cold emails this run")
+        return [_draft_failed(job) for job in jobs]
+
+    try:
         data = parse_json_response(raw)
         if isinstance(data, dict):
             for key in ("emails", "results", "drafts"):
@@ -140,9 +154,22 @@ Return ONLY a JSON array, one entry per job in the same order:
 
         return results
     except Exception:
-        # Full fallback — individual calls so nothing is silently dropped
-        log("  ⚠ Batch email draft failed — falling back to per-job calls")
+        # The batch call itself succeeded (we have `raw`) but the response wasn't usable —
+        # unparseable JSON, wrong shape, etc. That's a prompt/formatting problem, not
+        # evidence the service is down, so per-job fallback calls are likely to succeed
+        # where the single combined call didn't. Unlike the AIChatError branch above, this
+        # is the legitimate "response missing/unusable" case the fallback exists for.
+        log("  ⚠ Batch email draft response could not be parsed — falling back to per-job calls")
         return [_draft_cold_email_single(job, bio) for job in jobs]
+
+
+def _draft_failed(job: dict) -> dict:
+    """Placeholder returned for every job when the batch AI call itself raises (a real
+    outage, not a parse failure) — mirrors stage1_scrape.py's _unscored() contract: never
+    fabricate content, never retry-storm. Empty subject/body signal "not drafted this run"
+    to a human reviewing output/outreach/ or a future retry mechanism, matching run()'s
+    existing dict shape (company/subject/body) so it slots in without special-casing."""
+    return {"company": job["company"], "subject": "", "body": ""}
 
 
 def _draft_cold_email_single(job: dict, bio: str, hm_name: str = "", hm_context: str = "") -> dict:
@@ -222,6 +249,12 @@ def run(target_company: str = None, contact: str = None, contact_role: str = "",
 
         for job, email in zip(jobs, emails):
             log(f"\n→ {job['company']} — {job['title']}")
+            if not email.get("subject") and not email.get("body"):
+                # _draft_failed()'s placeholder: the batch AI call raised (outage), not a
+                # parse failure — nothing was drafted for this job this run. Don't write a
+                # blank file or prompt to mark it sent; leave it for the next run to retry.
+                log("  ⚠ No email drafted this run (AI service unavailable) — retry on next run")
+                continue
             file_path = save_draft(
                 f"COLD EMAIL — {job['company']} — {job['title']}\n"
                 f"Subject: {email['subject']}\n\n{email['body']}",
