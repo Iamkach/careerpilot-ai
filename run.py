@@ -206,14 +206,14 @@ def ingest_routine(args):
     full LinkedIn scrape."""
     print("\n📥 INGEST — Notion 'Interested' jobs")
     print("=" * 45)
-    from scripts.utils import load_resume
+    from scripts.utils import load_resume, NotionReadError
     from scripts.stage1_scrape import ingest_from_scratch_note, ingest_interested_from_notion
     promoted = ingest_from_scratch_note()
     if promoted:
         print(f"   Promoted {promoted} scratch-note URL(s) to Interested")
     try:
         n = ingest_interested_from_notion(load_resume())
-    except RuntimeError as e:
+    except NotionReadError as e:
         # The Notion readers raise on a failed read rather than reporting an empty result
         # (see db_get_all_jobs' contract). Surface that as a clean message + non-zero exit
         # instead of a traceback: "Ingested 0 jobs" on an unreadable tracker is the exact
@@ -346,20 +346,33 @@ def main():
 
     stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6, 7: stage7}
 
-    if args.ingest:
-        ingest_routine(args)
-    elif args.retry_only:
-        retry_routine(args)
-    elif args.evaluate:
-        evaluate_routine(args)
-    elif args.stage:
-        fn = stages.get(args.stage)
-        if not fn:
-            print(f"Unknown stage: {args.stage}. Choose 1–7.")
-            sys.exit(1)
-        fn(args)
-    else:
-        morning_routine(args)
+    from scripts.utils import NotionReadError
+
+    # A failed Notion read is turned into a clean message + non-zero exit for *every* entry
+    # point here (--ingest already does its own, more specific, version above). Only the typed
+    # NotionReadError is caught — the unrelated RuntimeErrors from Apify (scripts/sources.py),
+    # provider/CLI setup, or stage 5 keep their existing behavior rather than being mislabeled
+    # as a tracker read failure. SystemExit from ingest_routine / unknown-stage passes through.
+    try:
+        if args.ingest:
+            ingest_routine(args)
+        elif args.retry_only:
+            retry_routine(args)
+        elif args.evaluate:
+            evaluate_routine(args)
+        elif args.stage:
+            fn = stages.get(args.stage)
+            if not fn:
+                print(f"Unknown stage: {args.stage}. Choose 1–7.")
+                sys.exit(1)
+            fn(args)
+        else:
+            morning_routine(args)
+    except NotionReadError as e:
+        print(f"\n❌ Aborted — could not read the Notion tracker: {e}")
+        print("   Nothing was changed. Check that NOTION_API_KEY is set and the integration")
+        print("   is still shared with the database, then re-run — these routines are idempotent.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

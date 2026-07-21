@@ -46,27 +46,25 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
 
 ## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
 
-Both surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
-actioned in commit `7d460ba`, which fixed the other ten findings. Neither is a one-line
-cleanup; both want a decision before any code moves. Nothing here is committed to yet.
+These surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
+actioned in commit `7d460ba`, which fixed the other ten findings. **Update 2026-07-21:** the
+`run.py` traceback item below is now **fixed**; `_prop_number()` is now **fixed** too (nullable
+`_prop_number_opt` reader); the `tests.yml` CI item is **still open** and needs a human with repo
+Settings access — it is not a code change.
 
-- **`_prop_number()` conflates "absent" with a real `0`** (`scripts/utils.py`). It returns
-  `(props.get(name) or {}).get("number") or 0`, so a row with an empty `ATS Match Score` and a
-  row genuinely scored `0` read back identically. That sits at odds with the contract the rest
-  of stage 1 is built on — `score_jobs_batch()` returns `scored: False` rather than fabricate a
-  number, and `_unscored()` exists specifically so a missing score never becomes a numeric one.
-  Once it passes through `_page_to_job()`, that distinction is gone anyway.
-  **Why it wasn't just fixed:** returning `None` is a regression, not a fix. `db_get_jobs()`
-  sorts on the value, `rescore_retry_jobs()` and stage 2 compare it against `MIN_ATS_SCORE` /
-  `MIN_TAILORED_ATS_SCORE`, and the same helper backs `Scoring Attempts` / `Enrichment
-  Attempts` / `Applicant Count`, where `0` is the correct default and `None` would break the
-  `(x or 0) + 1` increments. A real fix needs a separate nullable reader used only at the
-  score call sites, plus a decision on what a `None` score means to each consumer (skip? sort
-  last? treat as unscored and re-queue?).
-  **Open questions:** is the ambiguity actually causing observable harm today, or is it
-  theoretical? Does any real row sit at a legitimate `0`, or does `MIN_ATS_SCORE` mean a 0 is
-  always dropped before it's written? Cheapest correct fix might be at the *write* side
-  (never write `0`, write nothing) rather than the read side.
+- ~~**`_prop_number()` conflates "absent" with a real `0`** (`scripts/utils.py`)~~ — fixed
+  (2026-07-21). Added `_prop_number_opt()`, a nullable reader that returns `None` for an absent
+  property and the real number (including a genuine `0`) otherwise, used **only** for
+  `ATS Match Score` in `_page_to_job()` and `db_get_all_jobs()`. `_prop_number` is unchanged and
+  still backs the counter properties (`Scoring Attempts` / `Enrichment Attempts` / `Applicant
+  Count` / `Apply Attempts`), where `0` is the correct default for their `(x or 0) + 1`
+  increments. The score consumers in `stage4_digest.py` (and the cosmetic display fallbacks in
+  `stage3_outreach.py`) were hardened from `.get("ats"/"ats_score", 0)` to `... or 0` so an
+  unscored `None` can't `int(None)`-crash the digest. **No behavior change in practice** —
+  `MIN_ATS_SCORE = 30` already drops any 0-score job before it's written, so no row was ever
+  stored at a legitimate `0`; this closes the contract contradiction and future-proofs the read
+  path (e.g. if `MIN_ATS_SCORE` were ever lowered to 0). Covered by new `tests/test_utils.py`
+  cases (`_prop_number_opt` absent→None / real-0→0, `_page_to_job` unscored→None / 0→0).
 
 - **`tests.yml` has never actually run** — every Actions run on `feature/god-speed` is
   `startup_failure` at 0s with no job name (runs `29711371199` pull_request, `29711381997`
@@ -79,14 +77,17 @@ cleanup; both want a decision before any code moves. Nothing here is committed t
   **Needs a human with repo settings access:** check Settings → Actions and the billing page.
   Separately, decide whether to remove the Supabase integration.
 
-- **Other `run.py` routines still traceback on a failed Notion read** — `--ingest` now reports
-  a clean message and exits 1 (commit below), but `--retry-only`, `--stage 2/3/4` and
-  `--evaluate` reach `db_get_jobs()` → `_query_db()`, which has always propagated. **This is
-  pre-existing, not introduced by the PR #11 review fixes** — `db_get_jobs()` never caught. The
-  question is whether to give every CLI entry point the same clean-message + non-zero-exit
-  treatment `ingest_routine()` now has, or leave the raw traceback (which at least exits
-  non-zero, so the nightly workflow does fail correctly either way). Not actioned because it
-  changes the exit behavior of five more CLI paths, which is a decision rather than a fix.
+- ~~**Other `run.py` routines still traceback on a failed Notion read**~~ — **fixed
+  (2026-07-21):** `_query_db()` — the single funnel every reader goes through — now raises a
+  typed `NotionReadError` (a `RuntimeError` subclass, in `scripts/utils.py`) on a failed read,
+  so even the previously-unguarded readers (`db_get_jobs`, `db_get_ready_to_apply`) surface it.
+  `run.py`'s `main()` catches `NotionReadError` once around the whole dispatch → clean
+  "could not read the Notion tracker" message + `sys.exit(1)` for **every** entry point
+  (`--retry-only`, `--evaluate`, `--stage 2/3/4`, morning). The catch is typed on purpose: the
+  unrelated `RuntimeError`s from Apify (`scripts/sources.py`), provider/CLI setup, and stage 5
+  are deliberately left to their existing behavior rather than mislabeled as a tracker read
+  failure. Tests: `tests/test_run_notion_read_failure.py` + the `_query_db`/`db_get_jobs`/
+  `db_get_ready_to_apply` contract cases in `tests/test_utils_read_failure_contract.py`.
 
 ## Step 7 — Communications subsystem (not started)
 
