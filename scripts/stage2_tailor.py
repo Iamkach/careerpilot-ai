@@ -95,7 +95,8 @@ def fetch_jd(url: str) -> str:
     """Fetch job description text from URL via HTTP."""
     if not url:
         return ""
-    import requests, re
+    import requests
+    from scripts.sources import _strip_html
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -104,9 +105,11 @@ def fetch_jd(url: str) -> str:
         r = requests.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             return ""
-        # Strip HTML tags and collapse whitespace
-        text = re.sub(r"<[^>]+>", " ", r.text)
-        text = re.sub(r"\s+", " ", text).strip()
+        # Strip HTML tags (dropping <script>/<style> blocks entirely first) and
+        # collapse whitespace — reuses sources._strip_html() rather than a second,
+        # weaker inline implementation that could leak JS/CSS text into the JD.
+        text = _strip_html(r.text)
+        text = " ".join(text.split())
         return text[:8000]
     except Exception:
         return ""
