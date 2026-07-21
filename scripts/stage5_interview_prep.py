@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat, load_resume,
+    claude_chat, load_resume, wrap_consecutive_li,
     db_update_status, db_get_job_by_company, db_get_job_description,
     log, today, ensure_dirs,
 )
@@ -34,7 +34,7 @@ interviews, particularly for product management, engineering, and business roles
 Generate highly specific, tailored interview prep — not generic advice."""
 
 
-# ── Fetch job details from Supabase ──────────────────────────
+# ── Fetch job details from Notion ────────────────────────────
 
 def get_job_from_notion(company: str) -> dict | None:
     return db_get_job_by_company(company)
@@ -93,6 +93,7 @@ def render_html(content: str, job: dict) -> str:
     html_body = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html_body, flags=re.MULTILINE)
     html_body = re.sub(r'^\* (.+)$',  r'<li>\1</li>', html_body, flags=re.MULTILINE)
     html_body = re.sub(r'^\- (.+)$',  r'<li>\1</li>', html_body, flags=re.MULTILINE)
+    html_body = wrap_consecutive_li(html_body)
     html_body = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html_body)
     html_body = html_body.replace("\n\n", "</p><p>")
 
@@ -122,7 +123,7 @@ def render_html(content: str, job: dict) -> str:
 
 # ── Main ──────────────────────────────────────────────────────
 
-def run(company: str, role: str = "", jd_file: str = "", hm_linkedin: str = ""):
+def run(company: str, role: str = "", jd_file: str = "", hm_linkedin: str = "", no_confirm: bool = False):
     resume = load_resume()
     ensure_dirs()
 
@@ -130,6 +131,20 @@ def run(company: str, role: str = "", jd_file: str = "", hm_linkedin: str = ""):
     job = get_job_from_notion(company) or {"company": company, "title": role, "url": "", "page_id": None}
     if role:
         job["title"] = role
+
+    def _need_manual_jd() -> str:
+        # In an unattended run there's no one to paste a JD into stdin — input() would just
+        # hang until EOFError kills the process. Fail with a clear, actionable message
+        # instead (same "don't block on input(), fail loudly" principle stage3_outreach's
+        # no_confirm path already follows), rather than crashing with an opaque traceback.
+        if no_confirm:
+            raise RuntimeError(
+                f"No JD available for {job['company']} — {job.get('title','')} (no cached JD, "
+                "no URL to fetch, and --no-confirm disables the manual-paste prompt). "
+                "Pass --jd-file pointing at a .txt file with the job description, or add the "
+                "JD to this job's cached body in Notion, then retry."
+            )
+        return input("Paste the job description (press Enter twice when done):\n")
 
     # Get JD — prefer cached DB value to avoid an extra AI call
     if jd_file:
@@ -140,12 +155,12 @@ def run(company: str, role: str = "", jd_file: str = "", hm_linkedin: str = ""):
             log("No cached JD — fetching from URL (one-time AI call)…")
             jd = claude_chat(f"Fetch and return only the job description text from: {job['url']}")
         if not jd:
-            jd = input("Paste the job description (press Enter twice when done):\n")
+            jd = _need_manual_jd()
     elif job.get("url"):
         log("Fetching job description from URL...")
         jd = claude_chat(f"Fetch and return only the job description text from: {job['url']}")
     else:
-        jd = input("Paste the job description (press Enter twice when done):\n")
+        jd = _need_manual_jd()
 
     hm_li = hm_linkedin or job.get("hm_li", "")
 
@@ -173,5 +188,8 @@ if __name__ == "__main__":
     parser.add_argument("--role",         default="",           help="Role title")
     parser.add_argument("--jd-file",      default="",           help="Path to .txt file with job description")
     parser.add_argument("--hm-linkedin",  default="",           help="Hiring manager LinkedIn URL")
+    parser.add_argument("--no-confirm",   action="store_true",  dest="no_confirm",
+                         help="Fail with a clear error instead of prompting for a manual JD paste")
     args = parser.parse_args()
-    run(company=args.company, role=args.role, jd_file=args.jd_file, hm_linkedin=args.hm_linkedin)
+    run(company=args.company, role=args.role, jd_file=args.jd_file, hm_linkedin=args.hm_linkedin,
+        no_confirm=args.no_confirm)

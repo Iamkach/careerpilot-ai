@@ -4,7 +4,9 @@ stage6_negotiate.py — Data-backed salary negotiation brief
 ────────────────────────────────────────────────────────────
 What it does:
   1. Looks up your company in Notion tracker
-  2. Uses Claude + web search to find P25/P50/P75 comp benchmarks
+  2. Asks Claude for P25/P50/P75 comp benchmarks from its own training knowledge — no web
+     search tool is actually invoked, so figures can go stale silently between model
+     releases; spot-check with `python scripts/run_evals.py --comp-check`
   3. Generates a negotiation brief with a counter-offer script
   4. Updates Notion Status → "Offer Received"
 
@@ -18,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    claude_chat,
+    claude_chat, wrap_consecutive_li,
     db_update_status, db_get_job_by_company,
     log, today, ensure_dirs,
 )
@@ -92,6 +94,7 @@ def render_brief(content: str, company: str, role: str, offer: float) -> str:
     html = content
     html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
     html = re.sub(r'^\- (.+)$', r'<li>\1</li>', html, flags=re.MULTILINE)
+    html = wrap_consecutive_li(html)
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
     html = html.replace("\n\n", "</p><p>")
 
@@ -122,6 +125,7 @@ def run(company: str, role: str, offer: float):
     Path(NEGO_DIR).mkdir(parents=True, exist_ok=True)
 
     log(f"Generating negotiation brief for {company} — {role} (offer: ${offer:,.0f})")
+    job = db_get_job_by_company(company)
     city = (job.get("location") if job else None) or "United States"
     brief = generate_negotiation_brief(company, role, city, offer)
 
@@ -132,7 +136,6 @@ def run(company: str, role: str, offer: float):
     log(f"✓ Brief saved: {out_path}")
 
     # Update status
-    job = db_get_job_by_company(company)
     if job:
         db_update_status(job["page_id"], "Offer Received")
         log("✓ Status updated → Offer Received")

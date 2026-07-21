@@ -1,0 +1,13 @@
+{
+  "scenario": "_tailor_resume_single, normal-size missing_keywords hint",
+  "function": "_tailor_resume_single",
+  "recorded_at": "2026-07-17T01:27:42.260979+00:00",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "input_summary": {
+    "missing_keywords_count": 2
+  },
+  "raw_response": "```json\n{\n  \"keywords_injected\": [\"distributed systems\"],\n  \"edits\": [\n    {\n      \"old\": \"Senior Software Engineer\",\n      \"new\": \"Senior Backend Engineer\",\n      \"reason\": \"Exact title match to the JD's 'Senior Backend Engineer' \u2014 title-field alignment is the highest-weight ATS signal.\"\n    },\n    {\n      \"old\": \"Skills: Python, JavaScript, React, Node.js, AWS, Docker, Kubernetes, PostgreSQL, REST APIs, microservices, CI/CD.\",\n      \"new\": \"Skills: Python, JavaScript, React, Node.js, AWS, Docker, Kubernetes, PostgreSQL, REST APIs, microservices, distributed systems, CI/CD.\",\n      \"reason\": \"Adds 'distributed systems' \u2014 an explicit JD keyword absent from the skills line \u2014 for a direct ATS term match.\"\n    },\n    {\n      \"old\": \"Experience: 6 years building backend and full-stack systems at scale; led migration of a monolith to microservices; owns on-call for a payments service processing millions of transactions/day.\",\n      \"new\": \"Experience: 6 years building backend and full-stack distributed systems at scale; led migration of a monolith to microservices; owns on-call for a payments service processing millions of transactions/day.\",\n      \"reason\": \"Inserts 'distributed' before 'systems' to surface the JD's core 'distributed systems' requirement in the highest-signal experience line; factually accurate because a microservices architecture is by definition distributed.\"\n    }\n  ],\n  \"skipped_stage1_flags\": {\n    \"Terraform\": \"Not present in the JD \u2014 injecting would be keyword stuffing against a non-requirement.\",\n    \"GraphQL\": \"Not present in the JD \u2014 same rationale; skipped to avoid false signal.\"\n  }\n}\n```",
+  "parse_success": true,
+  "parse_error": null
+}

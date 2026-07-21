@@ -1,0 +1,83 @@
+name: Nightly job search pipeline
+
+# Runs the pipeline unattended off-hours, using a hybrid AI provider setup:
+#   FAST_PROVIDER=claude       (metered API)   — stage 1 scoring, stage 3 outreach (many small calls)
+#   QUALITY_PROVIDER=claude_code (subscription) — stage 2 tailor, stage 5/6 (few, larger calls)
+# Subscription auth works headlessly via CLAUDE_CODE_OAUTH_TOKEN, minted once locally with
+# `claude setup-token` (requires Claude Pro/Max) and stored as a repo secret. This only makes
+# sense off-hours: at midnight the subscription's 5-hour usage window isn't competing with any
+# interactive Claude Code session, so it costs no marginal $ instead of contending with daytime use.
+#
+# NOTE: cron below is UTC and has no timezone concept — 07:00 UTC ≈ midnight US Central (CST,
+# UTC-6) / 1am CDT (UTC-5). Adjust the hour to match your local off-hours window and DST offset.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - full        # scrape+digest, then evaluate (tailor+outreach+digest) for already-Reviewed jobs
+          - scrape       # python run.py            (stage 1 + 4)
+          - evaluate     # python run.py --evaluate  (stage 2 + 3 + 4)
+          - ingest        # python run.py --ingest    (Notion "Interested" only)
+          - stage2
+          - stage3
+          - stage4
+          - stage5
+          - stage6
+
+env:
+  NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+  FAST_PROVIDER: claude
+  QUALITY_PROVIDER: claude_code
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code CLI (subscription auth transport)
+        run: npm install -g @anthropic-ai/claude-code
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify setup
+        run: python run.py --setup
+
+      - name: Run pipeline
+        env:
+          MODE: ${{ github.event.inputs.mode || 'full' }}
+        run: |
+          case "$MODE" in
+            full)
+              python run.py
+              python run.py --evaluate
+              ;;
+            scrape)   python run.py ;;
+            evaluate) python run.py --evaluate ;;
+            ingest)   python run.py --ingest ;;
+            stage2)   python run.py --stage 2 ;;
+            stage3)   python run.py --stage 3 --no-confirm ;;
+            stage4)   python run.py --stage 4 ;;
+            stage5)   python run.py --stage 5 --no-confirm ;;
+            stage6)   python run.py --stage 6 ;;
+            *) echo "Unknown mode: $MODE"; exit 1 ;;
+          esac

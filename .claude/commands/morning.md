@@ -1,16 +1,12 @@
-Run the full morning job search pipeline (stages 1–4): scrape LinkedIn → score with ATS → tailor resumes → generate digest.
+Run the full morning job search pipeline (stages 1, 4): scrape LinkedIn → score with ATS → generate review digest.
 
 ```bash
-python workflow.py
+python run.py $ARGUMENTS
 ```
 
-This runs the Claude agentic workflow which orchestrates all stages automatically. Claude will:
-1. Scrape LinkedIn jobs for your target roles and city
-2. Score each job against your resume (ATS match %)
-3. Tailor your resume for jobs scoring above the threshold
-4. Generate an HTML digest of ready-to-apply jobs
+This scrapes and stops at a review digest — the two-step daily flow:
+1. Scrape LinkedIn jobs for your target roles, score each against your resume (ATS match %)
+2. Generate an HTML review digest of "Scraped" jobs
 
-Check `output/digest_{date}.html` when complete.
-
-Arguments: $ARGUMENTS
-If arguments provided, append them: `python workflow.py $ARGUMENTS`
+Check `output/review_digest_{date}.html` when complete. Mark good jobs `Status = Reviewed`
+in Notion, then run `/tailor` (`python run.py --evaluate`) to tailor + outreach + digest them.
