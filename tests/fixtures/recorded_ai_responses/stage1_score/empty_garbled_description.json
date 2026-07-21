@@ -1,0 +1,13 @@
+{
+  "scenario": "one empty JD + one garbled/non-language JD in the same chunk",
+  "function": "score_jobs_batch/_score_jobs_chunk",
+  "recorded_at": "2026-07-17T01:42:50.526558+00:00",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "input_summary": {
+    "job_count": 2
+  },
+  "raw_response": "```json\n[\n  {\n    \"url\": \"https://example.com/jobs/empty-desc\",\n    \"score\": 0,\n    \"missing_keywords\": [],\n    \"sponsorship\": \"unknown\",\n    \"company_type\": \"unknown\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/garbled-desc\",\n    \"score\": 0,\n    \"missing_keywords\": [],\n    \"sponsorship\": \"unknown\",\n    \"company_type\": \"unknown\"\n  }\n]\n```",
+  "parse_success": true,
+  "parse_error": null
+}

@@ -1,0 +1,29 @@
+name: Tests
+
+# Separate from nightly-pipeline.yml (the live production cron job, untouched by this
+# workflow). This is the PR/push gate Step 9 Phase 0 introduces: a fully mocked pytest suite
+# that needs no API keys/secrets and no Claude Code login, so it can never flake on an
+# external dependency.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -v

@@ -1,0 +1,13 @@
+{
+  "scenario": "_tailor_resume_single with an intentionally huge (80-entry) missing_keywords hint list",
+  "function": "_tailor_resume_single",
+  "recorded_at": "2026-07-17T01:28:08.990876+00:00",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "input_summary": {
+    "missing_keywords_count": 80
+  },
+  "raw_response": "```json\n{\n  \"keywords_injected\": [\"distributed systems\"],\n  \"edits\": [\n    {\n      \"old\": \"Krishna Achyuth \u2014 Senior Software Engineer\",\n      \"new\": \"Krishna Achyuth \u2014 Senior Backend Engineer\",\n      \"reason\": \"JD title is 'Senior Backend Engineer' \u2014 exact title match is the highest-impact ATS signal and is required when titles differ.\"\n    },\n    {\n      \"old\": \"Skills: Python, JavaScript, React, Node.js, AWS, Docker, Kubernetes, PostgreSQL, REST APIs, microservices, CI/CD.\",\n      \"new\": \"Skills: Python, JavaScript, React, Node.js, AWS, Docker, Kubernetes, PostgreSQL, REST APIs, microservices, distributed systems, CI/CD.\",\n      \"reason\": \"'Distributed systems' is the only JD keyword absent from the resume; appending it to the existing skills line maximises ATS keyword density without fabricating a new category.\"\n    },\n    {\n      \"old\": \"6 years building backend and full-stack systems at scale; led migration of a monolith to microservices; owns on-call for a payments service processing millions of transactions/day.\",\n      \"new\": \"6 years building backend and full-stack distributed systems at scale; led migration of a monolith to microservices; owns on-call for a payments service processing millions of transactions/day.\",\n      \"reason\": \"Inserting 'distributed systems' into the experience summary reinforces the keyword in narrative context \u2014 ATS systems weight keywords higher when they appear in both skills and prose; payments microservices at that transaction volume is genuinely distributed-systems work.\"\n    }\n  ]\n}\n```",
+  "parse_success": true,
+  "parse_error": null
+}

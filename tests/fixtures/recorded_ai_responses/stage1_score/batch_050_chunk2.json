@@ -1,0 +1,15 @@
+{
+  "scenario": "score_jobs_batch, 50 job(s), chunk 2/3",
+  "function": "score_jobs_batch/_score_jobs_chunk",
+  "recorded_at": "2026-07-17T01:35:41.299580+00:00",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "input_summary": {
+    "job_count": 50,
+    "chunk_index": 2,
+    "chunk_count": 3
+  },
+  "raw_response": "```json\n[\n  {\n    \"url\": \"https://example.com/jobs/40\",\n    \"score\": 82,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/41\",\n    \"score\": 72,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/42\",\n    \"score\": 80,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/43\",\n    \"score\": 70,\n    \"missing_keywords\": [\"distributed systems\", \"platform engineering\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/44\",\n    \"score\": 74,\n    \"missing_keywords\": [\"distributed systems\", \"infrastructure\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/45\",\n    \"score\": 76,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/46\",\n    \"score\": 74,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/47\",\n    \"score\": 75,\n    \"missing_keywords\": [\"distributed systems\", \"cloud engineering\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/48\",\n    \"score\": 82,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  },\n  {\n    \"url\": \"https://example.com/jobs/49\",\n    \"score\": 72,\n    \"missing_keywords\": [\"distributed systems\"],\n    \"sponsorship\": \"no\",\n    \"company_type\": \"product\"\n  }\n]\n```",
+  "parse_success": true,
+  "parse_error": null
+}

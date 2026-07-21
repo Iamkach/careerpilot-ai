@@ -1,0 +1,5 @@
+# Dev/test-only deps — never installed by the production pipeline (requirements.txt stays
+# untouched). Installed on top of requirements.txt for `pytest` runs, locally and in
+# .github/workflows/tests.yml.
+pytest>=8.0.0
+pytest-mock>=3.14.0

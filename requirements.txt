@@ -1,18 +1,21 @@
 # Core — AI job search pipeline
-anthropic>=0.40.0          # Claude API (default provider)
-# Pinned <2.16: supabase 2.16+ pins storage3 2.x, which pulls in pyiceberg —
-# pyiceberg has no Python 3.14 / Windows wheel and fails to build from source.
-supabase>=2.13,<2.16      # Primary data store
-requests>=2.31.0           # HTTP client for Apify
+anthropic>=0.40.0,<1.0.0          # Claude metered API (default: AI_PROVIDER="claude")
+claude-agent-sdk>=0.2.0,<0.3.0    # Optional: Claude Code subscription via Agent SDK (AI_PROVIDER="claude_code")
+requests>=2.31.0,<3.0.0           # HTTP client for Apify
+notion-client>=2.2.1,<2.6         # Primary data store (job tracker DB); 2.6+/3.x dropped databases.query (data_sources API)
 
 # Optional providers (only needed if AI_PROVIDER is changed)
-google-generativeai>=0.8.0 # Gemini provider
-openai>=1.40.0             # Codex/OpenAI provider
-
-# Optional integrations
-notion-client>=2.2.1       # Notion mirror (visual tracker UI)
-docxtpl>=0.18.0            # Render tailored resume into a .docx template (stage 2)
+google-generativeai>=0.8.0,<0.9.0 # Gemini provider
+openai>=1.40.0,<3.0.0             # Codex/OpenAI provider (also used for the OpenRouter provider — OpenAI-compatible API)
+python-docx>=1.0.0,<2.0.0         # In-place .docx text edits (stage 2 default resume-tailoring path — scripts/render_docx.py)
 
 # Optional — Stage 4 Gmail digest sending
-google-auth>=2.30.0
-google-api-python-client>=2.130.0
+google-auth>=2.30.0,<3.0.0
+google-api-python-client>=2.130.0,<3.0.0
+
+# NOTE: playwright (headless render fallback for JS-rendered career pages, see
+# scripts/sources.py's _headless_fetch()) lives in requirements-optional.txt, not here —
+# it's a large binary-heavy install (downloads a Chromium build) that most environments,
+# including nightly CI, never exercise. generic_url_fetch() degrades gracefully (skips
+# this path, logs a warning) if it's not installed. Install it only if you need the
+# fallback: pip install -r requirements-optional.txt && playwright install chromium

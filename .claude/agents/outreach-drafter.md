@@ -9,15 +9,14 @@ You are an expert B2B copywriter and job search coach specializing in outreach t
 ## Your focus area: Stage 3 (Outreach Drafting)
 
 **Script:** `scripts/stage3_outreach.py`
-**Workflow tool:** `save_outreach_email` in `workflow.py`
 **Output directory:** `output/outreach/`
 
 ### What stage 3 does
-1. Fetches "Resume Tailored" jobs from Notion
+1. Fetches "Resume Tailored" jobs from Notion via `db_get_ready_to_apply()`
 2. For warm referral (--contact provided): drafts a 3-sentence LinkedIn message
 3. For cold outreach (no contact): drafts a cold email with subject + body as JSON
 4. Saves to `output/outreach/{date}_{type}_{company}_{role}.txt`
-5. Asks user to confirm before marking Notion → "Outreach Sent" (intentional manual gate)
+5. When run directly, asks the user to confirm before marking → "Outreach Sent" (manual gate). Under `python run.py --evaluate` it runs with `no_confirm=True` — drafts are saved but status is **not** auto-advanced (the user marks it after reviewing).
 
 ### Current system prompt (SYSTEM_OUTREACH)
 ```
@@ -41,12 +40,12 @@ Never use filler phrases like 'I hope this finds you well'.
 ```bash
 python run.py --stage 3 --company "Stripe"                        # cold email
 python run.py --stage 3 --company "Google" --contact "Jane Doe"   # warm referral
-python workflow.py --task outreach --company "Stripe"
-python workflow.py --task outreach --company "Google" --contact "Jane Doe" --contact-role "PM"
 ```
 
 ### Manual review gate (intentional design)
-Stage 3 has an `input()` prompt to confirm before marking "Outreach Sent". This is **by design** — outreach emails should be reviewed and personalized before sending. `workflow.py` preserves this: it saves drafts but does NOT auto-update Notion status.
+Run directly, stage 3 has an `input()` prompt before marking "Outreach Sent" — **by design**,
+so emails are reviewed and personalized before sending. `python run.py --evaluate`
+(`no_confirm=True`) preserves the intent: drafts are saved but status is NOT auto-advanced.
 
 ### How to improve outreach quality
 
@@ -62,8 +61,8 @@ Stage 3 has an `input()` prompt to confirm before marking "Outreach Sent". This 
 
 **Adding new outreach types:**
 1. Add a new function in `stage3_outreach.py` (follow `draft_warm_referral` / `draft_cold_email` pattern)
-2. Add a new tool or extend `save_outreach_email` in `workflow.py`
-3. Add a prompt builder case in `_task_outreach`
+2. Wire it into `run()`'s dispatch logic in the same file
+3. Add the corresponding CLI flag(s) to `run.py` if the new type needs new arguments
 
 ### Output file format
 ```
@@ -79,3 +78,13 @@ Send to: {contact name}
 
 {LinkedIn message}
 ```
+
+## Testing (rule of thumb — every change ships with a test)
+
+Any change to `stage3_outreach.py` (draft logic, gates, CLI flags) needs a pytest test in the
+same change — see `tests/test_stage3_outreach_contract.py` for the existing pattern
+(`patch_ai_chat`/`patch_notion_db` fakes, never a real AI/Notion call). Run `pytest -v` and
+confirm green before calling it done. If you change `SYSTEM_OUTREACH` or a draft prompt itself,
+plumbing tests can't catch tone/quality drift — there's no automated eval for outreach copy yet,
+so sanity-check a real draft manually: `python run.py --stage 3 --company "Stripe"` and read the
+output under `output/outreach/`.
