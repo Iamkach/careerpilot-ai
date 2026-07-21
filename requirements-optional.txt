@@ -1,0 +1,10 @@
+# Optional deps — not installed by default `pip install -r requirements.txt` (production
+# pipeline and nightly CI never install these). Install on top of requirements.txt only if
+# you need the feature they back.
+
+# Headless render fallback for JS-rendered career pages with no JobPosting JSON-LD (Stage 1
+# "Interested" enrichment, see scripts/sources.py's _headless_fetch() and CLAUDE.md's
+# "Interested intake enrichment reliability" section). generic_url_fetch() degrades
+# gracefully (skips this path, logs a warning) if not installed.
+# After installing, also run: playwright install chromium
+playwright>=1.40.0,<2.0.0

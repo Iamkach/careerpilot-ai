@@ -96,21 +96,27 @@ misassignment. Confirmed on `feature/god-speed`.
 
 ---
 
-## 3. Two nightly workflow modes are broken by construction — ⏳ STILL OPEN
+## 3. Two nightly workflow modes are broken by construction — ✅ RESOLVED (2026-07-21)
 
-Re-confirmed against `feature/god-speed` in the 2026-07-21 pass — not touched by PR #12.
+`nightly-pipeline.yml` offers `stage3` and `stage5` as `workflow_dispatch` modes; both used
+to hang/crash on `input()` against CI's closed stdin. Fixed by threading a `--no-confirm`
+flag through both paths, per the review's first suggested fix:
 
-`nightly-pipeline.yml` offers `stage3` and `stage5` as `workflow_dispatch` modes, but:
+- `run.py` gained a `--no-confirm` CLI flag, threaded through `stage3(args)` →
+  `stage3_outreach.run(..., no_confirm=...)` (was already accepted there, just never wired
+  from `--stage 3`) and `stage5(args)` → `stage5_interview_prep.run(..., no_confirm=...)`
+  (new parameter).
+- `stage5_interview_prep.py`'s two unconditional `input()` calls (manual JD paste when no
+  cached JD/URL is available) now route through a `_need_manual_jd()` helper: with
+  `no_confirm=True` and no other JD source, it raises a clear `RuntimeError` telling the
+  caller to pass `--jd-file` or add the JD to Notion, instead of blocking on stdin.
+- `nightly-pipeline.yml`'s `stage3`/`stage5` dispatch cases now pass `--no-confirm`.
 
-- `run.py:158` `stage3()` doesn't pass `no_confirm`, so `stage3_outreach.py:175,199`
-  calls `input()`. Only `--evaluate` passes it through today (`run.py:253`).
-- `stage5_interview_prep.py:144,149` calls `input()` unconditionally.
-
-In Actions, stdin is `/dev/null` → `EOFError` → job fails every time it's invoked.
-
-**Fix:** either thread `no_confirm` through `--stage 3` (and add a non-interactive path
-for stage 5), or drop those two modes from the workflow's dispatch options until they're
-non-interactive.
+Tests: `tests/test_stage5_no_confirm.py` (the new RuntimeError path + confirms the
+interactive path and `--jd-file` path are unaffected), `tests/test_run_no_confirm_wiring.py`
+(proves `run.py`'s `stage3()`/`stage5()` actually forward the flag), and
+`tests/test_nightly_workflow_no_confirm.py` (guards the workflow YAML itself against a
+future edit dropping the flag).
 
 ---
 
@@ -160,18 +166,27 @@ Full suite (243 tests) green on `feature/god-speed` with all six merged.
 
 ---
 
-## 5. Minor
+## 5. Minor — ✅ ALL RESOLVED (2026-07-21)
 
-- Every dependency is unpinned (`>=`, no `==`) except `notion-client`, which correctly
-  carries an upper bound — worth extending that discipline for a reproducible nightly
-  run.
-- `playwright` sits in `requirements.txt` unconditionally despite being documented as
-  optional, so CI installs it even where it's never used.
-- `render_docx.py`'s module docstring still describes it as the `docxtpl` renderer,
-  which is no longer its primary role.
-- `extract_docx_text` / `apply_docx_edits` ignore `doc.tables` — latent only (the resume
-  has no tables today), but would fail silently if the resume is ever restructured to
-  use one.
+- ~~Every dependency is unpinned (`>=`, no `==`) except `notion-client`.~~ ✅ Fixed.
+  `requirements.txt` now carries an upper bound on every entry (`>=X,<Y`), matching
+  `notion-client`'s existing style — e.g. `openai>=1.40.0,<3.0.0` (chosen loosely enough to
+  cover the already-installed 2.x line, since the lower bound predates OpenAI's 2.0 release
+  and this repo hadn't noticed).
+- ~~`playwright` sits in `requirements.txt` unconditionally despite being documented as
+  optional.~~ ✅ Fixed. Moved to a new `requirements-optional.txt` (`pip install -r
+  requirements-optional.txt && playwright install chromium`); `requirements.txt` and
+  `nightly-pipeline.yml`'s `pip install -r requirements.txt` no longer pull it in.
+  `scripts/sources.py`'s `_headless_fetch()` already degrades gracefully when it's absent
+  (existing test coverage), so this is a pure install-footprint change.
+- ~~`render_docx.py`'s module docstring still describes it as the `docxtpl` renderer.~~
+  ✅ Fixed (PR #15, alongside item #7 — see above).
+- ~~`extract_docx_text` / `apply_docx_edits` ignore `doc.tables`.~~ ✅ Fixed. Both now walk
+  a new `_iter_all_paragraphs()` generator that yields `doc.paragraphs` plus every paragraph
+  inside every table cell (recursively, for nested tables), so an edit/extraction targeting
+  a table-based resume section (e.g. a two-column skills layout) is no longer silently
+  skipped. See `test_extract_docx_text_includes_table_cell_paragraphs` and
+  `test_apply_docx_edits_matches_text_inside_a_table_cell` in `tests/test_render_docx.py`.
 
 ---
 
@@ -202,20 +217,20 @@ open from this review, re-verified 2026-07-21:
 | 2 | Same-company resume collision | `scripts/stage2_tailor.py:280` | ✅ Fixed (PR #12) |
 | 3 | Positional outreach misalignment | `scripts/stage3_outreach.py:96` | ✅ Fixed (PR #12) |
 | 4 | Same-company email collision | `scripts/stage3_outreach.py:183` | ✅ Fixed (PR #12) |
-| 5 | Nightly `stage3`/`stage5` dispatch modes crash on `input()` | `.github/workflows/nightly-pipeline.yml`, `run.py:158`, `stage5_interview_prep.py:144` | ⏳ Open |
+| 5 | Nightly `stage3`/`stage5` dispatch modes crash on `input()` | `.github/workflows/nightly-pipeline.yml`, `run.py`, `stage5_interview_prep.py` | ✅ Fixed (`--no-confirm` threaded through) |
 | 6 | Zero-edit tailoring still marked `Resume Tailored` | `stage2_tailor.py` | ✅ Fixed (PR #13) |
 | 7 | `python-docx` undeclared in `requirements.txt` | `requirements.txt` | ✅ Fixed (PR #15) |
 | 8 | `fetch_jd()` doesn't strip `<script>`/`<style>` before the AI call | `stage2_tailor.py` | ✅ Fixed (PR #14) |
 | 9 | `verify_tailored_score()` is N calls, not batched | `stage2_tailor.py` | ✅ Fixed (PR #18) |
 | 10 | Double-edit-in-one-paragraph clobber | `render_docx.py` | ✅ Fixed (PR #16) |
 | 11 | `draft_cold_emails_batch` amplifies failure on hard batch exception | `stage3_outreach.py` | ✅ Fixed (PR #17) |
-| 12 | Dependencies unpinned except `notion-client` | `requirements.txt` | ⏳ Open (minor) |
-| 13 | `playwright` installed unconditionally despite being optional | `requirements.txt` | ⏳ Open (minor) |
+| 12 | Dependencies unpinned except `notion-client` | `requirements.txt` | ✅ Fixed (upper bounds added) |
+| 13 | `playwright` installed unconditionally despite being optional | `requirements.txt` | ✅ Fixed (moved to `requirements-optional.txt`) |
 | 14 | Module docstring still described `docxtpl` renderer | `scripts/render_docx.py` | ✅ Fixed (PR #15) |
-| 15 | `doc.tables` ignored in docx text extraction/edits (latent) | `scripts/render_docx.py` | ⏳ Open (minor) |
+| 15 | `doc.tables` ignored in docx text extraction/edits (latent) | `scripts/render_docx.py` | ✅ Fixed (`_iter_all_paragraphs()`) |
 
-**Remaining:** only #5 (nightly workflow's `input()` crash on unattended `stage3`/`stage5`
-dispatch) and the minor cleanup items #12/#13/#15 are still open.
+**All 15 tracked items are now resolved.** Nothing open from this review as of 2026-07-21.
+Full suite (255 tests) green on `feature/god-speed`.
 
 ---
 

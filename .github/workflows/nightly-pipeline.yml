@@ -75,9 +75,9 @@ jobs:
             evaluate) python run.py --evaluate ;;
             ingest)   python run.py --ingest ;;
             stage2)   python run.py --stage 2 ;;
-            stage3)   python run.py --stage 3 ;;
+            stage3)   python run.py --stage 3 --no-confirm ;;
             stage4)   python run.py --stage 4 ;;
-            stage5)   python run.py --stage 5 ;;
+            stage5)   python run.py --stage 5 --no-confirm ;;
             stage6)   python run.py --stage 6 ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac

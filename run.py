@@ -159,7 +159,8 @@ def stage3(args):
     print("\n📧 STAGE 3 — Draft outreach emails")
     print("─" * 45)
     from scripts.stage3_outreach import run
-    run(target_company=args.company, contact=args.contact, contact_role=args.contact_role)
+    run(target_company=args.company, contact=args.contact, contact_role=args.contact_role,
+        no_confirm=args.no_confirm)
 
 def stage4(args, mode: str = "ready"):
     print("\n📋 STAGE 4 — Morning digest")
@@ -171,7 +172,8 @@ def stage5(args):
     print("\n🎯 STAGE 5 — Interview prep guide")
     print("─" * 45)
     from scripts.stage5_interview_prep import run
-    run(company=args.company, role=args.role, jd_file=args.jd_file, hm_linkedin=args.hm_linkedin)
+    run(company=args.company, role=args.role, jd_file=args.jd_file, hm_linkedin=args.hm_linkedin,
+        no_confirm=args.no_confirm)
 
 def stage6(args):
     print("\n💰 STAGE 6 — Salary negotiation brief")
@@ -276,6 +278,10 @@ def main():
     parser.add_argument("--ingest",       action="store_true",       help="Promote scratch-note URL drops + ingest Notion 'Interested' jobs (score + promote to Scraped)")
     parser.add_argument("--retry-only",   action="store_true",       dest="retry_only",
                          help="Re-score only Status='Retry' jobs from their cached JD (no scrape of new roles)")
+    parser.add_argument("--no-confirm",   action="store_true",       dest="no_confirm",
+                         help="Skip interactive y/n confirmations and manual-paste prompts "
+                              "(required for unattended runs, e.g. --stage 3 or --stage 5 in CI — "
+                              "without it those stages call input() and hang/crash on a closed stdin)")
     parser.add_argument(
         "--ai-mode", type=str, default=None,
         choices=["metered", "hybrid", "subscription"],

@@ -1,21 +1,21 @@
 # Core — AI job search pipeline
-anthropic>=0.40.0          # Claude metered API (default: AI_PROVIDER="claude")
-claude-agent-sdk>=0.2.0    # Optional: Claude Code subscription via Agent SDK (AI_PROVIDER="claude_code")
-requests>=2.31.0           # HTTP client for Apify
-notion-client>=2.2.1,<2.6  # Primary data store (job tracker DB); 2.6+/3.x dropped databases.query (data_sources API)
+anthropic>=0.40.0,<1.0.0          # Claude metered API (default: AI_PROVIDER="claude")
+claude-agent-sdk>=0.2.0,<0.3.0    # Optional: Claude Code subscription via Agent SDK (AI_PROVIDER="claude_code")
+requests>=2.31.0,<3.0.0           # HTTP client for Apify
+notion-client>=2.2.1,<2.6         # Primary data store (job tracker DB); 2.6+/3.x dropped databases.query (data_sources API)
 
 # Optional providers (only needed if AI_PROVIDER is changed)
-google-generativeai>=0.8.0 # Gemini provider
-openai>=1.40.0             # Codex/OpenAI provider (also used for the OpenRouter provider — OpenAI-compatible API)
-python-docx>=1.0.0         # In-place .docx text edits (stage 2 default resume-tailoring path — scripts/render_docx.py)
+google-generativeai>=0.8.0,<0.9.0 # Gemini provider
+openai>=1.40.0,<3.0.0             # Codex/OpenAI provider (also used for the OpenRouter provider — OpenAI-compatible API)
+python-docx>=1.0.0,<2.0.0         # In-place .docx text edits (stage 2 default resume-tailoring path — scripts/render_docx.py)
 
 # Optional — Stage 4 Gmail digest sending
-google-auth>=2.30.0
-google-api-python-client>=2.130.0
+google-auth>=2.30.0,<3.0.0
+google-api-python-client>=2.130.0,<3.0.0
 
-# Optional — headless render fallback for JS-rendered career pages with no JobPosting
-# JSON-LD (Stage 1 "Interested" enrichment, Option B of
-# docs/refinement-plans/sourcing/career-site-enrichment-fallback.md). generic_url_fetch()
-# degrades gracefully (skips this path, logs a warning) if not installed.
-# After installing, also run: playwright install chromium
-playwright>=1.40.0
+# NOTE: playwright (headless render fallback for JS-rendered career pages, see
+# scripts/sources.py's _headless_fetch()) lives in requirements-optional.txt, not here —
+# it's a large binary-heavy install (downloads a Chromium build) that most environments,
+# including nightly CI, never exercise. generic_url_fetch() degrades gracefully (skips
+# this path, logs a warning) if it's not installed. Install it only if you need the
+# fallback: pip install -r requirements-optional.txt && playwright install chromium

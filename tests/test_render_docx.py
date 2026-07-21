@@ -250,3 +250,37 @@ def test_apply_docx_edits_genuinely_overlapping_same_paragraph_edits_second_is_s
     assert unmatched[0]["old"] == "in Python and"
     text = extract_docx_text(str(out_path))
     assert "Proficient in Python and Java." in text
+
+
+# ── table support (PR #11 review item #15) ─────────────────────────────
+
+def _build_docx_with_table(tmp_path):
+    from docx import Document
+    doc = Document()
+    doc.add_paragraph("Krishna Achyuth")
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).paragraphs[0].add_run("Python")
+    table.cell(0, 1).paragraphs[0].add_run("Experienced with AWS and Docker.")
+    path = tmp_path / "table_resume.docx"
+    doc.save(str(path))
+    return str(path)
+
+
+def test_extract_docx_text_includes_table_cell_paragraphs(tmp_path):
+    path = _build_docx_with_table(tmp_path)
+    text = extract_docx_text(path)
+    assert "Krishna Achyuth" in text
+    assert "Python" in text
+    assert "Experienced with AWS and Docker." in text
+
+
+def test_apply_docx_edits_matches_text_inside_a_table_cell(tmp_path):
+    path = _build_docx_with_table(tmp_path)
+    out_path = tmp_path / "table_resume_edited.docx"
+    edits = [{"old": "AWS and Docker", "new": "AWS, GCP, and Docker"}]
+
+    result_path, unmatched = apply_docx_edits(path, edits, str(out_path))
+
+    assert unmatched == []
+    text = extract_docx_text(result_path)
+    assert "Experienced with AWS, GCP, and Docker." in text
