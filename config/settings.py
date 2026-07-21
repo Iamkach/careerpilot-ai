@@ -196,6 +196,100 @@ SKIP_COMPANY_TYPES = {"staffing_or_consulting"}
 # does not change Notion status or retry tailoring, just surfaces a weak result in the logs.
 MIN_TAILORED_ATS_SCORE = 75
 
+# --- Auto-Apply subsystem (stage 7, Step 10) ------------------
+# The structured source of truth for every deterministic application answer.
+#
+# GOVERNING RULE (enforced in code, not by prompt wording): facts come from here; AI only ever
+# drafts free-text prose. The model NEVER invents an answer to work-authorization, sponsorship,
+# salary, or any yes/no eligibility question — a wrong answer to one of those is disqualifying
+# and unretractable. Anything unmapped becomes review_required, never a guess.
+#
+# A None/empty value is not a bug: it deliberately forces that field to human review.
+APPLICATION_PROFILE = {
+    # Identity
+    "first_name":    "Krishna",
+    "last_name":     "Achyuth",
+    "full_name":     YOUR_NAME,
+    "email":         YOUR_EMAIL,
+    "phone":         "",                 # empty -> review_required if a form asks
+    "location":      "",
+    # Links
+    "linkedin_url":  "",
+    "github_url":    "",
+    "portfolio_url": "",
+    # Eligibility facts — deterministic, never model-guessed. Set to None to force review.
+    "work_authorized":      True,
+    "requires_sponsorship": True,
+}
+
+# EEO / demographic presets. Per spec §7 these default to declining rather than being guessed —
+# never let a model infer a protected attribute. Edit any value to a real answer if you prefer to
+# disclose; the exact string must match one of the form's offered options to be selectable.
+EEO_RESPONSES = {
+    "gender":     "Decline To Self Identify",
+    "race":       "Decline To Self Identify",
+    "ethnicity":  "Decline To Self Identify",
+    "veteran":    "I don't wish to answer",
+    "disability": "I don't wish to answer",
+}
+
+# The recurring screener questions almost every application asks, answered once here instead of
+# retyped per job. Keys are lowercase substrings matched against the form's question label (first
+# match wins, so order matters — put more specific patterns first). An empty value means "I have
+# no preset answer", which routes that field to human review rather than inventing one.
+COMMON_QUESTION_PRESETS = {
+    "years of experience":   "",
+    "notice period":         "",
+    "salary expectation":    "",
+    "desired salary":        "",
+    "expected compensation": "",
+    "willing to relocate":   "",
+    "remote":                "",
+    "start date":            "",
+    "available to start":    "",
+    "how did you hear":      "Company website",
+    "referred by":           "",
+    "previously worked":     "No",
+    "previously applied":    "No",
+}
+
+
+def _apply_saved_profile():
+    """Overlay config/application_profile.json (written by `run.py --setup-profile`) onto the
+    three dicts above.
+
+    The defaults above stay as the checked-in fallback; your actual answers live in a
+    git-ignored JSON file so personal details never enter version control and you never have to
+    edit this module to change a notice period. A missing or corrupt file is a no-op — the
+    defaults simply stand — so a bad file can never break a pipeline run.
+    """
+    import json
+    path = Path(__file__).resolve().parent / "application_profile.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(saved, dict):
+        return
+    for section, target in (("profile", APPLICATION_PROFILE),
+                            ("presets", COMMON_QUESTION_PRESETS),
+                            ("eeo", EEO_RESPONSES)):
+        values = saved.get(section)
+        if isinstance(values, dict):
+            target.update(values)
+
+
+_apply_saved_profile()
+
+# Applications prepared per day. This is not only ban-avoidance: ATSes now score application
+# velocity and flag high-volume submitters as "low intent" before a human reads the application,
+# so a low cap protects application *quality*, not just the account. Keep it small on purpose.
+AUTOAPPLY_DAILY_CAP = 10
+
+# Run the stage-7 form fill in a headless browser. Default False — the whole point of the
+# semi-auto path is that you watch the filled form and click Submit yourself.
+AUTOAPPLY_HEADLESS = False
+
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
 RESUME_PATH      = "config/resume.txt"
@@ -296,3 +390,5 @@ INMAIL_ATS_THRESHOLD = 70
 OUTPUT_DIR        = "output"
 RESUMES_DIR       = "output/resumes"
 PREP_GUIDES_DIR   = "output/prep_guides"
+# Stage 7 answer sheets + filled-form screenshots.
+APPLICATIONS_DIR  = "output/applications"

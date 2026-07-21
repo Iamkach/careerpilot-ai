@@ -14,6 +14,9 @@ config/token.json
 *.env
 .env
 
+# Stage 7 application answers (personal details — written by `run.py --setup-profile`)
+config/application_profile.json
+
 # Personal resume template (generate via scripts/make_resume_template.py or drop your own)
 config/resume_template.docx
 
