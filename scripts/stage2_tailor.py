@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import *
 from scripts.utils import (
-    ai_chat_blocks, parse_json_response,
+    ai_chat_blocks, claude_chat, parse_json_response,
     db_update_status, db_get_jobs, db_get_job_description,
     log, today, ensure_dirs, ROOT, matches_company_list,
 )
@@ -346,12 +346,150 @@ def verify_tailored_score(tailored_resume_text: str, jd: str, job: dict) -> dict
     """Re-score the tailored resume against the same JD, reusing stage 1's exact scoring
     contract (score_jobs_batch) so "score" means the same thing before and after tailoring.
     Returns {url, score, scored, missing_keywords, sponsorship, company_type} — score/scored
-    follow the same "never fabricate a score" contract as stage 1."""
+    follow the same "never fabricate a score" contract as stage 1.
+
+    Single-job path — kept as the per-job fallback for a job verify_tailored_scores_batch()
+    couldn't match back from its batch response, mirroring how _tailor_resume_single() backs
+    tailor_resumes_batch() above."""
     results = score_jobs_batch(
         [{"url": job["url"], "title": job["title"], "company": job["company"], "description": jd}],
         tailored_resume_text,
     )
     return results[0] if results else {"url": job["url"], "score": None, "scored": False}
+
+
+_VERIFY_CHUNK_SIZE = 20  # mirror stage 1's _SCORE_CHUNK_SIZE so one call's JSON reply stays bounded
+
+_VERIFY_COMPANY_TYPES = ("product", "staffing_or_consulting", "agency", "unknown")
+
+
+def verify_tailored_scores_batch(
+    jobs_and_tailored: list[tuple[dict, str, str]],
+) -> dict[str, dict]:
+    """One AI call to re-score MULTIPLE tailored resumes, chunked like stage 1's
+    score_jobs_batch. Mirrors tailor_resumes_batch()'s pattern above: one prompt listing every
+    job numbered, one JSON array parsed back into a {page_id: result} dict.
+
+    score_jobs_batch() itself can't be reused directly here — its signature scores many jobs
+    against ONE shared resume, but post-tailor verification has a DIFFERENT resume per job
+    (each job got its own edits). This function instead mirrors score_jobs_batch's *contract*:
+    the same {url, score, scored, missing_keywords, sponsorship, company_type} result shape,
+    with the same "never fabricate a score" rule — an entry missing from the AI response (or
+    dropped by a whole-chunk parse failure) is simply absent from the returned dict, and the
+    caller falls back to the per-job verify_tailored_score() for it, exactly as
+    tailor_resumes_batch()'s own missing-job fallback works.
+
+    jobs_and_tailored: list of (job, tailored_resume_text, jd) tuples.
+    Returns {page_id: result}.
+    """
+    if not jobs_and_tailored:
+        return {}
+
+    results: dict[str, dict] = {}
+    for i in range(0, len(jobs_and_tailored), _VERIFY_CHUNK_SIZE):
+        results.update(_verify_tailored_scores_chunk(jobs_and_tailored[i:i + _VERIFY_CHUNK_SIZE]))
+    return results
+
+
+def _verify_tailored_scores_chunk(jobs_and_tailored: list[tuple[dict, str, str]]) -> dict[str, dict]:
+    """Score one chunk of (job, tailored_resume_text, jd) tuples in a single AI call. See
+    verify_tailored_scores_batch for why chunking matters and why this can't just call
+    score_jobs_batch. On a call that fails outright or a malformed response, every job in this
+    chunk is simply absent from the result — never a fabricated score."""
+    job_entries = "\n\n".join(
+        f"{i+1}. Company: {job['company']}\n"
+        f"   Role: {job['title']}\n"
+        f"   <tailored_resume>\n{resume_text[:3000]}\n   </tailored_resume>\n"
+        f"   <job_description>\n{jd[:2000]}\n   </job_description>"
+        for i, (job, resume_text, jd) in enumerate(jobs_and_tailored)
+    )
+
+    prompt = f"""Score each tailored resume below against its OWN job description on a 0-100 ATS
+keyword alignment scale — the same rubric used to score any candidate against a job. Each job
+has a DIFFERENT resume attached; score each (resume, job description) pair independently.
+
+Also classify visa sponsorship and company type for each job:
+  sponsorship: "no" (JD explicitly rules out sponsorship) | "yes" (JD explicitly offers/mentions
+               sponsorship) | "unknown" (JD is silent)
+  company_type: "product" (builds/owns its own product) | "staffing_or_consulting"
+                (agency/consultancy placing candidates elsewhere) | "agency"
+                (recruiting agency filling a role for a named employer) | "unknown"
+
+JOBS AND THEIR TAILORED RESUMES:
+{job_entries}
+
+Reply with ONLY a JSON array, one entry per job, in the same order:
+[
+  {{"job_index": 1, "company": "...", "score": <0-100>, "missing_keywords": ["kw1", "kw2"],
+    "sponsorship": "yes|no|unknown", "company_type": "product|staffing_or_consulting|agency|unknown"}},
+  ...
+]"""
+
+    try:
+        raw = claude_chat(prompt, system="You are an ATS scoring expert. Reply only with a valid JSON array.",
+                           max_tokens=min(1024 + 300 * len(jobs_and_tailored), 8000))
+        data = parse_json_response(raw)
+        if isinstance(data, dict):
+            for key in ("results", "jobs", "scores"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+        if not isinstance(data, list):
+            raise ValueError(f"Expected JSON array, got {type(data)}")
+    except Exception as exc:
+        log(f"  ⚠ Batch verification parse failed ({exc}) — will fall back per-job")
+        return {}
+
+    by_index: dict[int, dict] = {}
+    by_company: dict[str, dict] = {}
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        idx = entry.get("job_index")
+        if idx is not None:
+            try:
+                by_index[int(idx)] = entry
+            except (TypeError, ValueError):
+                pass
+        company = (entry.get("company") or "").lower()
+        if company:
+            by_company[company] = entry
+
+    # Same same-company caution as tailor_resumes_batch: never trust the company-keyed
+    # fallback for a company that isn't unique within this chunk.
+    company_counts: dict[str, int] = {}
+    for job, _, _ in jobs_and_tailored:
+        key = job["company"].lower()
+        company_counts[key] = company_counts.get(key, 0) + 1
+
+    results: dict[str, dict] = {}
+    for i, (job, _, _) in enumerate(jobs_and_tailored):
+        pid = job.get("page_id") or job.get("id")
+        company_key = job["company"].lower()
+        entry = by_index.get(i + 1)
+        if entry is None and company_counts[company_key] == 1:
+            entry = by_company.get(company_key)
+        if entry is None:
+            continue
+        try:
+            score = max(0, min(100, int(entry.get("score", 0))))
+        except (TypeError, ValueError):
+            continue
+        sponsorship = str(entry.get("sponsorship", "unknown")).strip().lower()
+        if sponsorship not in ("yes", "no", "unknown"):
+            sponsorship = "unknown"
+        company_type = str(entry.get("company_type", "unknown")).strip().lower()
+        if company_type not in _VERIFY_COMPANY_TYPES:
+            company_type = "unknown"
+        results[pid] = {
+            "url":              job["url"],
+            "score":            score,
+            "scored":           True,
+            "missing_keywords": entry.get("missing_keywords", []),
+            "sponsorship":      sponsorship,
+            "company_type":     company_type,
+        }
+    return results
 
 
 # ── Main pipeline ─────────────────────────────────────────────
@@ -399,7 +537,8 @@ def run(min_score: int = 0):
             pid = job.get("page_id") or job.get("id")
             batch_results[pid] = (edits, keywords)
 
-    # Phase 3: Apply edits + verify + update Notion
+    # Phase 3: Apply edits + save a tailored resume for every job (no AI calls)
+    tailored: list[tuple[dict, str, str, str]] = []  # (job, tailored_text, jd, file_path)
     for job, jd in jobs_and_jds:
         pid = job.get("page_id") or job.get("id")
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
@@ -418,11 +557,32 @@ def run(min_score: int = 0):
         log(f"  ✓ Saved: {file_path}")
 
         tailored_text = extract_docx_text(file_path)
-        verify = verify_tailored_score(tailored_text, jd, job)
+        tailored.append((job, tailored_text, jd, file_path))
+
+    # Phase 4: ONE batch AI call to verify ALL tailored resumes (mirrors Phase 2's batching)
+    log(f"\nBatch verifying {len(tailored)} tailored resume(s) in 1 AI call…")
+    verify_results = verify_tailored_scores_batch(
+        [(job, tailored_text, jd) for job, tailored_text, jd, _ in tailored]
+    )
+
+    verify_missing = [
+        t for t in tailored if (t[0].get("page_id") or t[0].get("id")) not in verify_results
+    ]
+    if verify_missing:
+        log(f"  ↳ Batch verification missed {len(verify_missing)} job(s) — falling back to per-job calls")
+        for job, tailored_text, jd, _ in verify_missing:
+            pid = job.get("page_id") or job.get("id")
+            log(f"    → {job['company']} — single-job verification fallback")
+            verify_results[pid] = verify_tailored_score(tailored_text, jd, job)
+
+    # Phase 5: Log verification results + update Notion
+    for job, _, _, file_path in tailored:
+        pid = job.get("page_id") or job.get("id")
+        verify = verify_results.get(pid) or {"url": job["url"], "score": None, "scored": False}
         before = job["ats_score"]
         if verify["scored"]:
             after = verify["score"]
-            log(f"  ↳ ATS: {before} → {after}")
+            log(f"  ↳ {job['company']} — {job['title']} ATS: {before} → {after}")
             if after < MIN_TAILORED_ATS_SCORE:
                 log(f"  ⚠ Tailored resume for {job['company']} — {job['title']} scored {after}, "
                     f"below MIN_TAILORED_ATS_SCORE={MIN_TAILORED_ATS_SCORE} — worth a manual look.")
