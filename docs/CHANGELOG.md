@@ -211,3 +211,21 @@ gate. Landed in six phases (0-5), all independently shippable:
 
 Full spec (retired): `docs/backlog/step-9-evals-testing.md` and
 `docs/refinement-plans/testing/evals-strategy.md`.
+
+## Step 12 — Notion-managed restricted-sponsorship company list
+
+Replaced the plan to hold a specific posting via a per-job Notion Notes marker with a
+different fix for the same underlying problem (a hardcoded, committed
+`RESTRICTED_SPONSORSHIP_COMPANIES` list can't be edited without a redeploy, and silently
+blocks a company forever even after its policy changes): the restricted-company list itself
+moved into its own Notion database, parallel to the Jobs Tracker and Scratch Pad
+(`NOTION_RESTRICTED_COMPANIES_PAGE_ID`) — editable visually, no code change needed, and works
+identically from a future GitHub Actions run (unlike a git-ignored local file).
+`get_restricted_sponsorship_companies()` (`scripts/utils.py`) merges the Notion list with the
+hardcoded list as a fallback/escape hatch. Enforced at **stage 1** as a silent drop at scrape
+time, like `SKIP_COMPANIES` (`is_restricted_sponsorship_company()`, new
+`restricted-sponsorship` drop counter); stage 2's existing `_sponsorship_gate()` keeps
+checking the same merged list as defense-in-depth, for a job that reached `Reviewed` before
+its company was added.
+
+Full spec (retired): `docs/backlog/step-12-sponsorship-restriction-marker.md`.
