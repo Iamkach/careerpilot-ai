@@ -12,7 +12,7 @@ Open stories:
 |---|---|---|---|
 | [step-7-communications-subsystem.md](step-7-communications-subsystem.md) | Stages 7-8: LinkedIn leads + Hunter-verified cold email, new Leads DB, GitHub Actions | Step 6 (done) | XL |
 | [step-10-auto-apply-subsystem.md](step-10-auto-apply-subsystem.md) | Proposed Stage 7: browser-automation capability router to submit applications, semi-auto by default. `scripts/autoapply.py` is the Phase 1 read-only-plan PoC (Greenhouse only, no submit) | Stage 2 (done), Notion status pipeline | L-XL (phaseable; Phase 1 PoC is S) |
-| [step-11-forkable-setup.md](step-11-forkable-setup.md) | One-time `python run.py --init` wizard: profile.json, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning, de-personalize tracked files | current setup surface | M |
+| [step-11-forkable-setup.md](step-11-forkable-setup.md) | ✅ Notion half landed: `--init` wizard, `scripts/provision_notion.py` (page + both DBs), env-sourced `NOTION_DB_ID`, hardened `--setup`. ⏳ Deferred: profile.json, de-personalize tracked files | current setup surface | S (remaining) |
 | [step-12-sponsorship-restriction-marker.md](step-12-sponsorship-restriction-marker.md) | Per-job Notion Notes marker to hold a specific posting from sponsorship tailoring, replacing the hardcoded `RESTRICTED_SPONSORSHIP_COMPANIES` list | Stage 2 sponsorship gate (done) | S |
 
 Read `docs/TODO.md` first — it's the current index of exactly what's left, cross-referenced

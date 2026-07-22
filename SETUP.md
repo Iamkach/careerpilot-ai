@@ -185,13 +185,23 @@ split them). Under `claude_code`, no AI key is needed. `HUNTER_API_KEY` is only 
 core pipeline never reads it.
 
 ### Notion (primary data store — required)
-```python
-NOTION_API_KEY = "***REMOVED-SECRET***"   # the integration token
-NOTION_DB_ID   = "2ac0907e693744698a1c748d37774a07"   # already set — your tracker DB
+```bash
+NOTION_API_KEY=...        # the integration token
+NOTION_DB_ID=...          # your tracker DB id — set automatically by `python run.py --init`
+NOTION_SCRATCH_PAGE_ID=... # scratch-note DB id — also set by --init (optional feature)
 ```
 Notion is the single source of truth. Create the integration at
-https://www.notion.so/my-integrations and **share your tracker database with it** —
-all reads and writes go through the Notion API (see step 5 for the required schema).
+https://www.notion.so/my-integrations. There is **no baked-in default** `NOTION_DB_ID` —
+the fastest path is to let the wizard provision everything for you:
+
+> **`python run.py --init`** — asks for your Notion token and one page you've **shared with the
+> integration**, then creates a "Careerpilot-ai" page holding the **Job Search Tracker** and
+> **Job Link Scratch Pad** databases (full schema, all Status options) and writes both ids to
+> `.env`. This replaces the manual step 5 below for new setups.
+
+Existing owners: the hardcoded default id was removed — put your existing
+`NOTION_DB_ID` in `.env` once (or re-run `--init`); `python run.py --setup` flags it if unset.
+Step 5 remains the reference schema (and the by-hand fallback if you'd rather not use `--init`).
 
 ### Gmail (optional — emailed digest)
 ```python
@@ -203,6 +213,12 @@ Only needed for `--send` on stage 4 (see step 6).
 ---
 
 ## 5. Set up the Notion database schema (once)
+
+> **Skip this if you ran `python run.py --init`** — it provisions the tracker with this exact
+> schema (plus the Stage 7 columns and `Enrichment Attempts`) automatically. This section is the
+> reference for what gets created, and the manual path if you're pointing at a pre-existing DB.
+> `scripts/provision_notion.py` owns the canonical schema; `python run.py --setup` validates a
+> live DB against it and reports anything missing.
 
 Notion is the primary data store. Your tracker DB (`NOTION_DB_ID`) must have these
 properties — **names and types must match exactly** (a missing or mistyped property

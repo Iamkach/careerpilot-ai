@@ -57,6 +57,95 @@ def _get_required():
     pkgs = {_PROVIDER_PKGS.get(p, "anthropic") for p in (fast, quality)}
     return sorted(pkgs) + ["notion_client", "requests"]
 
+# ── First-run wizard (fork onboarding) ────────────────────────
+
+def _upsert_env(path: Path, key: str, value: str) -> None:
+    """Set KEY=value in a .env file, in place, without disturbing comments or other lines.
+
+    Replaces the first uncommented `KEY=...` line if present; otherwise appends. Idempotent —
+    safe to re-run. Also mirrors the value into os.environ so the current process sees it.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    prefix = f"{key}="
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(prefix) and not line.lstrip().startswith("#"):
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f"{key}={value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[key] = value
+
+
+def init_wizard():
+    """Interactive fork onboarding: capture Notion connection details, provision the Notion
+    page + both databases, and persist the new ids to a git-ignored .env.
+
+    Idempotent and re-runnable. Non-interactive fallback: hand-edit .env and run
+    `python scripts/provision_notion.py --parent-page <id>` directly.
+    """
+    print("=== Careerpilot-ai — first-run setup ===\n")
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        example = ROOT / ".env.example"
+        if example.exists():
+            env_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+            print("• Created .env from .env.example\n")
+        else:
+            env_path.write_text("", encoding="utf-8")
+
+    def _prompt(label: str, current: str = "") -> str:
+        shown = f" [{current[:6]}…]" if current else ""
+        val = input(f"{label}{shown}: ").strip()
+        return val or current
+
+    # 1. Notion API key
+    api_key = _prompt("Notion integration token (NOTION_API_KEY)", os.environ.get("NOTION_API_KEY", ""))
+    if not api_key:
+        print("\n✗ A Notion integration token is required. Create one at "
+              "https://www.notion.so/my-integrations, then re-run `python run.py --init`.")
+        return 1
+    _upsert_env(env_path, "NOTION_API_KEY", api_key)
+
+    # 2. Tracker DB — provision unless one is already configured.
+    existing_db = os.environ.get("NOTION_DB_ID", "")
+    if existing_db:
+        reuse = input(f"\nNOTION_DB_ID is already set ({existing_db[:8]}…). "
+                      "Provision a NEW workspace anyway? [y/N]: ").strip().lower()
+        if reuse != "y":
+            print("• Keeping the existing tracker DB. Skipping provisioning.")
+            print("\nRunning a setup check…\n")
+            check_setup()
+            return 0
+
+    print("\nProvisioning creates a 'Careerpilot-ai' page with two databases under a page you")
+    print("choose. First share that page with your integration (open the page → ••• →")
+    print("'Connections' → add your integration), then paste its share link below")
+    print("(open the page → ••• → 'Copy link'). A raw page id works too.")
+    parent = _prompt("\nShared parent page — share link or id").strip()
+    if not parent:
+        print("\n✗ A shared parent page is required to provision. Re-run when ready.")
+        return 1
+
+    try:
+        from scripts.provision_notion import provision
+        tracker_id, scratch_id = provision(parent)
+    except Exception as e:
+        print(f"\n✗ Provisioning failed ({e}).")
+        print("  Check the token and that the parent page is shared with the integration, then re-run.")
+        return 1
+
+    _upsert_env(env_path, "NOTION_DB_ID", tracker_id)
+    _upsert_env(env_path, "NOTION_SCRATCH_PAGE_ID", scratch_id)
+    print(f"\n✓ Wrote NOTION_DB_ID and NOTION_SCRATCH_PAGE_ID to {env_path.name}")
+
+    print("\nRunning a setup check…\n")
+    check_setup()
+    return 0
+
+
 def check_setup():
     print("=== Setup Check ===\n")
     from config.settings import (
@@ -95,10 +184,33 @@ def check_setup():
         print(f"  AI routing  : fast={FAST_PROVIDER} ({fast_model}, stages 1,3)  |  "
               f"quality={QUALITY_PROVIDER} ({quality_model}, stages 2,5,6)\n")
 
+    # Notion tracker: a real schema check, not just "is the id non-empty". A forker who never ran
+    # --init has no id; one who provisioned a partial DB has an id that points at a broken schema.
+    if not NOTION_DB_ID:
+        notion_db_check = ("Notion tracker DB", False,
+                           "No NOTION_DB_ID set — run `python run.py --init` to provision one")
+    elif not NOTION_API_KEY:
+        notion_db_check = ("Notion tracker DB", bool(NOTION_DB_ID),
+                           "Set NOTION_API_KEY first, then re-run to validate the schema")
+    else:
+        try:
+            from scripts.provision_notion import validate_schema
+            missing = validate_schema(NOTION_DB_ID)
+            if missing:
+                notion_db_check = ("Notion tracker DB schema", False,
+                                   f"{len(missing)} item(s) missing: {', '.join(missing[:6])}"
+                                   f"{'…' if len(missing) > 6 else ''} — re-run `python run.py --init`")
+            else:
+                notion_db_check = ("Notion tracker DB schema", True, "")
+        except Exception as e:
+            notion_db_check = ("Notion tracker DB schema", False,
+                               f"Could not read the DB ({e}) — check the id and that the "
+                               "integration is shared with it")
+
     checks = [
         ("Apify token",     bool(APIFY_API_TOKEN), "Set APIFY_API_TOKEN in .env (copy .env.example) or your environment"),
         ("Notion API key",  bool(NOTION_API_KEY),  "Set NOTION_API_KEY in .env (copy .env.example) or your environment (PRIMARY data store)"),
-        ("Notion DB ID",    bool(NOTION_DB_ID),    "Already set — your tracker DB"),
+        notion_db_check,
         ("Resume file",     (ROOT / RESUME_PATH).exists(), f"Add your resume to {RESUME_PATH}"),
     ]
     for tier_provider in dict.fromkeys((FAST_PROVIDER, QUALITY_PROVIDER)):  # dedup, keep order
@@ -288,6 +400,9 @@ def main():
                         help="Stage 7: cap how many jobs to process this run (overrides AUTOAPPLY_DAILY_CAP)")
     parser.add_argument("--setup-profile", action="store_true", dest="setup_profile",
                         help="One-time interactive setup of your Stage 7 application answers")
+    parser.add_argument("--init",         action="store_true",
+                        help="One-time fork onboarding: capture Notion details, provision the "
+                             "page + databases, write ids to .env")
     parser.add_argument("--setup",        action="store_true",       help="Check config & dependencies")
     parser.add_argument("--min-score",    type=int, default=0,       help="Min ATS score for tailoring")
     parser.add_argument("--company",      type=str, default=None)
@@ -336,6 +451,9 @@ def main():
         os.environ["QUALITY_PROVIDER"] = quality
 
     sys.path.insert(0, str(ROOT))
+
+    if args.init:
+        sys.exit(init_wizard())
 
     if args.setup:
         check_setup()
