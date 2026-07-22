@@ -8,8 +8,8 @@ transcribed into docs/backlog/step-7-communications-subsystem.md's Phase 0 check
 Settles four real unknowns with LIVE API calls before any Phase 1+ code
 (scripts/credits.py, stage7_leads_discover.py, stage8_email_resolve.py, the Leads DB, ...)
 gets written — coding those around a guess would violate the subsystem's own governing rule
-("APIs supply facts; never guess one"). See docs/refinement-plans/communications/
-communications-subsystem.md, "Phase 0 — Blocking spike" for full context.
+("APIs supply facts; never guess one"). See docs/backlog/step-7-communications-subsystem.md,
+"Phase 0 — blocking spike" for full context.
 
   Q1. Does Hunter's Email Finder return a terminal `verification.status` inline, or
       pending/null? Decides whether the Verifier (0.5 credit) is ever needed.
