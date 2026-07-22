@@ -10,7 +10,7 @@ def _job(company="Acme Corp", notes="", page_id="p1"):
 
 
 def test_unmatched_company_passes_through_untouched(monkeypatch, patch_notion_db):
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     fake_db = patch_notion_db(stage2_tailor)
 
     jobs = [_job(company="Acme Corp")]
@@ -21,7 +21,7 @@ def test_unmatched_company_passes_through_untouched(monkeypatch, patch_notion_db
 
 
 def test_matched_company_without_marker_is_held_back(monkeypatch, patch_notion_db):
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     monkeypatch.setattr(stage2_tailor, "SPONSORSHIP_CONFIRMED_MARKER", "sponsorship confirmed")
     fake_db = patch_notion_db(stage2_tailor)
 
@@ -35,7 +35,7 @@ def test_matched_company_without_marker_is_held_back(monkeypatch, patch_notion_d
 
 
 def test_matched_company_without_marker_appends_to_existing_notes(monkeypatch, patch_notion_db):
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     monkeypatch.setattr(stage2_tailor, "SPONSORSHIP_CONFIRMED_MARKER", "sponsorship confirmed")
     fake_db = patch_notion_db(stage2_tailor)
 
@@ -47,7 +47,7 @@ def test_matched_company_without_marker_appends_to_existing_notes(monkeypatch, p
 
 
 def test_matched_company_with_marker_is_released(monkeypatch, patch_notion_db):
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     monkeypatch.setattr(stage2_tailor, "SPONSORSHIP_CONFIRMED_MARKER", "sponsorship confirmed")
     fake_db = patch_notion_db(stage2_tailor)
 
@@ -62,7 +62,7 @@ def test_mixed_batch_only_restricted_companies_are_held_back(monkeypatch, patch_
     # The real-world scenario the gate exists for: one stage-2 run processes many Reviewed
     # jobs at once, and only the restricted-company ones should ever be pulled aside — every
     # other job must tailor normally, unaffected by its neighbors in the same batch.
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     monkeypatch.setattr(stage2_tailor, "SPONSORSHIP_CONFIRMED_MARKER", "sponsorship confirmed")
     fake_db = patch_notion_db(stage2_tailor)
 
@@ -80,7 +80,7 @@ def test_mixed_batch_only_restricted_companies_are_held_back(monkeypatch, patch_
 
 
 def test_marker_match_is_case_insensitive(monkeypatch, patch_notion_db):
-    monkeypatch.setattr(stage2_tailor, "RESTRICTED_SPONSORSHIP_COMPANIES", ["Restricted Co"])
+    monkeypatch.setattr(stage2_tailor, "get_restricted_sponsorship_companies", lambda: ["Restricted Co"])
     monkeypatch.setattr(stage2_tailor, "SPONSORSHIP_CONFIRMED_MARKER", "sponsorship confirmed")
     patch_notion_db(stage2_tailor)
 

@@ -23,6 +23,7 @@ from scripts.utils import (
     ai_chat_blocks, claude_chat, parse_json_response,
     db_update_status, db_get_jobs, db_get_job_description,
     log, today, ensure_dirs, ROOT, matches_company_list,
+    get_restricted_sponsorship_companies,
 )
 from scripts.render_docx import extract_docx_text, apply_docx_edits
 from scripts.stage1_scrape import score_jobs_batch
@@ -58,15 +59,20 @@ def get_reviewed_jobs(min_score: int = 0) -> list:
 # ── Sponsorship gate ──────────────────────────────────────────
 
 def _sponsorship_gate(jobs: list[dict]) -> list[dict]:
-    """Hold back jobs at RESTRICTED_SPONSORSHIP_COMPANIES (companies known to sponsor only
-    existing employees, not new hires) instead of tailoring a resume for them. A held job is
-    moved to Notion Status='Human Review' with a guidance note. It's released once the user
-    personally confirms sponsorship, adds SPONSORSHIP_CONFIRMED_MARKER to that job's Notion
-    Notes, and moves Status back to 'Reviewed' by hand — without the marker check, a job
-    moved back to 'Reviewed' would just get re-gated into 'Human Review' forever."""
+    """Hold back jobs at a restricted-sponsorship company (companies known to sponsor only
+    existing employees, not new hires) instead of tailoring a resume for them. The
+    restricted list is the merged Notion database + RESTRICTED_SPONSORSHIP_COMPANIES
+    fallback (get_restricted_sponsorship_companies()) — stage 1 already drops these
+    silently at scrape time, so this is defense-in-depth for a job that reached 'Reviewed'
+    before its company was added to the list. A held job is moved to Notion
+    Status='Human Review' with a guidance note. It's released once the user personally
+    confirms sponsorship, adds SPONSORSHIP_CONFIRMED_MARKER to that job's Notion Notes, and
+    moves Status back to 'Reviewed' by hand — without the marker check, a job moved back to
+    'Reviewed' would just get re-gated into 'Human Review' forever."""
+    restricted = get_restricted_sponsorship_companies()
     cleared = []
     for job in jobs:
-        if not matches_company_list(job["company"], RESTRICTED_SPONSORSHIP_COMPANIES):
+        if not matches_company_list(job["company"], restricted):
             cleared.append(job)
             continue
         notes = job.get("notes") or ""

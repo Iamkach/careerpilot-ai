@@ -1,6 +1,19 @@
 # Step 12 — Per-job sponsorship-restriction marker (vs. hardcoded company list)
 
-**Status:** idea / not started.
+**Status:** superseded — shipped. Section 1's diagnosis (a hardcoded, committed company list
+is a bad fit) held up, but the fix that actually shipped is different from section 2/3's
+per-job Notes marker sketch below: the restricted-company list moved into its own Notion
+database (parallel to the Jobs Tracker and Scratch Pad — `NOTION_RESTRICTED_COMPANIES_PAGE_ID`
+in `config/settings.py`), editable visually with no redeploy, merged with
+`RESTRICTED_SPONSORSHIP_COMPANIES` as a fallback/escape hatch via
+`get_restricted_sponsorship_companies()` in `scripts/utils.py`. It's enforced at **Stage 1**
+(silent drop at scrape time, like `SKIP_COMPANIES`) with Stage 2's existing
+`_sponsorship_gate()` kept as defense-in-depth for a job that reached `Reviewed` before its
+company was added to the list. See `CLAUDE.md`'s "Restricted-sponsorship company list" and
+"Stage 2 Sponsorship Gate" sections for the shipped design. The per-job marker idea below was
+deliberately not built — an easily-editable company-level list solves the same staleness
+problem without a second, independent hold mechanism. The rest of this doc is kept for
+historical context on the original problem statement and the sketch that was considered.
 **Priority:** low — no user pain today (`RESTRICTED_SPONSORSHIP_COMPANIES` is empty and the
 existing gate already works for the one case it was built for).
 **Depends on:** Stage 2 sponsorship gate (done) — `_sponsorship_gate()` in

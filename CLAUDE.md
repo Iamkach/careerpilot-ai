@@ -113,6 +113,26 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 
 A lower-friction alternative to filling in a full Notion Jobs-Tracker row per link: create one small Notion **database** (a "list" view works well) — e.g. titled "Job Link Scratch Pad" — where each row's title is one job URL and nothing else needs filling in. Share it with the same integration used for `NOTION_API_KEY`, and set its database id as `NOTION_SCRATCH_PAGE_ID` (optional; the feature no-ops if unset). From mobile, adding a link is just "+ New" → paste the URL as the title. On the next Stage 1 run (or `python run.py --ingest`), `ingest_from_scratch_note()` runs first: it reads every row (finding the URL by the row's title property, whatever that column happens to be named — extra columns in the database are ignored), creates a minimal `Status = Interested` row (Job Title = "Pending intake") for every URL not already tracked anywhere in the Jobs DB, then archives that scratch-database row so it isn't reprocessed (a row whose row-creation fails is left un-archived and retried next run; a row whose URL is already tracked under any status is archived without creating a duplicate). `ingest_interested_from_notion()` then picks up those freshly-created rows in the same run exactly as if they'd been entered by hand.
 
+### Restricted-sponsorship company list (Notion-managed, Step 12)
+
+Companies known (from your own research/contacts) to sponsor only *existing* employees, not
+new external hires, are tracked in their own small Notion **database** — parallel to the Jobs
+Tracker and the Scratch Pad — rather than a hardcoded list, so you can add/remove a company
+visually with no code change or redeploy (this also matters once the pipeline runs from
+GitHub Actions, where a git-ignored local file wouldn't exist). Create one small database
+(e.g. titled "Restricted Sponsorship Companies") where each row's title is one company name,
+share it with the same integration used for `NOTION_API_KEY`, and set its database id as
+`NOTION_RESTRICTED_COMPANIES_PAGE_ID` (optional; the feature no-ops if unset).
+`get_restricted_sponsorship_companies()` (`scripts/utils.py`) merges this Notion list with the
+hardcoded `RESTRICTED_SPONSORSHIP_COMPANIES` fallback/escape-hatch in `config/settings.py`
+(for when Notion is unreachable, or before the database exists) — the single call site both
+enforcement points below use. **Stage 1** (`is_restricted_sponsorship_company()` in
+`scripts/stage1_scrape.py`) drops a matching company silently at scrape time, the same as
+`SKIP_COMPANIES`, logged under the `restricted-sponsorship` drop counter — it never reaches
+the Jobs DB at all. **Stage 2**'s `_sponsorship_gate()` (see "Stage 2 Sponsorship Gate" below)
+checks the same merged list as defense-in-depth, for a job that reached `Reviewed` *before*
+its company was added to the list.
+
 ### Shared utilities (`scripts/utils.py`)
 
 - `ai_chat(prompt, system, max_tokens, quality)` — provider-agnostic chat; `claude_chat` is an alias
@@ -124,6 +144,7 @@ A lower-friction alternative to filling in a full Notion Jobs-Tracker row per li
 - `db_add_job_linked(job, notion_page_id)` — promote an existing manually-added Notion page ("Interested" intake) to "Scraped" in place (no duplicate page); caches the JD in its body
 - `get_notion_jobs_by_status(status)` — read Notion rows by status (paginated, via `_query_db()` like every other reader). **Raises `RuntimeError` on a failed read**, same contract as `db_get_all_jobs()` — a failed read must never be reported as "no rows with this status", since callers act on emptiness by creating rows. `sync_notion_to_supabase()` is now a no-op kept for compatibility (Notion is the store)
 - `get_scratch_note_entries()` / `archive_scratch_note_entry(page_id)` / `db_add_interested_url(url)` — the scratch-note read/archive/create helpers backing `ingest_from_scratch_note()` above (see "Scratch-note intake")
+- `get_restricted_companies_from_notion()` / `get_restricted_sponsorship_companies()` — the Notion read and hardcoded-fallback merge backing the restricted-sponsorship company list (see "Restricted-sponsorship company list" above)
 - `load_resume()`, `ensure_dirs()`, `today()`, `parse_json_response()` — misc helpers
 
 **Configuration:** `config/settings.py` — all API keys, user profile, target roles, AI model settings, output paths.
@@ -167,6 +188,9 @@ table for the full mapping.
 
 Settings in `config/settings.py` control what gets saved:
 - `SKIP_COMPANIES` — word-boundary denylist for consulting/staffing firms; grows over time
+- `get_restricted_sponsorship_companies()` (Notion list + `RESTRICTED_SPONSORSHIP_COMPANIES`
+  fallback) — word-boundary denylist for companies known to sponsor only existing employees,
+  not new hires; see "Restricted-sponsorship company list" above
 - `EXCLUDE_NO_SPONSORSHIP = True` — skips jobs that explicitly deny visa sponsorship
 - `ENABLED_SOURCES` — which `scripts/sources.py` registry entries run (`linkedin`, `indeed`,
   `greenhouse`, `lever`, `ashby`)
@@ -179,16 +203,20 @@ Settings in `config/settings.py` control what gets saved:
 
 ## Stage 2 Sponsorship Gate
 
-`RESTRICTED_SPONSORSHIP_COMPANIES` in `config/settings.py` is a manually-curated list of
-product companies known (from your own research/contacts) to sponsor only **existing**
-employees, not new external hires — even when the JD reads as sponsorship-friendly or says
-nothing. Unlike `SKIP_COMPANIES`, these are **not** excluded in stage 1 — they're scraped,
-scored, and tracked normally. Instead, stage 2 (`_sponsorship_gate()`) holds back any
-`Reviewed` job whose company matches this list: it moves that job's Notion Status to
-`Human Review` and writes a guidance note, without tailoring a resume. To release a held
-job, confirm sponsorship for a new hire yourself, add `SPONSORSHIP_CONFIRMED_MARKER`
-(default: `"sponsorship confirmed"`) to that job's Notion **Notes** field, then move its
-Status back to `Reviewed` by hand — stage 2 checks for the marker before re-gating it.
+The restricted-sponsorship company list (see "Restricted-sponsorship company list" above —
+the Notion database at `NOTION_RESTRICTED_COMPANIES_PAGE_ID`, merged with the hardcoded
+`RESTRICTED_SPONSORSHIP_COMPANIES` fallback in `config/settings.py`) names companies known
+(from your own research/contacts) to sponsor only **existing** employees, not new external
+hires — even when the JD reads as sponsorship-friendly or says nothing. **Stage 1 is the
+primary enforcement point**: it drops a matching company silently at scrape time, like
+`SKIP_COMPANIES`, so these jobs are never scraped, scored, or tracked. Stage 2
+(`_sponsorship_gate()`) checks the same merged list as **defense-in-depth**, for the case
+where a job reached `Reviewed` *before* its company was added to the list: it holds back that
+`Reviewed` job by moving its Notion Status to `Human Review` and writing a guidance note,
+without tailoring a resume. To release a held job, confirm sponsorship for a new hire
+yourself, add `SPONSORSHIP_CONFIRMED_MARKER` (default: `"sponsorship confirmed"`) to that
+job's Notion **Notes** field, then move its Status back to `Reviewed` by hand — stage 2
+checks for the marker before re-gating it.
 
 ## Stage 7 Auto-Apply (Step 10, Phases 1–2)
 
@@ -384,7 +412,7 @@ including the nightly workflow, which never passes it and keeps its own env vars
 - **Stage 2 keyword hint + post-tailor verification:** `tailor_resumes_batch()`/`_tailor_resume_single()` pass each job's stored `missing_keywords` into the tailoring prompt as a hint to verify against the full JD, not a checklist to blindly inject — Stage 1's list comes from a truncated JD excerpt, so the model still does its own extraction from the full JD and may find more (or discard a Stage-1 hint that doesn't actually fit). After `save_resume()`, `run()` calls `verify_tailored_score()` (reuses stage 1's `score_jobs_batch()` contract against the *tailored* resume text) and logs `ATS: {before} → {after}`; if `after` is below `MIN_TAILORED_ATS_SCORE` (`config/settings.py`, default 75), it logs a `⚠` warning only — it does not retry tailoring or change Notion status, matching the pipeline's existing non-blocking "log it, human decides in Notion" pattern.
 - **Output dirs:** Auto-created by `ensure_dirs()` on first run
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
-- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID` follows the same env-sourced pattern but is **optional** — see "Scratch-note intake" above — the feature it backs no-ops when it's unset, unlike the required keys in this list. `NOTION_DB_ID` is env-sourced with **no hardcoded default** (`os.environ.get("NOTION_DB_ID", "")`) — a fork provisions its own tracker via `python run.py --init` (which writes the id to `.env`), or sets it by hand; `python run.py --setup` validates the live schema (via `provision_notion.validate_schema()`) and flags an unset/broken id. Existing owners must add their id to `.env` once (the literal was removed). `NOTION_SCRATCH_PAGE_ID` is set the same way by `--init` but stays optional.
+- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID` and `NOTION_RESTRICTED_COMPANIES_PAGE_ID` follow the same env-sourced pattern but are **optional** — see "Scratch-note intake" and "Restricted-sponsorship company list" above — the features they back no-op when unset, unlike the required keys in this list. `NOTION_DB_ID` is env-sourced with **no hardcoded default** (`os.environ.get("NOTION_DB_ID", "")`) — a fork provisions its own tracker via `python run.py --init` (which writes the id to `.env`), or sets it by hand; `python run.py --setup` validates the live schema (via `provision_notion.validate_schema()`) and flags an unset/broken id. Existing owners must add their id to `.env` once (the literal was removed). `NOTION_SCRATCH_PAGE_ID` is set the same way by `--init` but stays optional.
 - **`HUNTER_API_KEY` / `LEAD_ACTOR`:** only consumed by `scripts/spike_phase0_leads.py`, the Step 7 (communications subsystem) Phase 0 spike — not part of the 6-stage pipeline above. See `docs/backlog/step-7-communications-subsystem.md`.
 - **`scripts/autoapply.py` / `scripts/autoapply_browser.py`:** Stage 7, the Step 10 Auto-Apply subsystem (Phases 1–2 landed; deliberate submit deferred to Phase 3). Wired into `run.py` as `--stage 7` / `--stage 7 --fill` (plus `--dry-run` / `--limit` for sampling). See the "Stage 7 Auto-Apply" section above and `docs/backlog/step-10-auto-apply-subsystem.md`.
 - **`scripts/autoapply_profile.py`:** Stage 7's one-time answer wizard (`run.py --setup-profile`, or `--show`). Writes the git-ignored `config/application_profile.json` that `config/settings.py` overlays over the `APPLICATION_PROFILE` / `APPLICATION_ADDRESS` / `EEO_RESPONSES` / `COMMON_QUESTION_PRESETS` defaults — so personal application answers stay out of version control and aren't edited into a checked-in file. Missing/corrupt file = defaults stand. See the "Stage 7 Auto-Apply" section above.
