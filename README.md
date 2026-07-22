@@ -344,7 +344,8 @@ hybrid pattern used on unattended off-hours runs.
 
 `.github/workflows/nightly-pipeline.yml` can run the pipeline off-hours on a cron schedule
 using hybrid AI provider routing (`FAST_PROVIDER=claude` metered + `QUALITY_PROVIDER=claude_code`
-subscription). See [SETUP.md](SETUP.md) §6 for the required repo secrets.
+subscription). See [docs/GITHUB_ACTIONS_SETUP.md](docs/GITHUB_ACTIONS_SETUP.md) for the full
+setup guide (repo secrets, enabling Actions, manual runs, known gaps/troubleshooting).
 
 ---
 

@@ -278,21 +278,10 @@ once into the select to create them).
 
 ## 6. (Optional) Unattended nightly runs via GitHub Actions
 
-`.github/workflows/nightly-pipeline.yml` runs the pipeline off-hours on a cron schedule
-(default `0 7 * * *` UTC — adjust the hour for your timezone/DST). It uses the hybrid
-provider split from step 4 above. Set these as **repo secrets** (Settings → Secrets and
-variables → Actions):
-
-| Secret | Required for |
-|---|---|
-| `NOTION_API_KEY` | always |
-| `ANTHROPIC_API_KEY` | `FAST_PROVIDER=claude` (metered, stage 1/3) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `QUALITY_PROVIDER=claude_code` (subscription, stage 2/5/6) — mint with `claude setup-token` locally (Pro/Max required) |
-
-`APIFY_API_TOKEN` isn't in that workflow's `env:` block yet — add it as a secret and wire it
-in the same way if you enable `ENABLED_SOURCES` entries that need Apify (`linkedin`,
-`indeed`). You can also trigger it manually via `workflow_dispatch` with a `mode` input
-(`full`, `scrape`, `evaluate`, `ingest`, or a single `stageN`).
+`.github/workflows/nightly-pipeline.yml` runs the pipeline off-hours on a cron schedule, using
+the hybrid provider split from step 4 above. Full setup (repo secrets, enabling Actions, cron/
+DST adjustment, manual `workflow_dispatch` runs, and known workflow gaps/CI troubleshooting) now
+lives in its own guide: **`docs/GITHUB_ACTIONS_SETUP.md`**.
 
 ## 7. (Optional) Gmail digest setup
 
