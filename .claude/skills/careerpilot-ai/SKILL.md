@@ -16,7 +16,8 @@ Running with no action shows this action table plus the Prerequisites section.
 | Action | Runs | What it does |
 |---|---|---|
 | *(none)* | — | Show this table + Prerequisites |
-| `setup` | `run.py --setup` | Verify config/keys/deps |
+| `init` | `run.py --init` | One-time fork onboarding: capture Notion details, provision the page + both databases, write ids to `.env` |
+| `setup` | `run.py --setup` | Verify config/keys/deps (+ validate the live Notion schema) |
 | `setup-profile` | `run.py --setup-profile` | One-time Stage 7 answer wizard |
 | `smoke-test` | `smoke.py` | Agent-safe CLI smoke test, no API keys needed |
 | `morning` | `run.py` | Full daily flow: scrape + review digest (stages 1, 4) |
@@ -46,8 +47,10 @@ literal in the file):
   (`claude_code`; run `claude /login`), `OPENAI_API_KEY` (codex), `GEMINI_API_KEY` (gemini).
 - `APIFY_API_TOKEN` — LinkedIn + Indeed scraping via Apify (apify.com, free tier works); not
   needed if `ENABLED_SOURCES` only has `greenhouse`/`lever`/`ashby`
-- `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); **primary data store**
-  (the DB must be shared with the integration)
+- `NOTION_API_KEY` — Notion integration key (notion.so/my-integrations); **primary data store**.
+  New setup: share one page with the integration, then run `init` (below) to provision the
+  tracker + scratch databases and write `NOTION_DB_ID`/`NOTION_SCRATCH_PAGE_ID` to `.env`. There
+  is **no default `NOTION_DB_ID`** — a fork provisions its own.
 - `HUNTER_API_KEY` — optional, only used by `scripts/spike_phase0_leads.py` (Step 7 spike), not
   the core pipeline
 
@@ -56,6 +59,29 @@ stage-2 in-place tailoring.
 
 ---
 
+## `init`
+
+```bash
+python run.py --init
+```
+
+One-time fork onboarding. Interactive, idempotent, re-runnable. It:
+1. Copies `.env.example` → `.env` if missing.
+2. Prompts for `NOTION_API_KEY`.
+3. Prompts for **one shared parent page** — paste its **share link** (Notion page → ••• →
+   *Copy link*; a raw id works too). Share that page with the integration first (page → ••• →
+   *Connections*). The share-link URL is parsed down to the page id automatically.
+4. Provisions, via `scripts/provision_notion.py`, a **"Careerpilot-ai"** page holding two
+   databases — **Job Search Tracker** (full schema, all 21 `Status` options) and **Job Link
+   Scratch Pad** (single URL column) — and writes the new `NOTION_DB_ID` /
+   `NOTION_SCRATCH_PAGE_ID` to `.env`.
+5. Runs `setup` for a green summary.
+
+Because the tracker is born with every Stage 7 `Status` option and property, a freshly-`init`ed
+DB does **not** need the `python scripts/setup_notion_schema.py --apply` migration — that script
+is only for older/hand-built trackers. Non-interactive fallback: hand-edit `.env` and run
+`python scripts/provision_notion.py --parent-page <share-link>` directly.
+
 ## `setup`
 
 ```bash
@@ -63,24 +89,28 @@ python run.py --setup
 ```
 
 Checks API keys, resume file, Python packages (including a split `FAST_PROVIDER`/`QUALITY_PROVIDER`),
-and the current `Retry` queue size. Reports exactly which items are missing.
+**validates the live Notion tracker against the canonical schema** (`provision_notion.validate_schema()`
+— reports any missing property/`Status` option, or points you at `init` if `NOTION_DB_ID` is unset),
+and prints the current `Retry` queue size. Reports exactly which items are missing.
 
 **First-time checklist:**
-1. Edit `config/settings.py` — fill in `YOUR_NAME`, `YOUR_EMAIL`, `YOUR_BIO`, `TARGET_ROLES`,
-   `TARGET_COMPANIES`, `ENABLED_SOURCES`
-2. Set API keys as env vars: `ANTHROPIC_API_KEY`, `APIFY_API_TOKEN`, `NOTION_API_KEY`
-   (`HUNTER_API_KEY` optional, Step 7 spike only)
-3. Add your resume text to `config/resume.txt`
-4. Add the `Retry` status option to the Notion DB's `Status` select by hand once (the API can't
-   create it)
-5. **Before the first real (non-dry) `apply` run:** run
-   `python scripts/setup_notion_schema.py --apply` once — idempotent, adds the six new `Status`
-   options and four new properties Stage 7 needs. Skipping it isn't silent:
-   `db_update_status_verified()` fails loudly on the first write instead of corrupting the tracker.
-6. **Before your first `apply` run:** run `setup-profile` (below) to capture your application
-   answers
-7. Run `setup` to verify
-8. Run `scrape` to start the pipeline
+1. Set API keys in `.env` (copy `.env.example`): the provider key (`ANTHROPIC_API_KEY` by
+   default), `APIFY_API_TOKEN`, `NOTION_API_KEY` (`HUNTER_API_KEY` optional, Step 7 spike only).
+2. **Run `init`** — provisions the Notion page + both databases and writes `NOTION_DB_ID` /
+   `NOTION_SCRATCH_PAGE_ID` to `.env` (all 21 `Status` options + Stage 7 columns included, so no
+   separate schema migration is needed).
+3. Edit `config/settings.py` — `YOUR_NAME`, `YOUR_EMAIL`, `YOUR_BIO`, `TARGET_ROLES`,
+   `TARGET_COMPANIES`, `ENABLED_SOURCES`.
+4. Add your resume text to `config/resume.txt`.
+5. **Before your first `apply` run:** run `setup-profile` (below) to capture your application
+   answers.
+6. Run `setup` to verify, then `scrape` to start the pipeline.
+
+> **Pointing at a pre-existing/hand-built tracker instead of `init`?** Add its id to `.env` as
+> `NOTION_DB_ID`, add the `Retry` `Status` option by hand once, and run
+> `python scripts/setup_notion_schema.py --apply` before the first real `apply` run (idempotent;
+> adds the six Stage 7 `Status` options + four properties). `db_update_status_verified()` fails
+> loudly rather than silently no-opping if you skip it.
 
 **Install dependencies:**
 ```bash

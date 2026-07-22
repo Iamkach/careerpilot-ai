@@ -2,6 +2,15 @@
 
 *See [`../README.md`](../README.md) for how this plan relates to the others. Baseline: `feature/god-speed`.*
 
+> **Status update:** the **Notion-provisioning half is implemented** — sections 2 (now
+> `scripts/provision_notion.py`, which provisions the reorganized *two-database* layout: a
+> "Careerpilot-ai" page holding the Job Search Tracker **and** the Job Link Scratch Pad), 3
+> (`run.py --init` + a schema-validating `check_setup()`), and the `NOTION_DB_ID` env-sourcing in
+> section 1 all landed. The provisioning schema is generated from the **live** data source (25
+> properties / 21 Status options, richer than the "18 / 14" this doc originally listed) and adds
+> `Enrichment Attempts`. **Still open:** section 1's `config/profile.json` identity/targets, section
+> 4 (de-personalize tracked resume files), and the doc genericization in sections 4–5.
+
 ## Context
 
 The repo is hardwired to the original owner, so a fork does not run without reverse-engineering

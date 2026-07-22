@@ -37,32 +37,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import NOTION_API_KEY, NOTION_DB_ID
 from scripts.utils import log
+from scripts.provision_notion import STAGE7_STATUS_OPTIONS, _stage7_properties
 
-# Kept in sync with scripts/autoapply.py's STATUS_* constants. "Applying" is included for the
-# spec's transition diagram even though this phase never writes it — adding it now costs
-# nothing and avoids a second manual pass if Phase 3 lands.
-REQUIRED_STATUS_OPTIONS = [
-    "Application Queued",
-    "Applying",
-    "Needs Human: Captcha",
-    "Needs Human: Auth",
-    "Needs Human: Question",
-    "Apply Failed",
-]
+# Single source of truth: the Stage-7 Status options + property specs come from
+# scripts/provision_notion.py (which owns the full tracker schema), so the "create a fresh DB"
+# and "patch an existing DB" paths can never drift apart.
+#
+# "Applying" is included for the spec's transition diagram even though this phase never writes
+# it — adding it now costs nothing and avoids a second manual pass if Phase 3 lands.
+REQUIRED_STATUS_OPTIONS = STAGE7_STATUS_OPTIONS
 
 # Mirrors the keys in utils._EXTRA_TO_NOTION that stage 7 writes. Without these columns those
 # values are silently dropped (each converter only runs when the caller supplies the key), so
 # the stage would "work" while recording nothing.
-REQUIRED_PROPERTIES = {
-    "Apply Channel": {
-        "select": {"options": [{"name": n} for n in
-                               ("greenhouse", "lever", "ashby", "workday",
-                                "linkedin", "indeed", "unknown")]}
-    },
-    "Apply Attempts":      {"number": {"format": "number"}},
-    "Needs Human Reason":  {"rich_text": {}},
-    "Application Log":     {"rich_text": {}},
-}
+REQUIRED_PROPERTIES = _stage7_properties()
 
 
 def missing_status_options(schema: dict) -> list[str]:

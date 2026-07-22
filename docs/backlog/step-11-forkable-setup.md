@@ -1,7 +1,12 @@
 # Step 11 — Forkable setup (one-time `--init` wizard + Notion auto-provisioning)
 
-**Status:** analysis / not started (this doc + full spec at
-[`../refinement-plans/onboarding/forkable-setup.md`](../refinement-plans/onboarding/forkable-setup.md)).
+**Status:** Notion-provisioning half **landed** — `scripts/provision_notion.py` (creates the
+"Careerpilot-ai" page + Job Search Tracker + Job Link Scratch Pad databases with the full schema),
+`python run.py --init` wizard, env-sourced `NOTION_DB_ID` (hardcoded literal removed), and a
+schema-validating `python run.py --setup`. **Still deferred:** `config/profile.json` for
+identity/targets, untracking the personal resume files + `ats_tokens.json`, and genericizing owner
+references across docs/`.claude/*`. (Full spec at
+[`../refinement-plans/onboarding/forkable-setup.md`](../refinement-plans/onboarding/forkable-setup.md).)
 **Priority:** P1 — the repo cannot be forked and run by anyone else today without editing code and
 hand-building a Notion database.
 **Depends on:** existing `config/settings.py` env-loading (`_load_local_env`), the `db_*` /
