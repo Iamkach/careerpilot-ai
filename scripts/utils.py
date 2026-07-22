@@ -684,6 +684,48 @@ def archive_scratch_note_entry(page_id: str):
         log(f"[archive_scratch_note_entry] warning: {e}")
 
 
+def get_restricted_companies_from_notion() -> list[str]:
+    """Return every row's title text from the restricted-sponsorship-companies Notion
+    database (NOTION_RESTRICTED_COMPANIES_PAGE_ID) — one company name per row, found by
+    title-property type rather than name, same as get_scratch_note_entries(). Unlike the
+    scratch-note database, rows here are never archived — this is a standing reference list
+    the user edits directly in Notion, not a processing queue. Returns [] if the setting is
+    unset (feature disabled, no-op) or on any read failure."""
+    if not NOTION_RESTRICTED_COMPANIES_PAGE_ID:
+        return []
+    try:
+        names, cursor = [], None
+        while True:
+            kwargs = {"database_id": NOTION_RESTRICTED_COMPANIES_PAGE_ID}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().databases.query(**kwargs)
+            for page in res.get("results", []):
+                title_prop = next(
+                    (p for p in page.get("properties", {}).values() if p.get("type") == "title"),
+                    None,
+                )
+                name = _notion_plain_text(title_prop).strip() if title_prop else ""
+                if name:
+                    names.append(name)
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return names
+    except Exception as e:
+        log(f"[get_restricted_companies_from_notion] warning: {e}")
+        return []
+
+
+def get_restricted_sponsorship_companies() -> list[str]:
+    """Merge the hardcoded RESTRICTED_SPONSORSHIP_COMPANIES fallback/escape-hatch list with
+    the Notion-sourced restricted-companies database — the single call site stage 1's
+    silent-drop filter and stage 2's Human Review defense-in-depth gate both use, so the two
+    sources are always merged consistently."""
+    return list(RESTRICTED_SPONSORSHIP_COMPANIES) + get_restricted_companies_from_notion()
+
+
 def db_add_interested_url(url: str) -> str | None:
     """Create a minimal Status='Interested' Notion row for a URL dropped in the scratch
     note (Job Title left as a placeholder — the existing ingest_interested_from_notion()

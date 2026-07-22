@@ -140,15 +140,21 @@ MAX_APPLICANT_COUNT = 200
 # Jobs that say they sponsor OR are silent on the topic are kept.
 EXCLUDE_NO_SPONSORSHIP = True
 
-# --- Sponsorship gate (stage 2) ------------------------------
-# Product companies known (from your own research/contacts) to sponsor only EXISTING
-# employees (e.g. H-1B transfers), not new external hires -- even when the JD reads as
-# sponsorship-friendly or says nothing. Unlike SKIP_COMPANIES, these are NOT excluded in
-# stage 1 -- still scraped, scored, tracked normally. Stage 2 instead moves a matching
-# "Reviewed" job to "Human Review" instead of tailoring a resume for it. Once you've
-# personally confirmed the company will sponsor a NEW hire, add SPONSORSHIP_CONFIRMED_MARKER
-# to that job's Notion "Notes" field and move Status back to "Reviewed" to release it.
-# Matched using the same word-boundary token matching as SKIP_COMPANIES.
+# --- Sponsorship gate (stage 1 + stage 2) ---------------------
+# Fallback/escape hatch for the restricted-sponsorship company check -- companies known
+# (from your own research/contacts) to sponsor only EXISTING employees (e.g. H-1B
+# transfers), not new external hires -- even when the JD reads as sponsorship-friendly or
+# says nothing. The PRIMARY/expected way to manage this list is the Notion database at
+# NOTION_RESTRICTED_COMPANIES_PAGE_ID above (visual, no redeploy); this hardcoded list is
+# merged (OR'd) with it via get_restricted_sponsorship_companies() in scripts/utils.py, for
+# when Notion is unreachable or before that database exists. Stage 1 drops a matching
+# company silently at scrape time (like SKIP_COMPANIES); stage 2's _sponsorship_gate() also
+# checks the same merged list as defense-in-depth, moving a matching "Reviewed" job to
+# "Human Review" instead of tailoring a resume for it, in case a job reached "Reviewed"
+# before its company was added. Once you've personally confirmed the company will sponsor a
+# NEW hire, add SPONSORSHIP_CONFIRMED_MARKER to that job's Notion "Notes" field and move
+# Status back to "Reviewed" to release it. Matched using the same word-boundary token
+# matching as SKIP_COMPANIES.
 RESTRICTED_SPONSORSHIP_COMPANIES = [
     # e.g. "Example Corp",   # sponsors H-1B transfers only, per recruiter YYYY-MM-DD
 ]
@@ -392,6 +398,18 @@ NOTION_DB_ID      = os.environ.get("NOTION_DB_ID", "")   # Job Search Tracker
 # -- if unset, ingest_from_scratch_note() is a no-op. Create the database once, share it
 # with the integration, paste its id here.
 NOTION_SCRATCH_PAGE_ID = os.environ.get("NOTION_SCRATCH_PAGE_ID", "")
+
+# --- Notion restricted-sponsorship company list (optional) ---
+# Database id of a small Notion database (a "list" view works well) where each row's title
+# is one company name known to sponsor only existing employees, not new hires -- add/remove
+# entries visually in Notion, no code change or redeploy needed. Primary source for the
+# restricted-company check in scripts/stage1_scrape.py (silent drop, like SKIP_COMPANIES)
+# and scripts/stage2_tailor.py's _sponsorship_gate() (Human Review defense-in-depth for a
+# job that reached "Reviewed" before its company was added). Optional -- if unset,
+# get_restricted_companies_from_notion() returns []; RESTRICTED_SPONSORSHIP_COMPANIES below
+# still applies as a fallback. Create the database once, share it with the integration,
+# paste its id here.
+NOTION_RESTRICTED_COMPANIES_PAGE_ID = os.environ.get("NOTION_RESTRICTED_COMPANIES_PAGE_ID", "")
 
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials
