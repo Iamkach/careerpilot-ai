@@ -49,7 +49,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import (
-    APPLICATION_PROFILE, EEO_RESPONSES, COMMON_QUESTION_PRESETS,
+    APPLICATION_PROFILE, EEO_RESPONSES, COMMON_QUESTION_PRESETS, APPLICATION_ADDRESS,
     AUTOAPPLY_DAILY_CAP, AUTOAPPLY_HEADLESS, APPLICATIONS_DIR,
 )
 from scripts.utils import (
@@ -240,6 +240,18 @@ _LABEL_RULES = [
     (("github",),                                      "github_url"),
     (("portfolio", "personal website"),                "portfolio_url"),
     (("gender", "race", "ethnicity", "veteran", "disability", "self identify"), "__eeo__"),
+    # Structured address — matched on label text, not field name: Greenhouse's `name`
+    # attributes here are opaque/internal, unlike the confirmed-stable first/last/email/phone
+    # names in _FIELD_MAP, but these labels are confirmed from a live fetch (SmithRx job).
+    (("legal first name",),                            "legal_first_name"),
+    (("legal last name",),                              "legal_last_name"),
+    (("address line 1",),                               "address_line1"),
+    (("address line 2",),                               "address_line2"),
+    (("city",),                                         "city"),
+    (("state", "province"),                             "state"),
+    (("country",),                                      "country"),
+    (("zip code", "zip/postal", "postal code"),         "zip_code"),
+    (("address type",),                                 "address_type"),
 ]
 
 _ELIGIBILITY_KEYS = ("work_authorized", "requires_sponsorship")
@@ -328,13 +340,31 @@ def _resolve_field(label: str, field: dict, profile: dict, resume_path: str) -> 
 def build_application_plan(schema: dict, profile: dict = None, resume_path: str = "",
                            schema_known: bool = True) -> dict:
     """Turn a question schema into a per-field application plan."""
-    profile = profile or APPLICATION_PROFILE
+    profile = profile if profile is not None else {**APPLICATION_PROFILE, **APPLICATION_ADDRESS}
     entries = []
     for q in schema.get("questions", []):
         label = q.get("label", "")
         required = bool(q.get("required"))
-        for field in q.get("fields", []):
-            entry = _resolve_field(label, field, profile, resume_path)
+        fields = q.get("fields", [])
+        # Greenhouse emits two field rows for one logical attachment question (an input_file
+        # plus a textarea for pasting the text instead) under the same label. Resolving the
+        # textarea independently would count it as an unresolved free-text question even
+        # though the upload already answers it — mirror the attachment's resolution instead.
+        has_attachment = any(f.get("type") in ("input_file", "attachment") for f in fields)
+        attachment_entry = None
+        for field in fields:
+            ftype = field.get("type", "input_text")
+            if ftype == "textarea" and has_attachment:
+                if attachment_entry is None:
+                    attach_field = next(f for f in fields
+                                        if f.get("type") in ("input_file", "attachment"))
+                    attachment_entry = _resolve_field(label, attach_field, profile, resume_path)
+                entry = dict(attachment_entry)
+                entry["source"] = attachment_entry["source"] + " (dedup: attachment textarea)"
+            else:
+                entry = _resolve_field(label, field, profile, resume_path)
+                if ftype in ("input_file", "attachment"):
+                    attachment_entry = entry
             entry.update({"label": label, "required": required, "name": field.get("name")})
             entries.append(entry)
     return {"title": schema.get("title", ""), "fields": entries, "schema_known": schema_known}

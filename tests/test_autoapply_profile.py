@@ -147,6 +147,56 @@ def test_build_profile_preserves_unasked_existing_keys():
     assert profile["presets"]["custom question"] == "custom answer"
 
 
+def test_build_profile_preserves_unasked_address_keys():
+    existing = {"address": {"address_type": "Mailing"}}
+    profile = build_profile({("profile", "phone"): "555"}, existing)
+    assert profile["address"]["address_type"] == "Mailing"
+
+
+# ── Address section ────────────────────────────────────────────────────────────
+
+def test_wizard_records_address_answers_into_the_address_section():
+    answers = _answers(legal_first_name="Krishna Kumar", city="Austin")
+    profile = run_wizard(input_fn=_feed(answers), existing={})
+    assert profile["address"]["legal_first_name"] == "Krishna Kumar"
+    assert profile["address"]["city"] == "Austin"
+
+
+def test_pressing_enter_keeps_existing_address_answers():
+    existing = {"address": {"legal_first_name": "Krishna", "zip_code": "78701"}}
+    profile = run_wizard(input_fn=_feed(_answers()), existing=existing)
+    assert profile["address"]["legal_first_name"] == "Krishna"
+    assert profile["address"]["zip_code"] == "78701"
+
+
+def test_legal_first_name_is_independent_of_first_name():
+    """The wizard doesn't ask for a resume display name (that's derived from settings.py), but
+    the legal name it does ask for must never be confused with it."""
+    answers = _answers(legal_first_name="Legal Name")
+    profile = run_wizard(input_fn=_feed(answers), existing={})
+    assert profile["address"]["legal_first_name"] == "Legal Name"
+    assert "first_name" not in profile["address"]
+
+
+def test_wizard_asks_for_ethnicity():
+    assert any(key == "ethnicity" for section, key, _p, _k in QUESTIONS if section == "eeo")
+    answers = _answers(ethnicity="Hispanic or Latino")
+    profile = run_wizard(input_fn=_feed(answers), existing={})
+    assert profile["eeo"]["ethnicity"] == "Hispanic or Latino"
+
+
+# ── show() ──────────────────────────────────────────────────────────────────────
+
+def test_show_prints_the_address_section(tmp_path, capsys):
+    path = tmp_path / "p.json"
+    save_profile({"profile": {}, "presets": {}, "eeo": {},
+                 "address": {"city": "Austin"}}, path)
+    ap.show(path)
+    out = capsys.readouterr().out
+    assert "[address]" in out
+    assert "Austin" in out
+
+
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def test_save_and_load_round_trip(tmp_path):
@@ -181,22 +231,25 @@ def test_settings_overlay_applies_saved_answers(tmp_path, monkeypatch):
     profile_defaults = {"phone": "", "work_authorized": None}
     presets_defaults = {"notice period": ""}
     eeo_defaults = {"gender": "Decline To Self Identify"}
+    address_defaults = {"city": ""}
 
     saved = {"profile": {"phone": "555-0100", "work_authorized": True},
              "presets": {"notice period": "2 weeks"},
-             "eeo": {"gender": "Male"}}
+             "eeo": {"gender": "Male"},
+             "address": {"city": "Austin"}}
     path = tmp_path / "application_profile.json"
     path.write_text(json.dumps(saved), encoding="utf-8")
 
     # Mirror _apply_saved_profile()'s merge against local dicts.
     for section, target in (("profile", profile_defaults), ("presets", presets_defaults),
-                            ("eeo", eeo_defaults)):
+                            ("eeo", eeo_defaults), ("address", address_defaults)):
         target.update(json.loads(path.read_text(encoding="utf-8"))[section])
 
     assert profile_defaults["phone"] == "555-0100"
     assert profile_defaults["work_authorized"] is True
     assert presets_defaults["notice period"] == "2 weeks"
     assert eeo_defaults["gender"] == "Male"
+    assert address_defaults["city"] == "Austin"
 
 
 # ── Stage 7 --dry-run ─────────────────────────────────────────────────────────
