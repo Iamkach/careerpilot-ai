@@ -33,38 +33,14 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   scrape API (Option C) as a no-new-infra alternative to B remains deferred — only worth adding
   if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
   runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
-- ~~**Known gaps characterized (not fixed) by the Step 9 test suite**~~ — fixed:
-  `score_jobs_batch` now clamps `int(entry.get("score", 0))` to `[0, 100]`
-  (`scripts/stage1_scrape.py`); stage 3's `_draft_cold_email_single` fallback now reuses
-  `parse_json_response` instead of ad-hoc `str.strip()` fence-trimming, so it recovers JSON from
-  a prose-wrapped response like every other AI-parsing path; the stage 5/6 markdown→HTML
-  converters now wrap consecutive `<li>` lines in `<ul>`/`</ul>` via the shared
-  `scripts/utils.wrap_consecutive_li()`; `stage6_negotiate.py`'s module docstring no longer
-  claims "Claude + web search" — it now says comp numbers come from the model's training
-  knowledge only and can go stale, pointing at `scripts/run_evals.py --comp-check` as the manual
-  spot-check.
 
 ## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
 
 These surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
 actioned in commit `7d460ba`, which fixed the other ten findings. **Update 2026-07-21:** the
-`run.py` traceback item below is now **fixed**; `_prop_number()` is now **fixed** too (nullable
-`_prop_number_opt` reader); the `tests.yml` CI item is **still open** and needs a human with repo
-Settings access — it is not a code change.
-
-- ~~**`_prop_number()` conflates "absent" with a real `0`** (`scripts/utils.py`)~~ — fixed
-  (2026-07-21). Added `_prop_number_opt()`, a nullable reader that returns `None` for an absent
-  property and the real number (including a genuine `0`) otherwise, used **only** for
-  `ATS Match Score` in `_page_to_job()` and `db_get_all_jobs()`. `_prop_number` is unchanged and
-  still backs the counter properties (`Scoring Attempts` / `Enrichment Attempts` / `Applicant
-  Count` / `Apply Attempts`), where `0` is the correct default for their `(x or 0) + 1`
-  increments. The score consumers in `stage4_digest.py` (and the cosmetic display fallbacks in
-  `stage3_outreach.py`) were hardened from `.get("ats"/"ats_score", 0)` to `... or 0` so an
-  unscored `None` can't `int(None)`-crash the digest. **No behavior change in practice** —
-  `MIN_ATS_SCORE = 30` already drops any 0-score job before it's written, so no row was ever
-  stored at a legitimate `0`; this closes the contract contradiction and future-proofs the read
-  path (e.g. if `MIN_ATS_SCORE` were ever lowered to 0). Covered by new `tests/test_utils.py`
-  cases (`_prop_number_opt` absent→None / real-0→0, `_page_to_job` unscored→None / 0→0).
+`run.py` traceback item and `_prop_number()` item are now fixed (see `docs/CHANGELOG.md`); the
+`tests.yml` CI item is **still open** and needs a human with repo Settings access — it is not a
+code change.
 
 - **`tests.yml` has never actually run** — every Actions run on `feature/god-speed` is
   `startup_failure` at 0s with no job name (runs `29711371199` pull_request, `29711381997`
@@ -76,18 +52,6 @@ Settings access — it is not a code change.
   and the local `pytest` run is the only evidence the suite passes.
   **Needs a human with repo settings access:** check Settings → Actions and the billing page.
   Separately, decide whether to remove the Supabase integration.
-
-- ~~**Other `run.py` routines still traceback on a failed Notion read**~~ — **fixed
-  (2026-07-21):** `_query_db()` — the single funnel every reader goes through — now raises a
-  typed `NotionReadError` (a `RuntimeError` subclass, in `scripts/utils.py`) on a failed read,
-  so even the previously-unguarded readers (`db_get_jobs`, `db_get_ready_to_apply`) surface it.
-  `run.py`'s `main()` catches `NotionReadError` once around the whole dispatch → clean
-  "could not read the Notion tracker" message + `sys.exit(1)` for **every** entry point
-  (`--retry-only`, `--evaluate`, `--stage 2/3/4`, morning). The catch is typed on purpose: the
-  unrelated `RuntimeError`s from Apify (`scripts/sources.py`), provider/CLI setup, and stage 5
-  are deliberately left to their existing behavior rather than mislabeled as a tracker read
-  failure. Tests: `tests/test_run_notion_read_failure.py` + the `_query_db`/`db_get_jobs`/
-  `db_get_ready_to_apply` contract cases in `tests/test_utils_read_failure_contract.py`.
 
 ## Step 7 — Communications subsystem (not started)
 
