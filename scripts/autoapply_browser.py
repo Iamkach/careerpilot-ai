@@ -100,8 +100,9 @@ def _find(page, field):
 
 
 def _accepts_docx(loc) -> bool:
-    """Whether a file input will take a .docx. Stage 2 only produces .docx and this repo has no
-    docx→PDF converter, so a PDF-only form is a genuine stop rather than something to force."""
+    """Whether a file input will take a .docx. Stage 2 only produces .docx directly; a form
+    that rejects it falls back to convert_docx_to_pdf() (see _resolve_upload_path) before
+    this becomes a genuine stop."""
     try:
         accept = (loc.get_attribute("accept") or "").lower()
     except Exception:
@@ -109,6 +110,17 @@ def _accepts_docx(loc) -> bool:
     if not accept:
         return True
     return ".docx" in accept or ".doc" in accept or "word" in accept or "*" in accept
+
+
+def _resolve_upload_path(loc, docx_path: str) -> str | None:
+    """Return the file to actually upload for a resume field: the .docx as-is if the form
+    takes it, else a converted .pdf via LibreOffice if that succeeds, else None (genuine
+    pdf_only stop). Never raises — a missing/failing LibreOffice degrades exactly like a
+    form that only ever accepted .docx."""
+    if _accepts_docx(loc):
+        return docx_path
+    from scripts.render_docx import convert_docx_to_pdf
+    return convert_docx_to_pdf(docx_path)
 
 
 def _classify_block(page) -> tuple[str, str] | None:
@@ -168,13 +180,15 @@ def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
                         continue
                     try:
                         if field["type"] in ("input_file", "attachment"):
-                            if not _accepts_docx(loc):
+                            upload_path = _resolve_upload_path(loc, str(field["value"]))
+                            if upload_path is None:
                                 return _result(
                                     False, "pdf_only",
-                                    "this form rejects .docx and stage 2 only produces .docx — "
-                                    "convert the resume by hand and apply from the answer sheet",
+                                    "this form rejects .docx, and no PDF converter (LibreOffice) "
+                                    "is installed to produce one — convert the resume by hand "
+                                    "and apply from the answer sheet",
                                     filled, "")
-                            loc.set_input_files(str(field["value"]))
+                            loc.set_input_files(upload_path)
                         elif field["type"] == "multi_value_single_select":
                             val = field["value"]
                             loc.select_option(label="Yes" if val is True else

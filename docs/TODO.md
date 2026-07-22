@@ -101,9 +101,16 @@ irreducibly a browser problem.
   the tracker currently holds only **one** Greenhouse row (413 LinkedIn / 90 Indeed / 4 unknown
   of 508), both of which are manual-only — so weighting `ENABLED_SOURCES` toward ATS boards is a
   prerequisite for Stage 7 to matter at volume.
-- **No docx→PDF conversion.** Stage 2 emits `.docx` only, and a converter needs LibreOffice or
-  Word. A PDF-only upload field currently stops as `pdf_only` and asks the human to convert.
-  Only worth building if PDF-only forms turn out to be common in practice.
+- **docx→PDF conversion — closed (2026-07-21).** `scripts/render_docx.py` gained
+  `convert_docx_to_pdf()`, shelling out to a headless LibreOffice (`soffice --headless
+  --convert-to pdf`) to produce a PDF copy of the tailored resume. `autoapply_browser.py`'s
+  `_resolve_upload_path()` calls it only when `_accepts_docx()` says the form's file input
+  rejects `.docx`; if LibreOffice isn't installed or the conversion fails, it degrades to the
+  original `pdf_only` stop (never raises — same optional-dependency contract as
+  `sources._headless_fetch()`). LibreOffice is a system install, not a pip package, so nothing
+  changes for an environment that doesn't have `soffice`/`libreoffice` on PATH. Untested against
+  a live PDF-only form (none seen yet in the tracker); unit-tested with a mocked `subprocess.run`
+  in `tests/test_render_docx.py` and `tests/test_autoapply_browser_pdf_fallback.py`.
 - **Phase 3 (deliberate submit) deferred by choice** pending real use of the fill path. The
   research argues against rushing it: ATSes now score application velocity and flag high-volume
   submitters as low-intent before a human reads the application, so the marginal value of
