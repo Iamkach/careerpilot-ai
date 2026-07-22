@@ -81,7 +81,7 @@ def _upsert_env(path: Path, key: str, value: str) -> None:
 
 def init_wizard():
     """Interactive fork onboarding: capture Notion connection details, provision the Notion
-    page + both databases, and persist the new ids to a git-ignored .env.
+    page + all three databases, and persist the new ids to a git-ignored .env.
 
     Idempotent and re-runnable. Non-interactive fallback: hand-edit .env and run
     `python scripts/provision_notion.py --parent-page <id>` directly.
@@ -120,7 +120,7 @@ def init_wizard():
             check_setup()
             return 0
 
-    print("\nProvisioning creates a 'Careerpilot-ai' page with two databases under a page you")
+    print("\nProvisioning creates a 'Careerpilot-ai' page with three databases under a page you")
     print("choose. First share that page with your integration (open the page → ••• →")
     print("'Connections' → add your integration), then paste its share link below")
     print("(open the page → ••• → 'Copy link'). A raw page id works too.")
@@ -131,7 +131,7 @@ def init_wizard():
 
     try:
         from scripts.provision_notion import provision
-        tracker_id, scratch_id = provision(parent)
+        tracker_id, scratch_id, restricted_id = provision(parent)
     except Exception as e:
         print(f"\n✗ Provisioning failed ({e}).")
         print("  Check the token and that the parent page is shared with the integration, then re-run.")
@@ -139,7 +139,9 @@ def init_wizard():
 
     _upsert_env(env_path, "NOTION_DB_ID", tracker_id)
     _upsert_env(env_path, "NOTION_SCRATCH_PAGE_ID", scratch_id)
-    print(f"\n✓ Wrote NOTION_DB_ID and NOTION_SCRATCH_PAGE_ID to {env_path.name}")
+    _upsert_env(env_path, "NOTION_RESTRICTED_COMPANIES_PAGE_ID", restricted_id)
+    print(f"\n✓ Wrote NOTION_DB_ID, NOTION_SCRATCH_PAGE_ID, and "
+          f"NOTION_RESTRICTED_COMPANIES_PAGE_ID to {env_path.name}")
 
     print("\nRunning a setup check…\n")
     check_setup()

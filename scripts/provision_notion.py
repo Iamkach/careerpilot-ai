@@ -3,15 +3,18 @@
 provision_notion.py — create a fork's Notion workspace from scratch.
 
 WHY THIS EXISTS
-    The pipeline is Notion-first: every stage reads/writes a "Job Search Tracker" database, and
-    the optional mobile intake reads a "Job Link Scratch Pad" database. The author's databases
-    already exist; a *fork* has nothing. `setup_notion_schema.py` can only *patch* an existing
-    DB (databases.update) — it cannot create one. This module does the create half:
+    The pipeline is Notion-first: every stage reads/writes a "Job Search Tracker" database, the
+    optional mobile intake reads a "Job Link Scratch Pad" database, and the optional
+    restricted-sponsorship company filter reads a "Restricted Sponsorship Companies" database.
+    The author's databases already exist; a *fork* has nothing. `setup_notion_schema.py` can
+    only *patch* an existing DB (databases.update) — it cannot create one. This module does the
+    create half:
 
         parent page you shared with your integration
-          └── "Careerpilot-ai"            (a page we create under it)
-                ├── "Job Search Tracker"  (databases.create — full schema, all Status options)
-                └── "Job Link Scratch Pad" (databases.create — a single URL/title column)
+          └── "Careerpilot-ai"                        (a page we create under it)
+                ├── "Job Search Tracker"                (databases.create — full schema, all Status options)
+                ├── "Job Link Scratch Pad"               (databases.create — a single URL/title column)
+                └── "Restricted Sponsorship Companies"   (databases.create — a single company-name/title column)
 
     Defining every Status select option at *create* time sidesteps the API quirk that
     `pages.update` silently ignores a Status the select doesn't already offer — `databases.create`
@@ -106,6 +109,11 @@ TRACKER_PROPERTIES: dict = {
 # whichever property is the title, so the name is cosmetic — do NOT replicate Notion's default
 # "Question 1/Question 2/Respondent" template columns the live pad still carries.
 SCRATCH_PROPERTIES: dict = {"Job URL": {"title": {}}}
+
+# Same one-column shape as the scratch pad, holding a restricted company name instead of a URL.
+# get_restricted_companies_from_notion() reads whichever property is the title, so the name is
+# cosmetic here too.
+RESTRICTED_COMPANIES_PROPERTIES: dict = {"Company": {"title": {}}}
 
 
 def _stage7_properties() -> dict:
@@ -202,12 +210,13 @@ def _create_database(notion, page_id: str, title: str, properties: dict) -> str:
     return db["id"]
 
 
-def provision(parent_page_id: str, notion=None) -> tuple[str, str]:
-    """Create the 'Careerpilot-ai' page + both databases under `parent_page_id`.
+def provision(parent_page_id: str, notion=None) -> tuple[str, str, str]:
+    """Create the 'Careerpilot-ai' page + all three databases under `parent_page_id`.
 
     `parent_page_id` is a page the forker has shared with their integration — either a raw id or
     a full Notion share link (a "Copy link" URL), which is normalized here. Returns
-    (tracker_db_id, scratch_db_id). Both new DBs inherit access from that shared parent.
+    (tracker_db_id, scratch_db_id, restricted_companies_db_id). All new DBs inherit access from
+    that shared parent.
     """
     notion = notion or _client()
     parent_page_id = normalize_page_id(parent_page_id)
@@ -225,14 +234,21 @@ def provision(parent_page_id: str, notion=None) -> tuple[str, str]:
     log("Creating the 'Job Link Scratch Pad' database…")
     scratch_id = _create_database(notion, page_id, "Job Link Scratch Pad", SCRATCH_PROPERTIES)
 
-    log(f"✓ Provisioned. Tracker DB: {tracker_id}  |  Scratch DB: {scratch_id}")
-    return tracker_id, scratch_id
+    log("Creating the 'Restricted Sponsorship Companies' database…")
+    restricted_id = _create_database(
+        notion, page_id, "Restricted Sponsorship Companies", RESTRICTED_COMPANIES_PROPERTIES
+    )
+
+    log(f"✓ Provisioned. Tracker DB: {tracker_id}  |  Scratch DB: {scratch_id}  |  "
+        f"Restricted Companies DB: {restricted_id}")
+    return tracker_id, scratch_id, restricted_id
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Create the Careerpilot-ai Notion page + Job Search Tracker + Job Link "
-                    "Scratch Pad databases under a page you've shared with your integration.")
+                    "Scratch Pad + Restricted Sponsorship Companies databases under a page "
+                    "you've shared with your integration.")
     ap.add_argument("--parent-page", required=True, dest="parent_page",
                     help="Notion page share link (or raw id) you've shared with your integration; "
                          "the new 'Careerpilot-ai' page + databases are created under it.")
@@ -242,7 +258,7 @@ def main(argv=None) -> int:
         log("✗ NOTION_API_KEY is not set. Add it to your .env and re-run.")
         return 1
     try:
-        tracker_id, scratch_id = provision(args.parent_page)
+        tracker_id, scratch_id, restricted_id = provision(args.parent_page)
     except Exception as e:
         log(f"✗ Provisioning failed ({e}).")
         log("  Check NOTION_API_KEY and that the parent page is shared with the integration.")
@@ -251,6 +267,7 @@ def main(argv=None) -> int:
     log("\nAdd these to your .env (or let `python run.py --init` do it):")
     log(f"  NOTION_DB_ID={tracker_id}")
     log(f"  NOTION_SCRATCH_PAGE_ID={scratch_id}")
+    log(f"  NOTION_RESTRICTED_COMPANIES_PAGE_ID={restricted_id}")
     return 0
 
 
