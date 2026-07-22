@@ -222,6 +222,22 @@ APPLICATION_PROFILE = {
     "requires_sponsorship": True,
 }
 
+# Structured mailing address. Split out from APPLICATION_PROFILE's freeform `location` because
+# real ATS forms (confirmed live on Greenhouse) ask these as discrete fields, not one string.
+# The legal name here may differ from APPLICATION_PROFILE's first_name/last_name (a resume/
+# outreach display name) — this is the name as it appears on government ID.
+APPLICATION_ADDRESS = {
+    "legal_first_name": "",
+    "legal_last_name":  "",
+    "address_line1":    "",
+    "address_line2":    "",
+    "city":              "",
+    "state":             "",
+    "country":           "",
+    "zip_code":          "",
+    "address_type":      "",
+}
+
 # EEO / demographic presets. Per spec §7 these default to declining rather than being guessed —
 # never let a model infer a protected attribute. Edit any value to a real answer if you prefer to
 # disclose; the exact string must match one of the form's offered options to be selectable.
@@ -273,7 +289,8 @@ def _apply_saved_profile():
         return
     for section, target in (("profile", APPLICATION_PROFILE),
                             ("presets", COMMON_QUESTION_PRESETS),
-                            ("eeo", EEO_RESPONSES)):
+                            ("eeo", EEO_RESPONSES),
+                            ("address", APPLICATION_ADDRESS)):
         values = saved.get(section)
         if isinstance(values, dict):
             target.update(values)

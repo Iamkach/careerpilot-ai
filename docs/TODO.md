@@ -76,22 +76,31 @@ irreducibly a browser problem.
 
 **Open residual gaps:**
 
-- **Live schema fetch validated once; fill path still not run live, and mapping gaps found.**
-  The Greenhouse `?questions=true` fetch was run for the first time against a real tracker job
-  (SmithRx, "Senior Staff Automation Engineer") and **worked** — 25 fields returned and mapped,
-  confirming the core Phase-1 read premise on a live board. But it surfaced real mapping gaps not
-  yet closed: (a) the whole structured-address block is unmapped (`Legal First/Last Name`,
-  `Address Line 1/2`, `City`, `State`, `Country`, `Zip Code`, `Address Type`) because
-  `APPLICATION_PROFILE` has only a freeform `location` and `_FIELD_MAP` keys on field *name*;
-  (b) Greenhouse emits **two rows per attachment question** (an `input_file` and a textarea), so
-  the planner double-counts "Resume/CV" / "Cover Letter" and blocks on the text copy even once the
-  upload is satisfied. Result on that job: only 5/25 fields `ready`, 17 required blockers, ~10 of
-  which are these two bugs rather than genuine human judgment. **The Layer-2 fill path has still
-  never run against a live form** (only the bundled sample and a local `file://` fixture). Highest-
-  value next checks: fix the address/attachment mapping, then exercise the fill path on one real
-  Greenhouse job. Note the tracker currently holds only **one** Greenhouse row (413 LinkedIn / 90
-  Indeed / 4 unknown of 508), both of which are manual-only — so weighting `ENABLED_SOURCES`
-  toward ATS boards is a prerequisite for Stage 7 to matter at volume.
+- **Live schema fetch validated once; address/attachment mapping gaps closed (2026-07-21); fill
+  path still not run live.** The Greenhouse `?questions=true` fetch was run for the first time
+  against a real tracker job (SmithRx, "Senior Staff Automation Engineer") and **worked** — 25
+  fields returned and mapped, confirming the core Phase-1 read premise on a live board. It
+  surfaced two mapping gaps, both now fixed: (a) the structured-address block (`Legal First/Last
+  Name`, `Address Line 1/2`, `City`, `State`, `Country`, `Zip Code`, `Address Type`) is now
+  captured by a new `"address"` section in the `run.py --setup-profile` wizard, persisted to
+  `config/application_profile.json` alongside the existing sections, exposed as
+  `APPLICATION_ADDRESS` in `config/settings.py`, and matched via new `_LABEL_RULES` keyword
+  entries in `scripts/autoapply.py` (label text, not field `name` — Greenhouse's `name`
+  attributes for these fields are opaque, unlike the confirmed-stable `first_name`/`last_name`/
+  `email`/`phone` in `_FIELD_MAP`); legal name is deliberately independent of the resume/outreach
+  display name, since a candidate's legal and preferred names can differ. (b) The dual-field
+  attachment quirk (Greenhouse emits an `input_file` + a `textarea` under one label, e.g.
+  "Resume/CV") is fixed in `build_application_plan()`: the `textarea` sibling of an already-
+  resolved attachment field now mirrors that field's resolution instead of being independently
+  evaluated as an unresolved free-text question, order-independent (works whichever field is
+  listed first). Covered by new tests in `tests/test_autoapply_profile.py` and
+  `tests/test_autoapply_plan.py` (388 passed). **The Layer-2 fill path has still never run
+  against a live form** (only the bundled sample and a local `file://` fixture) — re-running the
+  plan against the SmithRx job (or another live Greenhouse posting) to confirm the blocker count
+  actually drops is the natural next validation step, then exercising the fill path itself. Note
+  the tracker currently holds only **one** Greenhouse row (413 LinkedIn / 90 Indeed / 4 unknown
+  of 508), both of which are manual-only — so weighting `ENABLED_SOURCES` toward ATS boards is a
+  prerequisite for Stage 7 to matter at volume.
 - **No docx→PDF conversion.** Stage 2 emits `.docx` only, and a converter needs LibreOffice or
   Word. A PDF-only upload field currently stops as `pdf_only` and asks the human to convert.
   Only worth building if PDF-only forms turn out to be common in practice.

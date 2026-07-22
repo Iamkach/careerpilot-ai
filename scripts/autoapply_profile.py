@@ -60,6 +60,19 @@ QUESTIONS = [
     ("profile", "requires_sponsorship",
      "Will you now or in the future require visa sponsorship?", "yesno"),
 
+    # Legal name/address as it appears on your ID — some ATS forms (confirmed live on
+    # Greenhouse) ask this separately from the resume/outreach display name above, and it may
+    # differ (e.g. a preferred first name vs. a legal one), so these are kept independent.
+    ("address", "legal_first_name", "Legal first name (as on your ID/paycheck)", "text"),
+    ("address", "legal_last_name", "Legal last name (as on your ID/paycheck)", "text"),
+    ("address", "address_line1", "Street address, line 1", "text"),
+    ("address", "address_line2", "Street address, line 2 (apt/suite — blank to skip)", "text"),
+    ("address", "city", "City", "text"),
+    ("address", "state", "State/Province", "text"),
+    ("address", "country", "Country", "text"),
+    ("address", "zip_code", "ZIP/Postal code", "text"),
+    ("address", "address_type", "Address type (e.g. 'Home', 'Mailing')", "text"),
+
     ("presets", "years of experience", "Total years of professional experience", "text"),
     ("presets", "salary expectation", "Salary expectation (e.g. '180000' or 'Negotiable')", "text"),
     ("presets", "notice period", "Notice period (e.g. '2 weeks', 'Immediate')", "text"),
@@ -69,6 +82,7 @@ QUESTIONS = [
 
     ("eeo", "gender", "EEO — gender", "text"),
     ("eeo", "race", "EEO — race", "text"),
+    ("eeo", "ethnicity", "EEO — ethnicity", "text"),
     ("eeo", "veteran", "EEO — veteran status", "text"),
     ("eeo", "disability", "EEO — disability status", "text"),
 ]
@@ -125,7 +139,7 @@ def _parse_yesno(raw: str, current):
 
 def build_profile(answers: dict, existing: dict | None = None) -> dict:
     """Merge a flat {(section, key): value} answer map into the saved-profile shape."""
-    out = {"profile": {}, "presets": {}, "eeo": {}}
+    out = {"profile": {}, "presets": {}, "eeo": {}, "address": {}}
     for section in out:
         out[section] = dict((existing or {}).get(section, {}))
     for (section, key), value in answers.items():
@@ -145,13 +159,14 @@ def effective_defaults() -> dict:
     """
     try:
         from config.settings import (
-            APPLICATION_PROFILE, COMMON_QUESTION_PRESETS, EEO_RESPONSES,
+            APPLICATION_PROFILE, COMMON_QUESTION_PRESETS, EEO_RESPONSES, APPLICATION_ADDRESS,
         )
     except Exception:
-        return {"profile": {}, "presets": {}, "eeo": {}}
+        return {"profile": {}, "presets": {}, "eeo": {}, "address": {}}
     return {"profile": dict(APPLICATION_PROFILE),
             "presets": dict(COMMON_QUESTION_PRESETS),
-            "eeo": dict(EEO_RESPONSES)}
+            "eeo": dict(EEO_RESPONSES),
+            "address": dict(APPLICATION_ADDRESS)}
 
 
 def run_wizard(input_fn=input, existing: dict | None = None) -> dict:
@@ -197,7 +212,7 @@ def show(path: Path = PROFILE_PATH) -> int:
         say(f"No saved profile at {path}. Run `python run.py --setup-profile` to create one.")
         return 1
     say(f"\nSaved profile — {path}\n")
-    for section in ("profile", "presets", "eeo"):
+    for section in ("profile", "address", "presets", "eeo"):
         if not data.get(section):
             continue
         say(f"  [{section}]")
@@ -228,7 +243,8 @@ def main(argv=None) -> int:
     say("  This file is git-ignored. Re-run this command any time to change an answer,")
     say("  or edit the JSON directly. Stage 7 picks it up on the next run.")
 
-    unset = [k for k, v in profile.get("profile", {}).items() if v in (None, "")]
+    unset = [k for section in ("profile", "address")
+             for k, v in profile.get(section, {}).items() if v in (None, "")]
     if unset:
         say(f"\n  Still unset (you'll be asked by hand for these): {', '.join(unset)}")
     return 0

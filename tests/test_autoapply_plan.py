@@ -142,6 +142,89 @@ def test_unmapped_field_is_never_guessed():
     assert plan["fields"][0]["source"] == "unmapped"
 
 
+# ── Structured address block ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("label,pkey,value", [
+    ("Legal First Name", "legal_first_name", "Krishna"),
+    ("Legal Last Name", "legal_last_name", "Achyuth"),
+    ("Address Line 1", "address_line1", "123 Main St"),
+    ("Address Line 2", "address_line2", "Apt 4B"),
+    ("City", "city", "Austin"),
+    ("State", "state", "TX"),
+    ("Country", "country", "United States"),
+    ("Zip Code", "zip_code", "78701"),
+    ("Address Type", "address_type", "Home"),
+])
+def test_address_labels_resolve_from_the_address_profile(label, pkey, value):
+    profile = {pkey: value}
+    plan = build_application_plan(_labelled(label, required=True), profile=profile)
+    field = plan["fields"][0]
+    assert field["status"] == "ready"
+    assert field["value"] == value
+    assert f"profile.{pkey}" in field["source"]
+
+
+def test_blank_address_field_is_review_required():
+    plan = build_application_plan(_labelled("City"), profile={"city": ""})
+    assert plan["fields"][0]["status"] == "review_required"
+
+
+def test_legal_first_name_does_not_fall_back_to_first_name():
+    """Legal name (ID) and the resume/outreach display name are independent facts — a wizard
+    answer for one must never silently satisfy the other."""
+    profile = {"first_name": "Kach", "legal_first_name": ""}
+    plan = build_application_plan(_labelled("Legal First Name"), profile=profile)
+    assert plan["fields"][0]["status"] == "review_required"
+
+
+# ── Attachment dual-row dedupe ─────────────────────────────────────────────────
+
+def _dual_attachment_schema(label="Resume/CV", required=True, order=("input_file", "textarea")):
+    fields = []
+    for ftype in order:
+        name = "resume" if ftype == "input_file" else "resume_text"
+        fields.append({"name": name, "type": ftype})
+    return {"questions": [{"label": label, "required": required, "fields": fields}]}
+
+
+def test_attachment_textarea_sibling_mirrors_the_upload_status(tmp_path):
+    resume = tmp_path / "r.docx"
+    resume.write_text("resume")
+    plan = build_application_plan(_dual_attachment_schema(), resume_path=str(resume))
+    assert len(plan["fields"]) == 2
+    upload, textarea = plan["fields"][0], plan["fields"][1]
+    assert upload["status"] == "ready"
+    assert textarea["status"] == "ready"
+    assert textarea["value"] == upload["value"]
+    assert "dedup" in textarea["source"]
+
+
+def test_attachment_textarea_sibling_blocks_when_resume_is_missing(tmp_path):
+    """The dedup must mirror the real state, not always say ready — a missing resume must
+    still block via either row."""
+    plan = build_application_plan(_dual_attachment_schema(), resume_path="")
+    assert all(f["status"] == "review_required" for f in plan["fields"])
+
+
+def test_attachment_order_independence(tmp_path):
+    """Dedup must not depend on input_file being listed before the textarea."""
+    resume = tmp_path / "r.docx"
+    resume.write_text("resume")
+    schema = _dual_attachment_schema(label="Cover Letter", order=("textarea", "input_file"))
+    plan = build_application_plan(schema, resume_path=str(resume))
+    assert all(f["status"] == "ready" for f in plan["fields"])
+
+
+def test_dedup_fix_removes_a_spurious_blocker(tmp_path):
+    """Direct regression for the TODO's reported symptom: a satisfied resume upload must not
+    still count as a blocking required field via its textarea sibling."""
+    resume = tmp_path / "r.docx"
+    resume.write_text("resume")
+    plan = build_application_plan(_dual_attachment_schema(), resume_path=str(resume))
+    rpt = readiness_report(plan)
+    assert rpt["counts"]["blocking"] == 0
+
+
 # ── Readiness verdict ─────────────────────────────────────────────────────────
 
 def test_blocking_required_field_forces_needs_human():
