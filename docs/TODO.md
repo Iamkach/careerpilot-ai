@@ -117,6 +117,12 @@ irreducibly a browser problem.
   automating the final click is lower than it looks.
 - **Phase 4 (Workday/agentic long tail) not started.** Workday runs a separate tenant per
   company and its resume parser fails ~30% of the time; account provisioning is the real cost.
+  **Related, written down 2026-07-21:** `FILLABLE_CHANNELS = {"greenhouse", "lever"}` is the only
+  gate Layer 2 checks — Ashby, Workday, and any custom company careers page (`unknown` channel,
+  e.g. a site like Netflix's own) get Layer 1's answer sheet only, never a browser fill, today.
+  LinkedIn/Indeed are excluded *by rule* (ToS/detection) and are out of scope for this; Ashby/
+  Workday/custom are just not built yet. Deferred — not queued, see trigger criteria — in
+  `docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md`.
 - **Schema migration must be run once** before stage 7 can transition anything:
   `python scripts/setup_notion_schema.py --apply` adds the six new `Status` options and the four
   new properties. (`databases.update` can extend the schema even though `pages.update` silently
