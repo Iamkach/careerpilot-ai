@@ -23,5 +23,6 @@ Two plans remain and still describe unimplemented work. Open scope is tracked in
 | Plan | Status | Covers |
 |---|---|---|
 | [`communications/communications-subsystem.md`](communications/communications-subsystem.md) | not started | Stages 7-8: LinkedIn leads + Hunter-verified cold email (Step 7) |
-| [`onboarding/forkable-setup.md`](onboarding/forkable-setup.md) | not started | One-time `--init` wizard, `config/profile.json`, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning (Step 11) |
+| [`onboarding/forkable-setup.md`](onboarding/forkable-setup.md) | Notion half landed | ✅ `--init` wizard + `scripts/provision_notion.py` (page + both DBs) + env-sourced `NOTION_DB_ID` + hardened `--setup`. ⏳ Still deferred: `config/profile.json` identity/targets, untracking personal resume files, genericizing owner references (Step 11) |
 | [`sourcing/career-site-enrichment-fallback.md`](sourcing/career-site-enrichment-fallback.md) | deferred — not queued, see trigger criteria | `generic_url_fetch()` gaps: no structured fields, JS-rendered SPAs return near-empty, no retry ceiling |
+| [`auto-apply/ashby-workday-custom-fill.md`](auto-apply/ashby-workday-custom-fill.md) | deferred — not queued, see trigger criteria | Stage 7 Layer 2 browser fill only covers Greenhouse/Lever; Ashby/Workday/custom careers sites get an answer sheet only |
