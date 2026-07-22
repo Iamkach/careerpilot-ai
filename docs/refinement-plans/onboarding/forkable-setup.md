@@ -1,66 +1,77 @@
-# Forkable setup — one-time `--init` wizard + Notion auto-provisioning
+# Forkable setup — `--init` wizard, Notion provisioning, de-personalization
 
-*See [`../README.md`](../README.md) for how this plan relates to the others. Baseline: `feature/god-speed`.*
+*See [`../README.md`](../README.md) for how this plan relates to the others.*
 
-> **Status update:** the **Notion-provisioning half is implemented** — sections 2 (now
-> `scripts/provision_notion.py`, which provisions the reorganized *two-database* layout: a
-> "Careerpilot-ai" page holding the Job Search Tracker **and** the Job Link Scratch Pad), 3
-> (`run.py --init` + a schema-validating `check_setup()`), and the `NOTION_DB_ID` env-sourcing in
-> section 1 all landed. The provisioning schema is generated from the **live** data source (25
-> properties / 21 Status options, richer than the "18 / 14" this doc originally listed) and adds
-> `Enrichment Attempts`. **Still open:** section 1's `config/profile.json` identity/targets, section
-> 4 (de-personalize tracked resume files), and the doc genericization in sections 4–5.
+**Status: Phase 1 (Notion) landed · Phase 2 (identity/de-personalization) not started.**
 
-## Context
-
-The repo is hardwired to the original owner, so a fork does not run without reverse-engineering
-several manual steps — and one value silently points at the author's private data.
-
-Two personalization surfaces exist today. **Secrets** are already env-sourced (`.env` locally,
-repo secrets in CI) and need no rework. **Identity/profile and the Notion database** are not:
-
-- **Identity is hardcoded** in `config/settings.py`: `YOUR_NAME` (L26), `YOUR_EMAIL` (L27),
-  `YOUR_BIO` (L28), `TARGET_ROLES` (L31), `TARGET_COMPANIES` (L35),
-  `RESUME_TEMPLATE_PATH` (L190, literally `config/Achyuth_Resume.docx`), and
-  `AI_PROVIDER = "codex"` (L199 — the owner's choice, not the documented `"claude"` default).
-- **`NOTION_DB_ID` (L256) is a hardcoded literal** pointing at the author's own Notion
-  database — the *only* non-env-sourced secret. `run.py --setup`'s check (L97) only confirms the
-  string is non-empty, so a forker passes setup while pointing at a DB they cannot access.
-- **No code creates the Notion database.** A repo-wide search for `databases.create` finds
-  nothing. All `db_*` helpers in `scripts/utils.py` read/write an *existing* DB. The 18 properties
-  and the 14 `Status` select options must be built entirely by hand today.
-- **Personal artifacts are committed**: `config/resume.txt` and `config/Achyuth_Resume.docx` are
-  tracked and hold the owner's real resume. `config/ats_tokens.json` is an owner-seeded cache.
-- Owner name / `Iamkach` GitHub handle / the hardcoded DB id are baked into `README.md`,
-  `SETUP.md`, `.claude/agents/*`, and `code-changes-management/README.md`.
-
-**Goal:** a forker runs one command — `python run.py --init` — that collects their keys and
-profile, provisions their own Notion tracker DB via the API, and writes everything to git-ignored
-config. Every value stays independently settable via `.env` / `config/profile.json` so power users
-and CI keep a non-interactive path (file fallback). After init, `python run.py` just works.
+This plan makes a fork run without reverse-engineering the owner's setup. It splits cleanly in
+two: the **Notion database** half (provisioning + env-sourcing) is done; the **identity/profile**
+half (de-hardcoding the owner and un-tracking personal files) is the remaining work below.
 
 ---
 
-## Design overview
+## Phase 1 — Notion provisioning ✅ landed
 
-Three layers, each usable on its own:
+Commits `3f81018` (code) + `9ddeabb` (docs). What shipped:
 
-1. **`config/profile.json`** (git-ignored) — identity + targets, loaded by `settings.py`.
-   Tracked template `config/profile.example.json`. Secrets stay in `.env` (unchanged).
-2. **`scripts/provision_notion.py`** — creates the tracker DB with the full schema (all
-   properties + all 14 `Status` options defined up front) under a parent page the forker shares
-   with their integration; returns the new DB id. Also exposes a schema validator.
-3. **`python run.py --init`** — interactive wizard orchestrating 1 + 2, writing `.env` +
-   `config/profile.json`. Non-interactive fallback: hand-edit those two files and run the
-   provision script directly.
+- **`scripts/provision_notion.py`** — owns the canonical tracker schema (`STATUS_OPTIONS`,
+  `TRACKER_PROPERTIES`) generated from the **live** data source: **25 properties / 21 Status
+  options** (richer than the "18 / 14" first drafted here; also adds `Enrichment Attempts`).
+  `provision(parent_page_id)` does `pages.create` + three `databases.create` calls, mirroring the
+  reorganized workspace — a **"Careerpilot-ai" page holding the Job Search Tracker, Job Link
+  Scratch Pad, and Restricted Sponsorship Companies databases**. `normalize_page_id()` accepts a
+  share link or a raw id; the `unique_id`
+  `Job ID` column degrades gracefully on an API that rejects it. `validate_schema()` is exposed
+  for `--setup`.
+- **`run.py --init`** — interactive wizard (Notion scope): capture `NOTION_API_KEY`, take one
+  shared parent page, provision, upsert `NOTION_DB_ID` / `NOTION_SCRATCH_PAGE_ID` into `.env`.
+  `check_setup()` now **validates the live schema** instead of null-checking the id.
+- **`config/settings.py` `NOTION_DB_ID`** — env-sourced, hardcoded literal removed.
+- **`scripts/setup_notion_schema.py`** — imports the Stage-7 subset from `provision_notion` so the
+  create/patch paths can't drift.
+- Docs: `README.md`, `SETUP.md`, `.env.example`, `.claude/skills/careerpilot-ai/SKILL.md` (`init`
+  action), `CLAUDE.md`.
+
+### ⚠ Immediate follow-up from Phase 1 — CI only (local already done)
+
+- **Local `.env` — ✅ done.** It already carries `NOTION_DB_ID` (and `NOTION_SCRATCH_PAGE_ID`), so
+  the owner's local runs are unaffected. `python run.py --setup` flags it if ever unset.
+- **CI — ⚠ still open, do before the next nightly.** `_load_local_env()` is a hard no-op under
+  `GITHUB_ACTIONS`, so CI never reads `.env`; it relies solely on the workflow `env:` block, which
+  sets `NOTION_API_KEY` but **not** `NOTION_DB_ID`. The removed hardcoded default used to cover
+  this, so the scheduled run now points at an empty id. Fix:
+  - Add a repo secret `NOTION_DB_ID` (the owner's tracker id `2ac0907e693744698a1c748d37774a07`).
+  - Add `NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}` to `.github/workflows/nightly-pipeline.yml`'s
+    `env:` block. While there, add the also-missing `APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}`
+    (only needed if CI runs the `linkedin`/`indeed` sources).
 
 ---
 
-## Changes
+## Phase 2 — Identity & de-personalization (remaining)
 
-### 1. Profile config (`config/settings.py` + new files)
+**Goal:** no owner identity in tracked source. A forker's name/targets/resume live in git-ignored
+config; the checked-in tree carries only generic placeholders. `--init` grows a profile section so
+the same one command sets identity too.
 
-- **New `config/profile.example.json`** (tracked) — generic placeholder values:
+**Current hardcoded surface** (verified line numbers in `config/settings.py`):
+
+| Value | Line | Current (owner) literal |
+|---|---|---|
+| `YOUR_NAME` | 26 | `"Krishna Achyuth"` |
+| `YOUR_EMAIL` | 27 | `"kachyuth06@gmail.com"` |
+| `YOUR_BIO` | 28 | owner's paragraph |
+| `TARGET_ROLES` | 31 | owner's five roles |
+| `TARGET_COMPANIES` | 35 | owner's five companies |
+| `RESUME_PATH` | 312 | `"config/resume.txt"` (generic path, owner content) |
+| `RESUME_TEMPLATE_PATH` | 317 | `"config/Achyuth_Resume.docx"` (owner filename) |
+| `AI_PROVIDER` | 326 | `"codex"` — owner's choice, not the documented `"claude"` default |
+
+Tracked personal artifacts (confirmed via `git ls-files config/`): `config/resume.txt`,
+`config/Achyuth_Resume.docx`, `config/ats_tokens.json`.
+
+### 2a. Profile config (`config/settings.py` + new files)
+
+- **New `config/profile.example.json`** (tracked, generic placeholders):
   ```json
   {
     "name": "Your Name",
@@ -73,107 +84,85 @@ Three layers, each usable on its own:
     "ai_provider": "claude"
   }
   ```
-- **`config/settings.py`**: add a `_load_profile()` helper mirroring the existing
-  `_load_local_env()` (L9–23) that reads `config/profile.json` if present. Replace the hardcoded
-  literals with `profile.get(...)` values, each keeping a safe generic default:
-  - L26–28 `YOUR_NAME` / `YOUR_EMAIL` / `YOUR_BIO`
-  - L31 `TARGET_ROLES`, L35 `TARGET_COMPANIES`
-  - L185 `RESUME_PATH`, L190 `RESUME_TEMPLATE_PATH` → default `config/resume.docx` (drop the
-    owner filename)
-  - L199 `AI_PROVIDER` → default `"claude"` (matches CLAUDE.md's documented default)
-  - Keep `SKIP_COMPANIES`, `SKIP_COMPANY_KEYWORDS`, and the tuning constants as-is — they are
-    generic, reusable defaults, not identity.
-- **`config/settings.py:256` `NOTION_DB_ID`** → `os.environ.get("NOTION_DB_ID", "")`. Remove the
-  hardcoded literal.
+- **`config/settings.py`:** add a `_load_profile()` helper mirroring `_load_local_env()` (top of
+  file) that reads a git-ignored `config/profile.json` if present (missing/corrupt → `{}`, defaults
+  stand — same contract as `_apply_saved_profile()` already uses for `application_profile.json`).
+  Replace each literal above with `_profile.get(<key>, <generic default>)`. Defaults: drop the
+  owner name/email/bio to the `profile.example.json` placeholders; `RESUME_TEMPLATE_PATH` →
+  `"config/resume.docx"` (no owner filename); `AI_PROVIDER` → `"claude"`.
+  - Keep `SKIP_COMPANIES`, `SKIP_COMPANY_KEYWORDS`, `RESTRICTED_SPONSORSHIP_COMPANIES`, and the
+    tuning constants as-is — generic reusable defaults, not identity.
+  - **Reuse, don't reinvent:** the `application_profile.json` overlay (`_apply_saved_profile()`)
+    is the exact pattern to follow for `profile.json`; consider one shared JSON-overlay helper.
 
-### 2. Notion DB provisioning (`scripts/provision_notion.py` — new)
+### 2b. Extend `--init` with a profile section
 
-- Reuse the client constructor from `scripts/utils.py:349` (`_notion()` /
-  `NotionClient(auth=NOTION_API_KEY)`).
-- `provision(parent_page_id, title="Job Search Tracker") -> new_db_id`: one
-  `notion.databases.create(parent={"page_id": ...}, title=..., properties={...})` call defining the
-  **full schema** from CLAUDE.md's "Notion database schema" section — crucially the `Status` select
-  with **all 14 options listed up front** (Interested, Scraped, Reviewed, Resume Tailored, Applied,
-  Outreach Sent, Interview Scheduled, Offer Received, Retry, Disregard, Blacklist, Archived,
-  Rejected, Human Review). Defining options at create-time sidesteps the documented "Notion API
-  can't add select options on write" limit (which only applies to `pages.update`).
-  Include: `Job Title` (title); `Company`, `Location`, `Hiring Manager`, `Notes`,
-  `Referral Contact`, `Source`, `Salary Range`, `Missing Keywords` (rich_text); `Job URL`,
-  `Tailored Resume Link`, `Hiring Manager LinkedIn` (url); `Date Scraped`, `Posted Date`,
-  `Date Applied` (date); `ATS Match Score`, `Applicant Count`, `Scoring Attempts` (number);
-  `Sponsorship` (select: yes/no/unknown).
-- Runnable standalone: `python scripts/provision_notion.py --parent-page <id>` prints the new DB id
-  (the file-fallback path).
-- **Validation reuse:** expose `validate_schema(db_id) -> list[str]` (missing props / statuses)
-  for `run.py --setup` to replace today's presence-only Notion check.
+- After the Notion steps in `init_wizard()` (`run.py`), prompt (pre-filled from the current
+  effective value, Enter keeps it) for name / email / bio / target roles / target companies /
+  resume paths / AI provider, and write `config/profile.json` (seed from `profile.example.json`
+  if missing). Keep it a **separate, skippable** block so `--init` stays usable for the Notion-only
+  path already shipped.
+- Non-interactive fallback stays: hand-edit `config/profile.json` (+ `.env`) and skip the wizard.
 
-### 3. Setup wizard (`run.py`)
+### 2c. Un-track personal files
 
-- New `--init` flag → `init_wizard()`:
-  1. If `.env` missing, copy `.env.example` → `.env`.
-  2. Prompt (with current-value defaults) for the keys the chosen provider needs plus
-     `NOTION_API_KEY` and `APIFY_API_TOKEN`; upsert into `.env` (preserving comments) and
-     `os.environ`.
-  3. Prompt for profile fields → write `config/profile.json` (seed from `profile.example.json`
-     first if missing).
-  4. Notion DB: if `NOTION_DB_ID` unset, ask for the shared parent page id, call
-     `provision_notion.provision(...)`, persist the returned id to `.env`. Offer to skip if the
-     user already has a DB id.
-  5. Finish by calling the existing `check_setup()` for a green summary.
-- Idempotent / re-runnable (upsert into `.env`, never clobber unrelated lines).
-- **Harden `check_setup()` (L56–141):** swap the presence-only `NOTION_DB_ID` check (L97) for
-  `provision_notion.validate_schema()` when key + id are set; warn clearly if the id is unset
-  ("run `python run.py --init`"). Fix the L22 docstring ("install deps" — it doesn't).
+- `git rm --cached` (keep local): `config/resume.txt`, `config/Achyuth_Resume.docx`,
+  `config/ats_tokens.json`.
+- Add tracked placeholder `config/resume.example.txt`.
+- `.gitignore`: add `config/profile.json`, `config/resume.txt`, `config/Achyuth_Resume.docx` (and
+  any `config/*.docx` resume), `config/ats_tokens.json`. (`config/application_profile.json`,
+  `config/gmail_credentials.json`, `config/resume_template.docx` are already ignored.)
 
-### 4. De-personalize tracked files
+### 2d. Genericize owner references in tracked source
 
-- `git rm --cached` (keep local) `config/resume.txt`, `config/Achyuth_Resume.docx`,
-  `config/ats_tokens.json`. Add a tracked `config/resume.example.txt` placeholder. Add the real
-  resume paths + `config/profile.json` to `.gitignore` (alongside the existing
-  `config/gmail_credentials.json` entry).
-- Genericize owner references (name, `Iamkach` handle, hardcoded DB id/URL) in `README.md`,
-  `SETUP.md`, `.claude/agents/*.md` (pipeline-orchestrator, notion-tracker, resume-tailor),
-  `.claude/skills/careerpilot-ai/SKILL.md`, `scripts/stage2_tailor.py` comments,
-  `code-changes-management/README.md` — point them at `RESUME_TEMPLATE_PATH` / `NOTION_DB_ID`
-  instead of literals.
+Point these at `RESUME_TEMPLATE_PATH` / `NOTION_DB_ID` / profile values instead of literals
+(`Achyuth`, `Iamkach`, DB id `2ac0907e...`). Confirmed occurrences worth changing:
 
-### 5. `.env.example` + CI + docs
+- `.claude/agents/notion-tracker.md`, `.claude/agents/pipeline-orchestrator.md`,
+  `.claude/agents/resume-tailor.md`
+- `.claude/skills/careerpilot-ai/SKILL.md` (Prerequisites still names `config/Achyuth_Resume.docx`)
+- `README.md`, `SETUP.md`, `code-changes-management/README.md`
+- `scripts/render_docx.py`, `scripts/stage2_tailor.py` comments, `config/settings.py` comments
 
-- `.env.example`: add `NOTION_DB_ID=` with a comment (set by `--init`, or your own DB id).
-- `.github/workflows/nightly-pipeline.yml`: add `NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}` and the
-  currently-missing `APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}` to the env block.
-- Rewrite `README.md` "Setup" + `SETUP.md` around `python run.py --init`; keep the manual
-  file-fallback path documented for CI/power users. Update `CLAUDE.md`'s schema/setup notes to
-  mention the provisioning script and env-sourced `NOTION_DB_ID`.
+**Leave alone** (historical / fixtures, changing them rewrites the past for no gain):
+`docs/architecture/architecture-analysis.md`, `code-changes-management/pr-11-review.md`,
+`tests/conftest.py`, `tests/fixtures/**`, `tests/record_ai_responses.py`, and the recorded-response
+JSON — these are point-in-time artifacts, not live config.
 
-### 6. Security note (advice, not code)
+### 2e. Tests (mandatory — mocked)
 
-The local git-ignored `.env` and `config/gmail_credentials.json` hold the owner's **live** keys
-(Notion, Apify, OpenAI, Claude Code OAuth, Hunter, Gmail client_secret). They are not committed,
-but if this repo or its history is ever published, those keys should be **rotated**.
+- `config/settings.py` profile overlay: a `config/profile.json` overrides the generic defaults; a
+  missing/corrupt file leaves defaults intact (mirror the existing `application_profile` tests).
+- `--init` profile section: mocked `input()` writes the expected `config/profile.json` and leaves
+  unrelated `.env` lines intact (extend `tests/test_provision_notion.py`'s wizard test).
 
 ---
 
-## Files to create / modify
+## Files
 
-- **New:** `config/profile.example.json`, `scripts/provision_notion.py`, `config/resume.example.txt`
-- **Modify:** `config/settings.py` (profile loader + env-source `NOTION_DB_ID`), `run.py`
-  (`--init` wizard + hardened `check_setup`), `.env.example`, `.gitignore`,
-  `.github/workflows/nightly-pipeline.yml`, `README.md`, `SETUP.md`, `CLAUDE.md`, docs & `.claude/*`
-  owner references
+- **New:** `config/profile.example.json`, `config/resume.example.txt`
+- **Modify:** `config/settings.py` (profile overlay + genericized defaults), `run.py` (`--init`
+  profile block), `.gitignore`, `.github/workflows/nightly-pipeline.yml` (Phase-1 follow-up),
+  the doc/`.claude/*` owner references in 2d, and the Step 11 tests
 - **Untrack (git rm --cached, keep local):** `config/resume.txt`, `config/Achyuth_Resume.docx`,
   `config/ats_tokens.json`
 
 ## Verification
 
-1. **Fresh-fork sim:** in a scratch copy, delete `.env` + `config/profile.json`, move the resume
-   files aside. Run `python run.py --init` end-to-end with a test Notion integration + a shared
-   parent page; confirm it writes `.env` (incl. a fresh `NOTION_DB_ID`) and `config/profile.json`,
-   and that a new DB appears with **all 18 properties and all 14 `Status` options**.
-2. `python run.py --setup` → all ✓ and the schema validator passes; then break one property in
-   Notion and confirm `--setup` reports it missing.
-3. **File-fallback path:** hand-write `config/profile.json` + `.env` (no wizard), run
-   `python scripts/provision_notion.py --parent-page <id>`, then `python run.py --stage 1` and
-   confirm a row lands in the new DB.
-4. `git ls-files config/` shows no personal resume or DB id tracked; grep the tree for `Achyuth`,
-   `Iamkach`, and the old DB id `2ac0907e...` returns only historical/test-fixture hits.
+1. **CI follow-up first:** add the `NOTION_DB_ID` secret + workflow env line; confirm a manual
+   `workflow_dispatch` run reads the tracker (no empty-id abort).
+2. **Fresh-fork sim:** in a scratch copy, delete `.env` + `config/profile.json`, move the resume
+   files aside. `python run.py --init` end-to-end → writes `.env` (fresh `NOTION_DB_ID`) **and**
+   `config/profile.json`, provisions a DB with all 25 properties / 21 Status options, and the
+   effective `YOUR_NAME`/`TARGET_ROLES`/`AI_PROVIDER` reflect the answers, not the owner.
+3. `python run.py --setup` → all ✓, schema validator passes; break one Notion property and confirm
+   `--setup` reports it missing.
+4. `git ls-files config/` shows no personal resume, resume `.docx`, or `ats_tokens.json`; `git grep`
+   for `Achyuth` / `Iamkach` / `2ac0907e...` returns only the historical/fixture hits listed in 2d.
+5. `pytest -v` green (mocked).
+
+## Security note (advice, not code)
+
+The local git-ignored `.env` and `config/gmail_credentials.json` hold the owner's **live** keys
+(Notion, Apify, OpenAI, Claude Code OAuth, Hunter, Gmail client_secret). Not committed — but if the
+repo or its history is ever published, rotate them.

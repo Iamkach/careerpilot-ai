@@ -34,6 +34,19 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
   if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
   runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 
+- **Step 11 forkable setup — Phase 1 (Notion) landed, Phase 2 (identity) open (2026-07-22).**
+  `scripts/provision_notion.py` + `run.py --init` now provision the "Careerpilot-ai" page + all
+  three databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
+  schema. **Urgent follow-up (CI only — local `.env` already has `NOTION_DB_ID`):** removing the
+  default broke CI, which never reads `.env` (`_load_local_env()` no-ops under `GITHUB_ACTIONS`) —
+  `.github/workflows/nightly-pipeline.yml` sets `NOTION_API_KEY` but not `NOTION_DB_ID`, so the
+  scheduled run now points at an empty id. Add a `NOTION_DB_ID` repo secret + workflow env line
+  (and the also-missing `APIFY_API_TOKEN`) before the next nightly. **Phase 2 still open:** de-hardcode owner
+  identity in `config/settings.py` (`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`,
+  `RESUME_TEMPLATE_PATH`, `AI_PROVIDER="codex"`) via a git-ignored `config/profile.json`, untrack
+  the personal resume/`ats_tokens.json` files, and genericize `Achyuth`/`Iamkach` references. Full
+  plan in `docs/refinement-plans/onboarding/forkable-setup.md`.
+
 ## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
 
 These surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**

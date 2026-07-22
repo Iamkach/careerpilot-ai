@@ -1,45 +1,51 @@
-# Step 11 — Forkable setup (one-time `--init` wizard + Notion auto-provisioning)
+# Step 11 — Forkable setup (`--init` wizard + Notion provisioning + de-personalization)
 
-**Status:** Notion-provisioning half **landed** — `scripts/provision_notion.py` (creates the
-"Careerpilot-ai" page + Job Search Tracker + Job Link Scratch Pad databases with the full schema),
-`python run.py --init` wizard, env-sourced `NOTION_DB_ID` (hardcoded literal removed), and a
-schema-validating `python run.py --setup`. **Still deferred:** `config/profile.json` for
-identity/targets, untracking the personal resume files + `ats_tokens.json`, and genericizing owner
-references across docs/`.claude/*`. (Full spec at
-[`../refinement-plans/onboarding/forkable-setup.md`](../refinement-plans/onboarding/forkable-setup.md).)
-**Priority:** P1 — the repo cannot be forked and run by anyone else today without editing code and
-hand-building a Notion database.
-**Depends on:** existing `config/settings.py` env-loading (`_load_local_env`), the `db_*` /
-`_notion()` layer in `scripts/utils.py`, and `run.py --setup`.
-**Size:** M.
+**Status:** **Phase 1 (Notion) landed · Phase 2 (identity) remaining.**
+**Priority:** P1 — a fork still can't run without editing `config/settings.py` (owner identity is
+hardcoded), even though the Notion side is now one command.
+**Depends on:** `config/settings.py` env/overlay loading (`_load_local_env`, `_apply_saved_profile`),
+the `db_*` / `_notion()` layer in `scripts/utils.py`, and `run.py --init`/`--setup`.
+**Size:** M total; **S remaining.**
+Full design + exact line references:
+[`../refinement-plans/onboarding/forkable-setup.md`](../refinement-plans/onboarding/forkable-setup.md).
 
-## Problem
+## Phase 1 — landed (commits `3f81018` + `9ddeabb`)
 
-A fork does not run out of the box. Identity is hardcoded in `config/settings.py`
-(`YOUR_NAME`/`YOUR_EMAIL`/`YOUR_BIO`, `TARGET_ROLES`, `TARGET_COMPANIES`, `RESUME_TEMPLATE_PATH`,
-`AI_PROVIDER`), and `NOTION_DB_ID` (L256) is a literal pointing at the **author's own private
-database** — the only non-env-sourced secret, and one `--setup` only null-checks. Nothing in the
-repo creates the Notion tracker DB (18 properties + 14 `Status` options are manual today), and the
-owner's real `config/resume.txt` / `config/Achyuth_Resume.docx` are committed.
+- **`scripts/provision_notion.py`** — canonical schema (25 properties / 21 `Status` options, from
+  the live DB; adds `Enrichment Attempts`). `pages.create` + three `databases.create` build the
+  **"Careerpilot-ai" page + Job Search Tracker + Job Link Scratch Pad + Restricted Sponsorship
+  Companies**; `normalize_page_id()`
+  accepts a share link; `validate_schema()` hardens `--setup`.
+- **`run.py --init`** — Notion onboarding wizard; **`NOTION_DB_ID` env-sourced** (literal removed);
+  `check_setup()` validates the live schema. `setup_notion_schema.py` imports the Stage-7 subset so
+  create/patch can't drift. Docs: `README`/`SETUP`/`.env.example`/`SKILL.md`/`CLAUDE.md`.
 
-## What ships
+> **⚠ CI follow-up from Phase 1 (local already done):** the owner's local `.env` already carries
+> `NOTION_DB_ID`, so local runs are fine. **CI is not:** `_load_local_env()` no-ops under
+> `GITHUB_ACTIONS`, and the nightly workflow `env:` block sets `NOTION_API_KEY` but not
+> `NOTION_DB_ID` — with the default removed, the scheduled run points at an empty id. Add a
+> `NOTION_DB_ID` repo secret + `NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}` to the workflow env
+> block (and the also-missing `APIFY_API_TOKEN`) **before the next scheduled run**.
+
+## Phase 2 — remaining (identity / de-personalization)
+
+Owner identity is still hardcoded in `config/settings.py`: `YOUR_NAME` (L26), `YOUR_EMAIL` (L27),
+`YOUR_BIO` (L28), `TARGET_ROLES` (L31), `TARGET_COMPANIES` (L35), `RESUME_TEMPLATE_PATH` (L317,
+`config/Achyuth_Resume.docx`), `AI_PROVIDER` (L326, `"codex"`). `config/resume.txt`,
+`config/Achyuth_Resume.docx`, and `config/ats_tokens.json` are still tracked.
 
 - **`config/profile.json`** (git-ignored) + tracked `config/profile.example.json` — identity/targets
-  loaded by `settings.py`; hardcoded literals replaced with generic-defaulted `profile.get(...)`.
-- **`NOTION_DB_ID` becomes env-sourced** (`os.environ.get`), added to `.env.example` and the CI env
-  block (alongside the currently-missing `APIFY_API_TOKEN`).
-- **`scripts/provision_notion.py`** — one `databases.create` call builds the full tracker schema
-  (all 14 `Status` options defined up front, sidestepping the API's "can't add options on write"
-  limit) under a page the forker shares with their integration; returns the new DB id. Also exposes
-  `validate_schema()` used to harden `check_setup()`.
-- **`python run.py --init`** — interactive wizard: writes `.env` + `config/profile.json`, provisions
-  the DB, persists the new id. Every value stays hand-settable (file fallback) for CI/power users.
-- **De-personalize**: untrack the resume files + `ats_tokens.json` (keep local), add a
-  `resume.example.txt` placeholder, and genericize owner references across docs and `.claude/*`.
-
-Full design, exact line references, and the verification plan are in the refinement plan linked above.
+  loaded via a `_load_profile()` overlay (same pattern as `application_profile.json`); literals
+  become generic-defaulted `profile.get(...)`, `AI_PROVIDER` default → `"claude"`.
+- **`--init` gains a profile section** — one wizard sets identity too (separate, skippable block).
+- **De-personalize** — `git rm --cached` the resume/ats-token files (keep local), add
+  `config/resume.example.txt`, extend `.gitignore`, and genericize `Achyuth`/`Iamkach`/DB-id refs
+  in `.claude/agents/*`, `.claude/skills/careerpilot-ai/SKILL.md`, `README`/`SETUP`,
+  `code-changes-management/README.md`, `scripts/render_docx.py`, `scripts/stage2_tailor.py`. (Leave
+  historical docs + test fixtures untouched.)
+- **Tests** — profile overlay (override + missing/corrupt) and the `--init` profile block, mocked.
 
 ## Security note
 
 The local git-ignored `.env` and `config/gmail_credentials.json` contain the owner's **live** keys.
-They are not committed, but if the repo/history is ever published they should be rotated.
+Not committed — but if the repo/history is ever published, rotate them.
