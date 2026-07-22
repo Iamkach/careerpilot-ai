@@ -4,6 +4,10 @@ Everything below is verified against code, not doc checkboxes. See `docs/CHANGEL
 what's already landed. The full spec for the largest remaining item (Step 7) still lives in
 `docs/refinement-plans/` and `docs/backlog/` — this file is the index, not a replacement.
 
+This file is scoped to code and development-blocking work only. Outstanding runtime/ops issues
+(GitHub Actions secrets, CI gate, integrations — nothing that touches this repo's code) live in
+`docs/RUNTIME_NOTES.md` instead.
+
 ## Small, standalone fixes
 
 - **Step 3 manual QA run (2026-07-18)** — added 3 real `Interested` rows (Netflix, SmithRx/
@@ -37,34 +41,13 @@ what's already landed. The full spec for the largest remaining item (Step 7) sti
 - **Step 11 forkable setup — Phase 1 (Notion) landed, Phase 2 (identity) open (2026-07-22).**
   `scripts/provision_notion.py` + `run.py --init` now provision the "Careerpilot-ai" page + all
   three databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
-  schema. **Urgent follow-up (CI only — local `.env` already has `NOTION_DB_ID`):** removing the
-  default broke CI, which never reads `.env` (`_load_local_env()` no-ops under `GITHUB_ACTIONS`) —
-  `.github/workflows/nightly-pipeline.yml` sets `NOTION_API_KEY` but not `NOTION_DB_ID`, so the
-  scheduled run now points at an empty id. Add a `NOTION_DB_ID` repo secret + workflow env line
-  (and the also-missing `APIFY_API_TOKEN`) before the next nightly. **Phase 2 still open:** de-hardcode owner
+  schema. **Phase 2 still open:** de-hardcode owner
   identity in `config/settings.py` (`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`,
   `RESUME_TEMPLATE_PATH`, `AI_PROVIDER="codex"`) via a git-ignored `config/profile.json`, untrack
   the personal resume/`ats_tokens.json` files, and genericize `Achyuth`/`Iamkach` references. Full
-  plan in `docs/refinement-plans/onboarding/forkable-setup.md`.
-
-## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
-
-These surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
-actioned in commit `7d460ba`, which fixed the other ten findings. **Update 2026-07-21:** the
-`run.py` traceback item and `_prop_number()` item are now fixed (see `docs/CHANGELOG.md`); the
-`tests.yml` CI item is **still open** and needs a human with repo Settings access — it is not a
-code change.
-
-- **`tests.yml` has never actually run** — every Actions run on `feature/god-speed` is
-  `startup_failure` at 0s with no job name (runs `29711371199` pull_request, `29711381997`
-  push). Both workflow files parse fine and the suite is green locally (212 passed), so this
-  is environmental, not a code defect: most likely Actions disabled for the repo, or a
-  spending/billing limit on the private repo — the only check reporting on the PR is a stale
-  Supabase Preview integration, itself vestigial now that `sync_notion_to_supabase()` is a
-  no-op. Until it's resolved, "CI gate on every PR/push" is a claim the repo doesn't hold up,
-  and the local `pytest` run is the only evidence the suite passes.
-  **Needs a human with repo settings access:** check Settings → Actions and the billing page.
-  Separately, decide whether to remove the Supabase integration.
+  plan in `docs/backlog/step-11-forkable-setup.md`. (The CI `NOTION_DB_ID`/
+  `APIFY_API_TOKEN` secrets-wiring gap this surfaced is a runtime/ops item, not code — see
+  `docs/RUNTIME_NOTES.md`.)
 
 ## Step 7 — Communications subsystem (not started)
 
@@ -74,8 +57,7 @@ remaining item in the roadmap — has its own blocking Phase-0 spike (Hunter ver
 semantics, `linkedin_handle` support, billing edges, Clearbit keyless autocomplete) that must
 run before any Phase 1+ code.
 
-Full spec: `docs/backlog/step-7-communications-subsystem.md` and
-`docs/refinement-plans/communications/communications-subsystem.md`.
+Full spec: `docs/backlog/step-7-communications-subsystem.md`.
 
 ## Step 10 — Auto-Apply subsystem (Phases 1–2 landed 2026-07-19)
 

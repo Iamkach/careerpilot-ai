@@ -423,6 +423,20 @@ including the nightly workflow, which never passes it and keeps its own env vars
 - **`scripts/setup_notion_schema.py`:** one-time, idempotent Notion schema migration for Stage 7 on a **pre-existing** DB — `--apply` adds the six new `Status` options and four new properties; dry-run by default, resends existing Status options with their ids so none are dropped, and reads back to verify. Run once before the first real (non-dry) Stage 7 run. (A DB freshly made by `provision_notion.py` already has all of these — this script is for older/hand-built trackers.)
 - **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). `render_docx.convert_docx_to_pdf()` (headless LibreOffice) produces the PDF fallback Stage 7's browser fill uses when a live form's upload field rejects `.docx` — see "Stage 7 Auto-Apply" above. The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.
 
+## docs/ directory scope: refinement-plans vs. backlog
+
+`docs/refinement-plans/` holds a plan **while it's still at idea/discussion level** — design not
+finalized, or finalized but deliberately deferred pending a trigger. `docs/backlog/` holds a story
+**once it's finalized and lined up to be implemented**.
+
+A plan moves in exactly one direction: refinement-plans → backlog, never the reverse. When a plan
+is finalized and queued: fold its content into a `docs/backlog/step-N-*.md` story — condense the
+"why" (sources considered/rejected, binding decisions, risks) alongside the implementation
+checklist — then **delete** the refinement-plan doc. Don't leave the backlog story as a thin
+summary pointing back at a "full spec" refinement doc; that's the duplication this rule exists to
+avoid. One doc per story once it's queued. See `docs/backlog/README.md` and
+`docs/refinement-plans/README.md` for the same rule stated from each side.
+
 ## Testing a Change
 
 **Rule of thumb: every change ships with a test — no exceptions, for any agent working in this repo.**
