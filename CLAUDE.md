@@ -231,8 +231,9 @@ answer sheet only.
 **Failure modes handled:** every browser wait is bounded (Turnstile-class challenges are usually
 invisible and *stall* rather than error, so a timeout is classified as a probable captcha and
 handed off, never retried); a fill resolving under `MIN_RESOLVE_RATIO` of planned fields aborts
-as `drift` rather than leaving a half-filled form the human would trust; a PDF-only upload stops
-(stage 2 only produces `.docx` and there's no converter in the repo).
+as `drift` rather than leaving a half-filled form the human would trust; a PDF-only upload first
+tries `render_docx.convert_docx_to_pdf()` (headless LibreOffice — stage 2 only produces `.docx`
+directly) and only stops as `pdf_only` if LibreOffice isn't installed or the conversion fails.
 
 `AUTOAPPLY_DAILY_CAP` (default 10) caps applications per run. That's a *quality* guard, not just
 politeness — ATSes score application velocity and flag high-volume submitters as low-intent
