@@ -70,11 +70,11 @@ resume `.docx`, copies it per job, and applies targeted `{old → new}` ATS keyw
 **in-place** — so every tailored resume keeps your exact original formatting and only the
 wording changes.
 
-Put your resume at `config/Achyuth_Resume.docx` (path set by `RESUME_TEMPLATE_PATH` in
+Put your resume at `config/resume.docx` (path set by `RESUME_TEMPLATE_PATH` in
 `config/settings.py`). It's a plain Word document — **no placeholder tags required**.
 
 ```python
-RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"   # your base resume .docx
+RESUME_TEMPLATE_PATH = "config/resume.docx"   # your base resume .docx
 ```
 
 Stage 2 reads it via `extract_docx_text()` and edits it via `apply_docx_edits()` (both in

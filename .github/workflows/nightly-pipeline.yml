@@ -33,6 +33,8 @@ on:
 
 env:
   NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+  NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+  APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
   FAST_PROVIDER: claude
@@ -44,6 +46,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Write profile.json from secrets
+        env:
+          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
+        run: |
+          [ -n "$PROFILE_JSON" ] && printf '%s' "$PROFILE_JSON" > config/profile.json
+          true
 
       - uses: actions/setup-node@v4
         with:
