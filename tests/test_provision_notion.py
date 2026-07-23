@@ -194,12 +194,40 @@ def test_upsert_env_replaces_in_place_preserving_other_lines(tmp_path, cleanup_e
     assert "NOTION_DB_ID=abc123" in p.read_text(encoding="utf-8")
 
 
+def test_init_wizard_reuses_existing_db_when_declined(tmp_path, monkeypatch, cleanup_env):
+    """A re-run of --init on an already-provisioned fork must see NOTION_DB_ID (loaded from
+    .env into os.environ, mirroring what `import config.settings` does as a side effect at the
+    top of init_wizard()) and skip re-provisioning when the user declines the "provision a NEW
+    workspace" prompt. Regression test: init_wizard() previously read os.environ directly
+    without ever importing config.settings first, so a real .env-only NOTION_DB_ID (not already
+    present in the process env) was invisible here and every re-run fell through to
+    re-provisioning instead of reusing the existing tracker.
+    """
+    monkeypatch.setattr(run, "ROOT", tmp_path)
+    monkeypatch.setenv("NOTION_API_KEY", "tok-existing")
+    monkeypatch.setenv("NOTION_DB_ID", "already-provisioned-db")
+    monkeypatch.setattr(run, "check_setup", lambda: None)
+
+    # Token prompt (keep current) → decline reprovisioning → decline profile block → decline CI sync.
+    answers = iter(["", "n", "n", "n"])
+    monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
+
+    provision_calls = []
+    monkeypatch.setattr("scripts.provision_notion.provision",
+                        lambda parent: provision_calls.append(parent) or ("x", "y", "z"))
+
+    assert run.init_wizard() == 0
+    assert provision_calls == []  # never provisioned — existing DB was reused
+
+
 def test_init_wizard_provisions_and_persists_ids(tmp_path, monkeypatch, cleanup_env):
     monkeypatch.setattr(run, "ROOT", tmp_path)
     monkeypatch.setenv("NOTION_DB_ID", "")  # simulate an un-provisioned fork
     monkeypatch.setattr(run, "check_setup", lambda: None)
 
-    answers = iter(["tok-123", "parent-xyz"])
+    # Decline the two trailing skippable blocks (profile + CI sync) so this test stays
+    # focused on the Notion-provisioning path.
+    answers = iter(["tok-123", "parent-xyz", "n", "n"])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
     monkeypatch.setattr("scripts.provision_notion.provision",
                         lambda parent: ("trk-id", "scr-id", "res-id"))
@@ -211,3 +239,116 @@ def test_init_wizard_provisions_and_persists_ids(tmp_path, monkeypatch, cleanup_
     assert "NOTION_DB_ID=trk-id" in env_text
     assert "NOTION_SCRATCH_PAGE_ID=scr-id" in env_text
     assert "NOTION_RESTRICTED_COMPANIES_PAGE_ID=res-id" in env_text
+    # The declined profile block wrote no config/profile.json.
+    assert not (tmp_path / "config" / "profile.json").exists()
+
+
+# ── run.py --init wizard: profile section (2b) ────────────────────────────────
+
+def test_init_wizard_profile_section_writes_profile_json(tmp_path, monkeypatch, cleanup_env):
+    """Accepting the profile block writes config/profile.json with the typed answers and leaves
+    the unrelated .env lines the Notion step wrote untouched."""
+    import json
+    monkeypatch.setattr(run, "ROOT", tmp_path)
+    monkeypatch.setenv("NOTION_DB_ID", "")
+    monkeypatch.setattr(run, "check_setup", lambda: None)
+    # Seed a profile.example.json so the seed-from-example path is exercised.
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "profile.example.json").write_text(
+        json.dumps({"name": "Your Name", "ai_provider": "claude"}), encoding="utf-8")
+
+    answers = iter([
+        "tok-123", "parent-xyz",        # Notion token + parent page
+        "",                              # profile block: "Y" (accept)
+        "Fork User",                     # name
+        "fork@example.com",              # email
+        "A short bio.",                  # bio
+        "Backend Engineer, SRE",         # target roles (comma-separated)
+        "Stripe, Linear",                # target companies
+        "config/resume.txt",             # resume text path
+        "config/resume.docx",            # resume .docx path
+        "gemini",                        # AI provider
+        "n",                             # CI sync: skip
+    ])
+    monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
+    monkeypatch.setattr("scripts.provision_notion.provision",
+                        lambda parent: ("trk-id", "scr-id", "res-id"))
+
+    assert run.init_wizard() == 0
+
+    profile = json.loads((tmp_path / "config" / "profile.json").read_text(encoding="utf-8"))
+    assert profile["name"] == "Fork User"
+    assert profile["email"] == "fork@example.com"
+    assert profile["target_roles"] == ["Backend Engineer", "SRE"]
+    assert profile["target_companies"] == ["Stripe", "Linear"]
+    assert profile["ai_provider"] == "gemini"
+
+    # .env lines from the Notion step are intact.
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "NOTION_API_KEY=tok-123" in env_text
+    assert "NOTION_DB_ID=trk-id" in env_text
+
+
+# ── run.py _sync_ci_secrets() (2g) ────────────────────────────────────────────
+
+class _FakeCompleted:
+    def __init__(self, returncode=0):
+        self.returncode = returncode
+
+
+def _seed_ci_files(tmp_path):
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "profile.json").write_text('{"name": "Fork User"}', encoding="utf-8")
+
+
+def test_sync_ci_secrets_pushes_via_gh(tmp_path, monkeypatch, cleanup_env):
+    monkeypatch.setattr(run, "ROOT", tmp_path)
+    _seed_ci_files(tmp_path)
+    monkeypatch.setenv("NOTION_API_KEY", "notion-key")
+    monkeypatch.setenv("NOTION_DB_ID", "db-123")
+    monkeypatch.setenv("APIFY_API_TOKEN", "apify-tok")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")  # empty → skipped
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # accept the [Y/n]
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+        return _FakeCompleted(returncode=0)  # gh present + authed, every set succeeds
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+
+    run._sync_ci_secrets()  # must not raise
+
+    set_calls = {c["cmd"][3]: c["input"] for c in calls if c["cmd"][:3] == ["gh", "secret", "set"]}
+    assert set_calls["NOTION_API_KEY"] == "notion-key"
+    assert set_calls["NOTION_DB_ID"] == "db-123"
+    assert set_calls["APIFY_API_TOKEN"] == "apify-tok"
+    assert set_calls["ANTHROPIC_API_KEY"] == "sk-ant"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in set_calls  # empty value skipped
+    assert set_calls["PROFILE_JSON"] == '{"name": "Fork User"}'
+    # Resume files are tracked in git as usual — never pushed as CI secrets.
+    assert "RESUME_TXT" not in set_calls
+    assert "RESUME_DOCX_BASE64" not in set_calls
+
+
+def test_sync_ci_secrets_falls_back_to_printed_commands_when_gh_absent(tmp_path, monkeypatch, cleanup_env, capsys):
+    monkeypatch.setattr(run, "ROOT", tmp_path)
+    _seed_ci_files(tmp_path)
+    monkeypatch.setenv("NOTION_DB_ID", "db-123")
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("gh not installed")  # gh binary missing
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+
+    run._sync_ci_secrets()  # must NOT raise
+
+    out = capsys.readouterr().out
+    assert "gh secret set" in out
+    assert "gh secret set NOTION_DB_ID --body" in out
+    assert "gh secret set PROFILE_JSON < config/profile.json" in out
+    assert "RESUME_TXT" not in out
+    assert "RESUME_DOCX_BASE64" not in out

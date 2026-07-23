@@ -4,7 +4,7 @@ render_docx.py — in-place .docx text edits for tailored resumes
 ────────────────────────────────────────────────────────────────
 Primary role today: `extract_docx_text()` / `apply_docx_edits()` apply targeted
 `{old → new}` text replacements directly to a copy of the base resume `.docx`
-(`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) via python-docx,
+(`RESUME_TEMPLATE_PATH`, default `config/resume.docx`) via python-docx,
 preserving the original document's formatting (fonts, spacing, run-level
 bold/italic, ...) — this is the default flow stage 2 uses.
 

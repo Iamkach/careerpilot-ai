@@ -4,9 +4,10 @@ stage2_tailor.py — AI resume tailoring per job
 ────────────────────────────────────────────────
 What it does:
   1. Fetches all "Reviewed" jobs from Notion (jobs marked for application)
-  2. Extracts text from config/Achyuth_Resume.docx as the base resume content
+  2. Extracts text from the base resume `.docx` (RESUME_TEMPLATE_PATH,
+     default config/resume.docx) as the base resume content
   3. For each job, asks Claude for targeted ATS keyword edits ({old, new} pairs)
-  4. Copies Achyuth_Resume.docx, applies edits in-place → output/resumes/*.docx
+  4. Copies that base `.docx`, applies edits in-place → output/resumes/*.docx
      (preserves all original formatting; also writes a .txt mirror for quick review)
   5. Updates Notion: Status → "Resume Tailored", Tailored Resume Link
 
@@ -126,8 +127,8 @@ def fetch_jd(url: str) -> str:
 def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
     """Return a list of {old, new} text edits to apply to the base resume .docx.
 
-    The resume_text is extracted verbatim from Achyuth_Resume.docx so Claude
-    can quote exact strings for the "old" fields.
+    The resume_text is extracted verbatim from the base resume .docx
+    (RESUME_TEMPLATE_PATH) so Claude can quote exact strings for the "old" fields.
     """
     resume_block = {
         "type": "text",
@@ -314,7 +315,7 @@ def _resume_title_line(resume_text: str) -> str:
 def save_resume(edits: list, job: dict, resume_text: str) -> str:
     """Apply edits to the base .docx and save to output/resumes/.
 
-    Copies Achyuth_Resume.docx, patches each edited paragraph in-place, and
+    Copies the base .docx (RESUME_TEMPLATE_PATH), patches each edited paragraph in-place, and
     writes a plain-text mirror alongside the .docx for quick review.
     Returns the path to the saved .docx.
 

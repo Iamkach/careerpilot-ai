@@ -17,7 +17,7 @@ config/token.json
 # Stage 7 application answers (personal details — written by `run.py --setup-profile`)
 config/application_profile.json
 
-# Step 11 fork profile (personal details — see docs/backlog/step-11-forkable-setup.md)
+# Personal identity/profile overlay (written by `run.py --init`; placeholders in config/profile.example.json)
 config/profile.json
 
 # Personal resume template (generate via scripts/make_resume_template.py or drop your own)

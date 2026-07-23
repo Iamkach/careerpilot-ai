@@ -50,12 +50,12 @@ DB sharing are required; the JD is cached in each page's body (paragraph blocks)
 - API keys (all `os.environ.get(...)`-sourced — **never hardcode a literal**): NOTION_API_KEY
   (primary store), APIFY_API_TOKEN, HUNTER_API_KEY (Step 7 spike only), plus the provider key
   matching AI_PROVIDER (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY; none needed for `claude_code`)
-- NOTION_DB_ID = "2ac0907e693744698a1c748d37774a07"
+- NOTION_DB_ID (env-sourced — no hardcoded literal; a fork provisions its own via `python run.py --init`)
 - AI_PROVIDER ("claude" | "claude_code" | "gemini" | "codex", default "claude" — metered API, no subscription session-window limit), STAGE_AI_PROVIDER (optional per-stage override), FAST_PROVIDER/QUALITY_PROVIDER (optional hybrid tiering, e.g. for the nightly workflow), AI_MODEL_OVERRIDE (fast), QUALITY_MODEL (strong)
 - User profile: YOUR_NAME, YOUR_EMAIL, YOUR_BIO, TARGET_ROLES, TARGET_COMPANIES (search is US-wide; no TARGET_CITY)
 - Stage 1 filters: SKIP_COMPANIES, SKIP_COMPANY_KEYWORDS, SKIP_TITLE_KEYWORDS, EXCLUDE_NO_SPONSORSHIP, MAX_APPLICANT_COUNT, MIN_ATS_SCORE, ENABLED_SOURCES, MAX_JOB_AGE_DAYS, DROP_UNDATED_JOBS, SKIP_COMPANY_TYPES, MAX_SCORING_ATTEMPTS
 - Stage 2 filter: RESTRICTED_SPONSORSHIP_COMPANIES, SPONSORSHIP_CONFIRMED_MARKER
-- RESUME_PATH (config/resume.txt), RESUME_TEMPLATE_PATH (config/Achyuth_Resume.docx — base for in-place tailoring)
+- RESUME_PATH (config/resume.txt), RESUME_TEMPLATE_PATH (config/resume.docx — base for in-place tailoring)
 
 **Status pipeline (Notion — single source of truth):**
 ```

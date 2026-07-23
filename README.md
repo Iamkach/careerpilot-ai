@@ -1,10 +1,10 @@
 # 🤖 AI Job Search Pipeline
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](https://github.com/Iamkach/careerpilot-ai/actions)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](https://github.com/your-username/careerpilot-ai/actions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![AI Provider](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20OpenRouter-8a2be2.svg)](#switching-ai-provider)
 [![Data store](https://img.shields.io/badge/data%20store-Notion-black.svg)](https://www.notion.so/)
-[![Repo](https://img.shields.io/badge/repo-private-lightgrey.svg)](https://github.com/Iamkach/careerpilot-ai)
+[![Repo](https://img.shields.io/badge/repo-private-lightgrey.svg)](https://github.com/your-username/careerpilot-ai)
 
 Automated job search system using the Claude API — no N8N, no VPS required.
 Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, scores
@@ -102,7 +102,7 @@ careerpilot-ai/
 │   ├── settings.py              # API keys (env-sourced), user profile, target roles, AI models, source/filter config
 │   ├── ats_tokens.json          # Cached Greenhouse/Lever/Ashby board-token discovery (auto-maintained)
 │   ├── resume.txt               # Your resume (plain text, required)
-│   ├── Achyuth_Resume.docx      # Master resume template (edited in-place by stage 2)
+│   ├── resume.docx              # Master resume template (RESUME_TEMPLATE_PATH; edited in-place by stage 2)
 │   └── resume_template.docx     # DOCX scaffold for render_docx.py
 │
 ├── scripts/
