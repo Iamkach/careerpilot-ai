@@ -1,0 +1,22 @@
+Your Name
+you@example.com | City, State | linkedin.com/in/yourhandle | github.com/yourhandle
+
+SUMMARY
+Software engineer with X years building and shipping backend and full-stack systems. Focused on
+reliable services, clean APIs, and measurable impact. Open to Software Engineer / Senior Software
+Engineer roles.
+
+EXPERIENCE
+Senior Software Engineer — Example Company (2022–Present)
+- Led design and delivery of a service handling N requests/day, cutting p95 latency by X%.
+- Built CI/CD and test automation that reduced release time from days to hours.
+
+Software Engineer — Another Company (2019–2022)
+- Shipped customer-facing features across the stack (React, Python, Postgres) used by N users.
+- Improved data pipeline throughput X% by parallelizing batch jobs.
+
+SKILLS
+Python, JavaScript/TypeScript, React, SQL, AWS, Docker, CI/CD
+
+EDUCATION
+B.S. in Computer Science — Your University (Year)

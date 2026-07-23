@@ -87,6 +87,11 @@ def init_wizard():
     `python scripts/provision_notion.py --parent-page <id>` directly.
     """
     print("=== Careerpilot-ai — first-run setup ===\n")
+    # Side effect only: loads any existing .env into os.environ before the NOTION_API_KEY /
+    # NOTION_DB_ID reads below. --init is the one entry point that runs before argparse's normal
+    # `import config.settings` elsewhere in main() — without this, a re-run on an already-`init`ed
+    # fork would never see its own NOTION_DB_ID and would fall through to re-provisioning.
+    import config.settings  # noqa: F401
     env_path = ROOT / ".env"
     if not env_path.exists():
         example = ROOT / ".env.example"
@@ -116,6 +121,8 @@ def init_wizard():
                       "Provision a NEW workspace anyway? [y/N]: ").strip().lower()
         if reuse != "y":
             print("• Keeping the existing tracker DB. Skipping provisioning.")
+            _profile_wizard(env_path)
+            _sync_ci_secrets()
             print("\nRunning a setup check…\n")
             check_setup()
             return 0
@@ -143,9 +150,150 @@ def init_wizard():
     print(f"\n✓ Wrote NOTION_DB_ID, NOTION_SCRATCH_PAGE_ID, and "
           f"NOTION_RESTRICTED_COMPANIES_PAGE_ID to {env_path.name}")
 
+    _profile_wizard(env_path)
+    _sync_ci_secrets()
+
     print("\nRunning a setup check…\n")
     check_setup()
     return 0
+
+
+def _profile_wizard(env_path: Path):
+    """Skippable identity-profile block of `--init`: capture name / email / bio / target roles /
+    target companies / resume paths / AI provider and write them to a git-ignored
+    config/profile.json (seeded from config/profile.example.json if missing).
+
+    Separate and skippable on purpose — the Notion-only onboarding path stays fully usable if the
+    forker declines here (they can hand-edit config/profile.json later, or re-run `--init`).
+    Prompts pre-fill from the current effective value (Enter keeps it), mirroring
+    `--setup-profile`'s ergonomics for the Stage-7 answer wizard.
+    """
+    import json
+    resp = input("\nSet up your identity profile now — name, targets, resume paths, AI "
+                 "provider? [Y/n]: ").strip().lower()
+    if resp == "n":
+        print("• Skipped profile setup — edit config/profile.json by hand or re-run "
+              "`python run.py --init`.")
+        return
+
+    config_dir = env_path.parent / "config"
+    profile_path = config_dir / "profile.json"
+    example_path = config_dir / "profile.example.json"
+
+    # Seed: an existing profile.json wins (re-run keeps prior answers), else the tracked example.
+    profile: dict = {}
+    for seed in (profile_path, example_path):
+        if seed.exists():
+            try:
+                loaded = json.loads(seed.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    profile = loaded
+                    break
+            except Exception:
+                continue
+
+    # Current effective values (generic defaults on a fresh fork) to pre-fill each prompt.
+    from config import settings as _s
+    cur_name     = profile.get("name")             or getattr(_s, "YOUR_NAME", "")
+    cur_email    = profile.get("email")            or getattr(_s, "YOUR_EMAIL", "")
+    cur_bio      = profile.get("bio")              or getattr(_s, "YOUR_BIO", "")
+    cur_roles    = profile.get("target_roles")     or getattr(_s, "TARGET_ROLES", [])
+    cur_cos      = profile.get("target_companies") or getattr(_s, "TARGET_COMPANIES", [])
+    cur_resume   = profile.get("resume_path")          or getattr(_s, "RESUME_PATH", "config/resume.txt")
+    cur_template = profile.get("resume_template_path") or getattr(_s, "RESUME_TEMPLATE_PATH", "config/resume.docx")
+    cur_provider = profile.get("ai_provider")      or getattr(_s, "AI_PROVIDER", "claude")
+
+    def _p(label: str, current: str) -> str:
+        val = input(f"  {label} [{current}]: ").strip()
+        return val or current
+
+    def _p_list(label: str, current: list) -> list:
+        shown = ", ".join(current)
+        val = input(f"  {label} (comma-separated) [{shown}]: ").strip()
+        if not val:
+            return list(current)
+        return [item.strip() for item in val.split(",") if item.strip()]
+
+    profile["name"]                 = _p("Full name", cur_name)
+    profile["email"]                = _p("Email", cur_email)
+    profile["bio"]                  = _p("One-paragraph bio", cur_bio)
+    profile["target_roles"]         = _p_list("Target roles", cur_roles)
+    profile["target_companies"]     = _p_list("Target companies", cur_cos)
+    profile["resume_path"]          = _p("Resume text path", cur_resume)
+    profile["resume_template_path"] = _p("Resume .docx path", cur_template)
+    profile["ai_provider"]          = _p("AI provider (claude/claude_code/gemini/codex/openrouter)", cur_provider)
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    print(f"✓ Wrote {profile_path.relative_to(env_path.parent)} (git-ignored).")
+
+
+def _sync_ci_secrets():
+    """Skippable final block of `--init`: push the CI-relevant, non-empty secrets to GitHub
+    Actions via the `gh` CLI so the nightly workflow can materialize the git-ignored
+    config/profile.json the fork just set up.
+
+    Shells out to `gh` (no new pip dependency, no PyNaCl-encrypted REST path). If `gh` is
+    missing or unauthenticated it never raises — it prints the exact `gh secret set …` commands
+    for the user to run by hand, then continues.
+
+    Resume files (`RESUME_PATH` / `RESUME_TEMPLATE_PATH`) are NOT synced here — they're tracked
+    in git as usual (`config/resume.txt` / `config/resume.docx`), so a CI checkout already has
+    them. Keep your resume content in those files up to date locally and commit it like any
+    other tracked file.
+    """
+    resp = input("\nPush your secrets to GitHub Actions via `gh` now (for the nightly "
+                 "workflow)? [Y/n]: ").strip().lower()
+    if resp == "n":
+        print("• Skipped CI secret sync — re-run `python run.py --init`, or set them by hand.")
+        return
+
+    # Text secrets sourced from the environment (already loaded from .env by config.settings).
+    secrets: dict[str, str] = {}
+    for name in ("NOTION_API_KEY", "NOTION_DB_ID", "APIFY_API_TOKEN",
+                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        val = os.environ.get(name, "")
+        if val:
+            secrets[name] = val
+
+    profile_path = ROOT / "config" / "profile.json"
+    if profile_path.exists():
+        text = profile_path.read_text(encoding="utf-8")
+        if text.strip():
+            secrets["PROFILE_JSON"] = text
+
+    if not secrets:
+        print("• No non-empty CI secrets found to sync.")
+        return
+
+    # Probe gh: a missing binary raises FileNotFoundError from subprocess; treat as "not ready".
+    gh_ready = False
+    try:
+        ver = subprocess.run(["gh", "--version"], capture_output=True, text=True)
+        auth = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
+        gh_ready = ver.returncode == 0 and auth.returncode == 0
+    except Exception:
+        gh_ready = False
+
+    if gh_ready:
+        for name, value in secrets.items():
+            try:
+                subprocess.run(["gh", "secret", "set", name], input=value, text=True, check=True)
+                print(f"  ✓ gh secret set {name}")
+            except Exception as e:
+                print(f"  ✗ gh secret set {name} failed ({e}) — set it by hand.")
+        print("\n✓ CI secrets pushed via gh.")
+        return
+
+    # Fallback — print the exact commands, don't raise.
+    print("\n⚠  `gh` not found or not authenticated — nothing was pushed.")
+    print("   Install the GitHub CLI (https://cli.github.com) and run `gh auth login`, then")
+    print("   run these by hand (same values, one manual step):")
+    for name in secrets:
+        if name == "PROFILE_JSON":
+            print("     gh secret set PROFILE_JSON < config/profile.json")
+        else:
+            print(f"     gh secret set {name} --body \"<your {name}>\"")
 
 
 def check_setup():
@@ -165,14 +313,20 @@ def check_setup():
     QUALITY_PROVIDER   = getattr(_settings, "QUALITY_PROVIDER", "") or AI_PROVIDER
 
     import shutil
-    _cli_found = bool(shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe"))
+    CLAUDE_CODE_OAUTH_TOKEN = getattr(_settings, "CLAUDE_CODE_OAUTH_TOKEN", "") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    _cli_found = bool(_cli := (shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")))
+    _claude_code_available = _cli_found or bool(CLAUDE_CODE_OAUTH_TOKEN)
     _provider_key = {
         "claude":      ("Anthropic API key", ANTHROPIC_API_KEY, "Set ANTHROPIC_API_KEY in .env (copy .env.example) or your environment"),
-        "claude_code": ("Claude Code CLI (subscription)", _cli_found, "Install the Claude Code CLI and run `claude /login` (or set CLAUDE_CODE_OAUTH_TOKEN for headless/CI auth)"),
+        "claude_code": ("Claude Code CLI (subscription)", _claude_code_available, "Install the Claude Code CLI and run `claude /login` (or set CLAUDE_CODE_OAUTH_TOKEN for headless/CI auth)"),
         "gemini":      ("Gemini API key",    GEMINI_API_KEY,    "Set GEMINI_API_KEY in .env (copy .env.example) or your environment"),
         "codex":       ("OpenAI API key",    OPENAI_API_KEY,    "Set OPENAI_API_KEY in .env (copy .env.example) or your environment"),
         "openrouter":  ("OpenRouter API key", OPENROUTER_API_KEY, "Set OPENROUTER_API_KEY in .env (copy .env.example) or your environment"),
     }
+    # A missing key for the *configured* tier provider isn't fatal on its own — any other
+    # provider's key/CLI being available means a stage can still run via FAST_PROVIDER/
+    # QUALITY_PROVIDER or `--ai-mode`. Only flag red if literally none of them are usable.
+    _any_provider_available = any(bool(val) for _, val, _ in _provider_key.values())
     from scripts.utils import _resolve_model
     fast_model    = _resolve_model(False, FAST_PROVIDER)
     quality_model = _resolve_model(True, QUALITY_PROVIDER)
@@ -220,7 +374,14 @@ def check_setup():
             tier_provider,
             ("Unknown provider key", False, "Set AI_PROVIDER to claude/claude_code/gemini/codex/openrouter in config/settings.py")
         )
-        checks.insert(0, (key_label, bool(key_val), key_fix))
+        ok = bool(key_val)
+        if not ok and _any_provider_available:
+            # Soft pass: the configured provider's key is missing, but at least one other
+            # provider key/CLI is usable — don't hard-block setup over it.
+            available = [_provider_key[p][0] for p in _provider_key if _provider_key[p][1]]
+            key_label = f"{key_label} (not set, but usable via: {', '.join(available)})"
+            ok = True
+        checks.insert(0, (key_label, ok, key_fix))
 
     all_ok = True
     for label, ok, fix in checks:

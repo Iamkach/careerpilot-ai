@@ -2,8 +2,8 @@
 
 > **Notion 'Interested' intake, Indeed scraping, and provider model fixes**
 > Base: `main` ← Head: `feat/maverick` · **+1715 / −678** · 18 files changed · State: **OPEN**
-> Author: Krishna Achyuth (`Iamkach`)
-> PR: https://github.com/Iamkach/local-n8n-engine/pull/5
+> Author: repo owner
+> PR: https://github.com/your-username/local-n8n-engine/pull/5
 
 This document is a file-by-file breakdown of everything in the PR, plus a prioritized
 review log. Use it as the working checklist during detailed review.
@@ -38,7 +38,7 @@ The PR bundles four largely independent workstreams:
 | `config/settings.py` | `AI_PROVIDER = "claude_code"`; `STAGE_AI_PROVIDER`; `AI_MODEL_OVERRIDE`/`QUALITY_MODEL` → haiku/sonnet; `SKIP_COMPANY_KEYWORDS`, `SKIP_TITLE_KEYWORDS`, expanded `SKIP_COMPANIES`; `LINKEDIN_SESSION_COOKIE`, `MAX_APPLICANT_COUNT`, `INMAIL_ATS_THRESHOLD`; `NOTION_API_KEY` → `os.environ.get`; Supabase keys & Anthropic/OpenAI literals removed. |
 | `requirements.txt` | `claude-agent-sdk` added; `supabase` removed; `notion-client` pinned `>=2.2.1,<2.6` (2.6+/3.x dropped `databases.query`). |
 | `config/resume.txt` | Content update (removed city line, added PROJECTS section, github handle). |
-| `config/Achyuth_Resume.docx` | Binary update. |
+| `config/resume.docx` (base resume `.docx`) | Binary update. |
 
 ### Docs
 
