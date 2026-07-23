@@ -1,0 +1,10 @@
+{
+  "name": "Your Name",
+  "email": "you@example.com",
+  "bio": "One-paragraph professional summary used in outreach drafts.",
+  "target_roles": ["Software Engineer", "Senior Software Engineer"],
+  "target_companies": ["Stripe", "Notion", "Figma"],
+  "resume_path": "config/resume.txt",
+  "resume_template_path": "config/resume.docx",
+  "ai_provider": "claude"
+}

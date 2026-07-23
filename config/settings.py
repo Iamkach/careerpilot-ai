@@ -22,17 +22,39 @@ def _load_local_env(path=Path(__file__).resolve().parent.parent / ".env"):
 
 _load_local_env()
 
+
+def _load_profile(path=Path(__file__).resolve().parent / "profile.json"):
+    """Read a git-ignored config/profile.json overlay of forker identity (name, targets,
+    resume paths, AI provider) and return it as a dict.
+
+    Mirrors _load_local_env() above and _apply_saved_profile() below: the checked-in literals
+    in this module stay as generic placeholder defaults, while a forker's real identity lives
+    in a git-ignored JSON so personal details never enter version control and no one has to
+    edit this module to run the pipeline. A missing or corrupt file returns {} — the generic
+    defaults simply stand — so a bad file can never break an import or a pipeline run. Written
+    by `python run.py --init` (seeded from the tracked config/profile.example.json).
+    """
+    import json
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_profile = _load_profile()
+
 # --- Your profile -------------------------------------------
-YOUR_NAME        = "Krishna Achyuth"
-YOUR_EMAIL       = "kachyuth06@gmail.com"
-YOUR_BIO         = "Senior Software Engineer with deep experience building scalable, reliable products across backend, full-stack, and cloud systems. I bring strong technical execution, product-minded judgment, and a track record of turning complex requirements into maintainable software that moves business outcomes."
+YOUR_NAME        = _profile.get("name", "Your Name")
+YOUR_EMAIL       = _profile.get("email", "you@example.com")
+YOUR_BIO         = _profile.get("bio", "One-paragraph professional summary used in outreach drafts.")
 
 # --- Job search targets -------------------------------------
-TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
+TARGET_ROLES     = _profile.get("target_roles", ["Software Engineer", "Senior Software Engineer"])  # list of 2-3 roles you're targeting
 # Search is always US-wide. Jobs are filtered to US locations post-scrape.
 # Seeds scripts/sources.py's discover_tokens() (Greenhouse/Lever/Ashby board-token probing) —
 # union'd at runtime with every distinct company already in the Notion DB.
-TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
+TARGET_COMPANIES = _profile.get("target_companies", ["Stripe", "Notion", "Figma"])
 
 # --- Multi-source sourcing (stage 1, Step 6 Phase 1) ---------
 # Which scripts/sources.py registry entries run each scrape. Keyword sources
@@ -212,9 +234,10 @@ MIN_TAILORED_ATS_SCORE = 75
 #
 # A None/empty value is not a bug: it deliberately forces that field to human review.
 APPLICATION_PROFILE = {
-    # Identity
-    "first_name":    "Krishna",
-    "last_name":     "Achyuth",
+    # Identity — generic placeholders; a forker's real answers overlay these from the
+    # git-ignored config/application_profile.json (see _apply_saved_profile below).
+    "first_name":    "Your",
+    "last_name":     "Name",
     "full_name":     YOUR_NAME,
     "email":         YOUR_EMAIL,
     "phone":         "",                 # empty -> review_required if a form asks
@@ -315,12 +338,12 @@ AUTOAPPLY_HEADLESS = False
 
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
-RESUME_PATH      = "config/resume.txt"
+RESUME_PATH      = _profile.get("resume_path", "config/resume.txt")
 GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
 # Base resume .docx used as the source for tailoring (stage 2). The pipeline
 # copies this file and applies targeted ATS keyword edits in-place, preserving
 # all formatting. Must be a plain Word document (no Jinja2 placeholders needed).
-RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
+RESUME_TEMPLATE_PATH = _profile.get("resume_template_path", "config/resume.docx")
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages (run.py is the only entry point in use).
@@ -329,7 +352,7 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 # "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
 # No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
 # runs independently of any subscription session, and prompt caching is enabled.
-AI_PROVIDER = "codex"
+AI_PROVIDER = _profile.get("ai_provider", "claude")
 
 # Optional: route stage scripts (run.py path) through a different provider than AI_PROVIDER.
 # Leave blank to fall through to AI_PROVIDER above (default behavior).

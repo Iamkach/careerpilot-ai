@@ -16,9 +16,9 @@ Running with no action shows this action table plus the Prerequisites section.
 | Action | Runs | What it does |
 |---|---|---|
 | *(none)* | — | Show this table + Prerequisites |
-| `init` | `run.py --init` | One-time fork onboarding: capture Notion details, provision the page + both databases, write ids to `.env` |
+| `init` | `run.py --init && run.py --setup-profile` | One-time fork onboarding: capture Notion details, provision the page + both databases, write ids to `.env`, then capture Stage 7 application answers |
 | `setup` | `run.py --setup` | Verify config/keys/deps (+ validate the live Notion schema) |
-| `setup-profile` | `run.py --setup-profile` | One-time Stage 7 answer wizard |
+| `setup-profile` | `run.py --setup-profile` | Stage 7 answer wizard (also run standalone to update saved answers later) |
 | `smoke-test` | `smoke.py` | Agent-safe CLI smoke test, no API keys needed |
 | `morning` | `run.py` | Full daily flow: scrape + review digest (stages 1, 4) |
 | `scrape` | `run.py --stage 1` | Scrape + score + ingest "Interested" |
@@ -54,8 +54,8 @@ literal in the file):
 - `HUNTER_API_KEY` — optional, only used by `scripts/spike_phase0_leads.py` (Step 7 spike), not
   the core pipeline
 
-Resume at `config/resume.txt` (plain text) and the base `config/Achyuth_Resume.docx` for
-stage-2 in-place tailoring.
+Resume at `config/resume.txt` (plain text) and the base `config/resume.docx`
+(`RESUME_TEMPLATE_PATH`) for stage-2 in-place tailoring.
 
 ---
 
@@ -76,11 +76,17 @@ One-time fork onboarding. Interactive, idempotent, re-runnable. It:
    Scratch Pad** (single URL column) — and writes the new `NOTION_DB_ID` /
    `NOTION_SCRATCH_PAGE_ID` to `.env`.
 5. Runs `setup` for a green summary.
+6. Runs `python run.py --setup-profile` (see below) — the one-time interactive wizard that
+   captures your Stage 7 application answers (work authorization, sponsorship, notice period,
+   etc.) into the git-ignored `config/application_profile.json`, so a fresh fork is fully ready
+   for `apply` without a second onboarding action.
 
 Because the tracker is born with every Stage 7 `Status` option and property, a freshly-`init`ed
 DB does **not** need the `python scripts/setup_notion_schema.py --apply` migration — that script
 is only for older/hand-built trackers. Non-interactive fallback: hand-edit `.env` and run
-`python scripts/provision_notion.py --parent-page <share-link>` directly.
+`python scripts/provision_notion.py --parent-page <share-link>` directly, then run
+`python run.py --setup-profile` by hand (step 6 above only happens through the interactive
+`init` flow).
 
 ## `setup`
 
@@ -98,13 +104,16 @@ and prints the current `Retry` queue size. Reports exactly which items are missi
    default), `APIFY_API_TOKEN`, `NOTION_API_KEY` (`HUNTER_API_KEY` optional, Step 7 spike only).
 2. **Run `init`** — provisions the Notion page + both databases and writes `NOTION_DB_ID` /
    `NOTION_SCRATCH_PAGE_ID` to `.env` (all 21 `Status` options + Stage 7 columns included, so no
-   separate schema migration is needed).
+   separate schema migration is needed) — and, at the end of that same interactive flow, also runs
+   the `setup-profile` wizard to capture your Stage 7 application answers, so `apply` is ready to
+   go without a second onboarding step.
 3. Edit `config/settings.py` — `YOUR_NAME`, `YOUR_EMAIL`, `YOUR_BIO`, `TARGET_ROLES`,
    `TARGET_COMPANIES`, `ENABLED_SOURCES`.
 4. Add your resume text to `config/resume.txt`.
-5. **Before your first `apply` run:** run `setup-profile` (below) to capture your application
-   answers.
-6. Run `setup` to verify, then `scrape` to start the pipeline.
+5. Run `setup` to verify, then `scrape` to start the pipeline.
+
+> Used the non-interactive `init` fallback (`--parent-page`) instead? Run `setup-profile` by hand
+> afterward — it's only chained automatically inside the interactive `init` flow.
 
 > **Pointing at a pre-existing/hand-built tracker instead of `init`?** Add its id to `.env` as
 > `NOTION_DB_ID`, add the `Retry` `Status` option by hand once, and run
@@ -316,8 +325,11 @@ resolves each field to `ready`/`review_required` from `APPLICATION_PROFILE`/`EEO
 and writes an HTML answer sheet to `output/applications/`. **Never submits and never sets
 `Status=Applied`** — a human clicks Submit and marks it by hand.
 
-Prerequisite: run `python scripts/setup_notion_schema.py --apply` once (see `setup` checklist)
-before the first real (non-dry) run, and `setup-profile` to capture your answers.
+Prerequisite: `setup-profile` answers (captured automatically as part of `init` — run it
+standalone only if you skipped that, used the non-interactive `init` fallback, or want to update
+saved answers). If pointing at a pre-existing/hand-built tracker instead of a fresh `init`, also
+run `python scripts/setup_notion_schema.py --apply` once (see `setup` checklist) before the first
+real (non-dry) run.
 
 ## `status`
 

@@ -38,16 +38,21 @@ This file is scoped to code and development-blocking work only. Outstanding runt
   if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
   runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 
-- **Step 11 forkable setup — Phase 1 (Notion) landed, Phase 2 (identity) open (2026-07-22).**
-  `scripts/provision_notion.py` + `run.py --init` now provision the "Careerpilot-ai" page + all
-  three databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
-  schema. **Phase 2 still open:** de-hardcode owner
-  identity in `config/settings.py` (`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`,
-  `RESUME_TEMPLATE_PATH`, `AI_PROVIDER="codex"`) via a git-ignored `config/profile.json`, untrack
-  the personal resume/`ats_tokens.json` files, and genericize `Achyuth`/`Iamkach` references. Full
-  plan in `docs/backlog/step-11-forkable-setup.md`. (The CI `NOTION_DB_ID`/
-  `APIFY_API_TOKEN` secrets-wiring gap this surfaced is a runtime/ops item, not code — see
-  `docs/RUNTIME_NOTES.md`.)
+- **Step 11 forkable setup — Phases 1 + 2 landed (2026-07-22).**
+  `scripts/provision_notion.py` + `run.py --init` provision the "Careerpilot-ai" page + all three
+  databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
+  schema. **Phase 2 (identity) now done:** owner identity de-hardcoded in `config/settings.py`
+  (`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`, `RESUME_PATH`/`RESUME_TEMPLATE_PATH` →
+  `config/resume.docx`, `AI_PROVIDER` → `"claude"`) via a git-ignored `config/profile.json`
+  overlay (`_load_profile()`); `--init` grew a skippable profile-wizard block + `_sync_ci_secrets()`
+  (pushes `NOTION_DB_ID`/`APIFY_API_TOKEN`/provider key/`PROFILE_JSON` secrets via `gh`, or prints
+  paste-ready commands); `config/ats_tokens.json` is untracked and git-ignored (identity in
+  `config/profile.example.json`); `Achyuth`/`Iamkach`/DB-id references genericized across docs +
+  `.claude/*`. Resume files (`config/resume.txt` / `config/resume.docx`) stay **tracked in git as
+  usual** — an earlier draft that untracked them and shipped them to CI as base64-encoded secrets
+  was reverted as unneeded complexity; keep them current locally and commit them like any other
+  file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
+  `profile.json` from its secret. See `docs/backlog/step-11-forkable-setup.md`.
 
 ## Step 7 — Communications subsystem (not started)
 
