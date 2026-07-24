@@ -189,16 +189,33 @@ Return ONLY this JSON (no markdown fences, no commentary):
     return [], []
 
 
+_TAILOR_CHUNK_SIZE = 8  # keeps the max_tokens formula below (4000 + 1500*n) from saturating its 16000 cap
+
+
 def tailor_resumes_batch(
     resume_text: str,
     jobs_and_jds: list[tuple[dict, str]],
 ) -> dict[str, tuple[list, list]]:
-    """One AI call for all jobs. Returns {page_id: (edits, keywords)}.
-    Missing entries mean parse failed — caller falls back to _tailor_resume_single().
+    """Chunked AI calls covering all jobs, at most `_TAILOR_CHUNK_SIZE` per call — mirrors
+    verify_tailored_scores_batch()'s chunking below and stage 1's score_jobs_batch(). A single
+    unbounded call both grows the prompt (every job's JD) without limit and risks the model's
+    JSON reply being truncated by max_tokens, which fails parsing for the *whole* batch.
+    Returns {page_id: (edits, keywords)}. Missing entries mean that job's chunk failed to
+    parse — caller falls back to _tailor_resume_single().
     """
     if not jobs_and_jds:
         return {}
+    results: dict[str, tuple[list, list]] = {}
+    for i in range(0, len(jobs_and_jds), _TAILOR_CHUNK_SIZE):
+        results.update(_tailor_resumes_chunk(resume_text, jobs_and_jds[i:i + _TAILOR_CHUNK_SIZE]))
+    return results
 
+
+def _tailor_resumes_chunk(
+    resume_text: str,
+    jobs_and_jds: list[tuple[dict, str]],
+) -> dict[str, tuple[list, list]]:
+    """One AI call for one chunk of jobs. See tailor_resumes_batch for why chunking matters."""
     resume_block = {
         "type": "text",
         "text": f"RESUME (verbatim source for all 'old' fields):\n\n<resume>\n{resume_text}\n</resume>",
