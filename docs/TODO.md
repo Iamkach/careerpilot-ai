@@ -54,6 +54,26 @@ This file is scoped to code and development-blocking work only. Outstanding runt
   file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
   `profile.json` from its secret. See `docs/backlog/step-11-forkable-setup.md`.
 
+- **Nightly output retrieval (2026-07-26).** The nightly workflow's runner filesystem is
+  discarded when the job ends, so every file a stage wrote to `output/` was lost — a scheduled
+  run produced resumes and drafts nobody could ever read. `.github/workflows/nightly-pipeline.yml`
+  now ends with an `actions/upload-artifact@v4` step (`if: always()`, `output/`, 30-day retention,
+  `if-no-files-found: warn`) publishing the whole dir as one downloadable bundle per run; guarded
+  by `tests/test_nightly_workflow_artifact.py`. Deliberately workflow-YAML-only — no `run.py` flag
+  and no bundling code in the pipeline — so local runs are untouched by construction rather than
+  by a `GITHUB_ACTIONS` env guard that could be wrong.
+
+  **Known residual gap:** this makes the files *retrievable*, not the Notion link *valid*. Stage 2
+  still writes `f"file://{Path(file_path).resolve()}"` into `Tailored Resume Link`
+  (`scripts/stage2_tailor.py:638`), which on a runner resolves to `file:///home/runner/...`. So
+  after a nightly run: stage 4's digest renders a broken "View resume" anchor
+  (`scripts/stage4_digest.py:43`), and stage 7's `resolve_tailored_resume()`
+  (`scripts/autoapply.py:404`) fails its `p.exists()` check, logs `⚠ Tailored resume missing on
+  disk`, returns `""`, and the upload field goes `review_required` — every CI-tailored job is
+  unfillable. Closing this needs an environment-aware link scheme plus somewhere durable to host
+  the `.docx` (committed back to a branch and linked by raw URL, or object storage); an artifact
+  URL won't do, since it's zip-only and needs an authenticated download. Not attempted here.
+
 ## Step 7 — Communications subsystem (not started)
 
 Two new stages (LinkedIn leads discovery + Hunter-verified cold email), a new ~22-property

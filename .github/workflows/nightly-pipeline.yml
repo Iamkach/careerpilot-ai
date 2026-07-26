@@ -90,3 +90,25 @@ jobs:
             stage6)   python run.py --stage 6 ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac
+
+      # The runner's filesystem is discarded when the job ends, so every file a stage writes
+      # to output/ (tailored .docx resumes, outreach drafts, digest/prep/negotiation HTML,
+      # stage 7 answer sheets) would be lost. Upload the whole dir as one artifact instead —
+      # actions/upload-artifact zips it on download, so this is a single batch download from
+      # the run's summary page rather than fishing out one resume at a time.
+      #
+      # `if: always()` on purpose: a crashed run is exactly when the partial output and any
+      # stage 7 screenshots are worth reading. That also means this can fire when an earlier
+      # step died before output/ existed at all, hence if-no-files-found: warn — a missing
+      # dir must not turn an otherwise-green run red.
+      #
+      # NOTE: this step is GitHub-only. Local `python run.py` never parses this file, so local
+      # runs are untouched and keep writing to output/ as before.
+      - name: Bundle run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careerpilot-output-${{ github.run_number }}
+          path: output/
+          retention-days: 30
+          if-no-files-found: warn
