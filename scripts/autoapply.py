@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import (
     APPLICATION_PROFILE, EEO_RESPONSES, COMMON_QUESTION_PRESETS, APPLICATION_ADDRESS,
-    AUTOAPPLY_DAILY_CAP, AUTOAPPLY_HEADLESS, APPLICATIONS_DIR,
+    AUTOAPPLY_DAILY_CAP, AUTOAPPLY_HEADLESS, APPLICATIONS_DIR, RESUMES_DIR,
 )
 from scripts.utils import (
     log, today, ensure_dirs,
@@ -404,15 +404,21 @@ def readiness_report(plan: dict) -> dict:
 def resolve_tailored_resume(job: dict) -> str:
     """Resolve the stage 2 tailored .docx back to a real local path.
 
-    Stage 2 stores it as `file://{absolute path}` in Tailored Resume Link, so this reverses
-    that (strip scheme, percent-decode, fix the leading slash Windows drive paths pick up) and
-    confirms the file still exists — it may have been moved or cleaned up since tailoring.
+    Stage 2 can have written Tailored Resume Link in one of two schemes, mirroring its own
+    local/CI split (scripts/stage2_tailor.py::_tailored_resume_link()):
+      - file://{absolute path} (local runs): reverse it directly (strip scheme, percent-decode,
+        fix the leading slash Windows drive paths pick up) and confirm the file still exists —
+        it may have been moved or cleaned up since tailoring.
+      - https://raw.githubusercontent.com/.../tailored-resumes/... (CI-tailored jobs): there's
+        no local file yet, so download it into RESUMES_DIR and return that path instead.
     Returns "" when there's no usable resume, which makes the upload field review_required
-    rather than silently attaching nothing.
+    rather than silently attaching nothing — a download failure hits this same path.
     """
     link = (job.get("resume_link") or "").strip()
     if not link:
         return ""
+    if link.startswith("http://") or link.startswith("https://"):
+        return _download_tailored_resume(link)
     path = unquote(link[7:]) if link.startswith("file://") else unquote(link)
     if len(path) > 2 and path[0] == "/" and path[2] == ":":   # /C:/... → C:/...
         path = path[1:]
@@ -421,6 +427,26 @@ def resolve_tailored_resume(job: dict) -> str:
         log(f"  ⚠ Tailored resume missing on disk: {p}")
         return ""
     return str(p)
+
+
+def _download_tailored_resume(url: str) -> str:
+    """Fetch a CI-tailored resume from its raw.githubusercontent.com URL into RESUMES_DIR,
+    reusing the branch's filename so re-runs overwrite rather than accumulate duplicates.
+    Mirrors resolve_tailored_resume()'s "" + log-warning contract on any failure."""
+    import requests
+    ensure_dirs()
+    filename = url.rsplit("/", 1)[-1]
+    dest = Path(RESUMES_DIR) / filename
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            log(f"  ⚠ Tailored resume download failed ({r.status_code}): {url}")
+            return ""
+        dest.write_bytes(r.content)
+    except requests.RequestException as e:
+        log(f"  ⚠ Tailored resume download failed: {url} ({e})")
+        return ""
+    return str(dest)
 
 
 # ── 5. Answer sheet ───────────────────────────────────────────────────────────
