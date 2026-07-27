@@ -15,7 +15,7 @@ Run:  python run.py --evaluate
   or: python run.py --stage 2 --min-score 60   (only score ≥ 60 from Reviewed status)
 """
 
-import sys, argparse
+import os, sys, argparse
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -367,6 +367,21 @@ def save_resume(edits: list, job: dict, resume_text: str) -> str:
     return docx_path
 
 
+def _tailored_resume_link(file_path: str) -> str:
+    """Build the URL written to Notion's Tailored Resume Link property.
+
+    Local runs: a file:// URI to the resolved path, openable directly on this machine.
+    CI (GITHUB_ACTIONS): the runner's filesystem is discarded when the job ends, so file://
+    would be dead on arrival — point at the raw content on the tailored-resumes orphan branch
+    (published by the nightly workflow's publish step) instead, a URL that doesn't expire.
+    """
+    if os.environ.get("GITHUB_ACTIONS"):
+        repo = os.environ["GITHUB_REPOSITORY"]
+        rel = Path(file_path).resolve().relative_to(ROOT).as_posix()
+        return f"https://raw.githubusercontent.com/{repo}/tailored-resumes/{rel}"
+    return f"file://{Path(file_path).resolve()}"
+
+
 # ── Post-tailor verification ──────────────────────────────────
 
 def verify_tailored_score(tailored_resume_text: str, jd: str, job: dict) -> dict:
@@ -635,13 +650,13 @@ def run(min_score: int = 0):
                 "move Status back to 'Reviewed' to retry tailoring."
             )
             db_update_status(job["page_id"], "Human Review", {
-                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "tailored_resume_link": _tailored_resume_link(file_path),
                 "notes": f"{notes}\n{guidance}" if notes else guidance,
             })
             log(f"  ⚠ Zero edits suggested — left in 'Human Review' instead of 'Resume Tailored'")
         else:
             db_update_status(job["page_id"], "Resume Tailored", {
-                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "tailored_resume_link": _tailored_resume_link(file_path),
             })
             log(f"  ✓ Status updated → Resume Tailored")
 

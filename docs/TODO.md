@@ -63,16 +63,24 @@ This file is scoped to code and development-blocking work only. Outstanding runt
   and no bundling code in the pipeline — so local runs are untouched by construction rather than
   by a `GITHUB_ACTIONS` env guard that could be wrong.
 
-  **Known residual gap:** this makes the files *retrievable*, not the Notion link *valid*. Stage 2
-  still writes `f"file://{Path(file_path).resolve()}"` into `Tailored Resume Link`
-  (`scripts/stage2_tailor.py:638`), which on a runner resolves to `file:///home/runner/...`. So
-  after a nightly run: stage 4's digest renders a broken "View resume" anchor
-  (`scripts/stage4_digest.py:43`), and stage 7's `resolve_tailored_resume()`
-  (`scripts/autoapply.py:404`) fails its `p.exists()` check, logs `⚠ Tailored resume missing on
-  disk`, returns `""`, and the upload field goes `review_required` — every CI-tailored job is
-  unfillable. Closing this needs an environment-aware link scheme plus somewhere durable to host
-  the `.docx` (committed back to a branch and linked by raw URL, or object storage); an artifact
-  URL won't do, since it's zip-only and needs an authenticated download. Not attempted here.
+  **Closed (2026-07-26 follow-up).** Object storage and Notion's native file-upload API were both
+  evaluated and rejected — object storage adds an account/secret a fork-friendly project shouldn't
+  require, and Notion's file-upload API needs a second Notion client pinned to a newer
+  `Notion-Version` (risking the `databases.query` behavior this repo's pinned `notion-client`
+  version protects) for URLs that then expire after ~1 hour anyway, which would have forced stage
+  4's digest to link to the Notion page instead of the file. Went with a **dedicated orphan branch**
+  instead: the nightly workflow's new "Publish tailored resumes to tailored-resumes branch" step
+  (`.github/workflows/nightly-pipeline.yml`, gated by a new `permissions: contents: write`) pushes
+  `output/resumes/*.docx` to a `tailored-resumes` branch (self-bootstrapped on first run, additive
+  only — never wipes earlier runs' files). `scripts/stage2_tailor.py`'s `_tailored_resume_link()`
+  writes a `raw.githubusercontent.com` URL instead of `file://` whenever `GITHUB_ACTIONS` is set;
+  local runs are byte-for-byte unaffected (same env-var-guard pattern as `_load_local_env()`). A
+  raw GitHub URL doesn't expire, so stage 4's digest needed **no change**. Stage 7's
+  `resolve_tailored_resume()` (`scripts/autoapply.py`) now downloads the bytes into `RESUMES_DIR`
+  on the fly for a CI-tailored job instead of failing its local-file check. Guarded by
+  `tests/test_nightly_workflow_publish_resumes.py`, `tests/test_stage2_resume_link.py`, and new
+  cases in `tests/test_autoapply_plan.py`. Not exercised against a real nightly run/push yet — see
+  the same caveat already noted for stage 7's fill path never having run live.
 
 ## Step 7 — Communications subsystem (not started)
 

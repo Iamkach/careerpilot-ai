@@ -283,6 +283,51 @@ def test_resolve_tailored_resume_handles_no_link():
     assert resolve_tailored_resume({}) == ""
 
 
+def test_resolve_tailored_resume_downloads_ci_hosted_url(monkeypatch, tmp_path):
+    """A CI-tailored job's link is a raw.githubusercontent.com URL, not file:// — resolve it by
+    downloading the bytes into RESUMES_DIR rather than treating it as a local path."""
+    monkeypatch.setattr(autoapply, "RESUMES_DIR", str(tmp_path))
+
+    class FakeResponse:
+        status_code = 200
+        content = b"fake docx bytes"
+
+    monkeypatch.setattr("requests.get", lambda url, timeout: FakeResponse())
+
+    url = "https://raw.githubusercontent.com/o/r/tailored-resumes/output/resumes/x.docx"
+    result = resolve_tailored_resume({"resume_link": url})
+
+    assert result == str(tmp_path / "x.docx")
+    assert (tmp_path / "x.docx").read_bytes() == b"fake docx bytes"
+
+
+def test_resolve_tailored_resume_download_failure_returns_blank(monkeypatch, tmp_path):
+    monkeypatch.setattr(autoapply, "RESUMES_DIR", str(tmp_path))
+
+    class FakeResponse:
+        status_code = 404
+        content = b""
+
+    monkeypatch.setattr("requests.get", lambda url, timeout: FakeResponse())
+
+    url = "https://raw.githubusercontent.com/o/r/tailored-resumes/output/resumes/gone.docx"
+    assert resolve_tailored_resume({"resume_link": url}) == ""
+
+
+def test_resolve_tailored_resume_download_network_error_returns_blank(monkeypatch, tmp_path):
+    import requests
+
+    monkeypatch.setattr(autoapply, "RESUMES_DIR", str(tmp_path))
+
+    def raise_error(url, timeout):
+        raise requests.RequestException("boom")
+
+    monkeypatch.setattr("requests.get", raise_error)
+
+    url = "https://raw.githubusercontent.com/o/r/tailored-resumes/output/resumes/x.docx"
+    assert resolve_tailored_resume({"resume_link": url}) == ""
+
+
 def test_missing_resume_makes_the_upload_field_block():
     plan = build_application_plan(SAMPLE_QUESTIONS, resume_path="")
     upload = [f for f in plan["fields"] if f["type"] == "input_file"][0]
