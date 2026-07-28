@@ -356,6 +356,16 @@ Set `AI_PROVIDER` in `config/settings.py`:
 
 Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (strong).
 
+**No-key fallback:** if a tier (`AI_PROVIDER`, `FAST_PROVIDER`, or `QUALITY_PROVIDER`) would
+resolve to `"claude"` but `ANTHROPIC_API_KEY` isn't set, and the Claude Code subscription is
+usable (CLI on PATH, or `CLAUDE_CODE_OAUTH_TOKEN` set for headless auth), `config/settings.py`'s
+`_resolve_provider()` silently swaps that tier to `"claude_code"` instead of every AI call
+failing with an auth error — this is what makes a fork (or the nightly workflow, if
+`ANTHROPIC_API_KEY` was never added as a repo secret) runnable off just a subscription login
+with zero metered-key setup. If neither a key nor a usable subscription is present, the raw
+value is left as `"claude"` so `run.py --setup` still reports the key missing (no silent
+behavior change when nothing at all is configured).
+
 **`claude` (metered API, default):** calls the Anthropic API directly via `_chat_claude` in
 `scripts/utils.py`. Requires `ANTHROPIC_API_KEY`. No Claude Code CLI/login and no subscription
 session-window limit — every stage script's AI call runs independently. Also the only path
