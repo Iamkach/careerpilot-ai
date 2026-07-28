@@ -3,6 +3,7 @@
 # ============================================================
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -352,7 +353,33 @@ RESUME_TEMPLATE_PATH = _profile.get("resume_template_path", "config/resume.docx"
 # "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
 # No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
 # runs independently of any subscription session, and prompt caching is enabled.
-AI_PROVIDER = _profile.get("ai_provider", "claude")
+#
+# No-key fallback: if a tier would resolve to "claude" but ANTHROPIC_API_KEY isn't set, and
+# the Claude Code CLI/subscription is usable (CLI on PATH, or CLAUDE_CODE_OAUTH_TOKEN set for
+# headless auth), that tier silently falls back to "claude_code" instead of failing every AI
+# call with an auth error. This keeps a fork runnable on just a subscription login with zero
+# metered-key setup. If neither a key nor a usable subscription is present, the raw value is
+# left as "claude" and `run.py --setup` reports it missing as before (no silent behavior change
+# when nothing at all is configured).
+_ANTHROPIC_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+
+
+def _claude_code_available() -> bool:
+    cli_found = bool(
+        shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
+    )
+    return cli_found or bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""))
+
+
+def _resolve_provider(raw: str) -> str:
+    if raw == "claude" and not _ANTHROPIC_KEY_PRESENT and _claude_code_available():
+        print(f"[settings] ANTHROPIC_API_KEY not set — falling back to 'claude_code' (subscription) "
+              f"for a tier that requested 'claude'")
+        return "claude_code"
+    return raw
+
+
+AI_PROVIDER = _resolve_provider(_profile.get("ai_provider", "claude"))
 
 # Optional: route stage scripts (run.py path) through a different provider than AI_PROVIDER.
 # Leave blank to fall through to AI_PROVIDER above (default behavior).
@@ -368,9 +395,9 @@ STAGE_AI_PROVIDER = ""
 # today's all-metered behavior for local/manual runs; only overridden when the env vars below
 # are set (e.g. in the GitHub Actions workflow env). Interactively, `python run.py
 # --ai-mode {metered,hybrid,subscription}` sets these same two env vars for a single run
-# without editing this file.
-FAST_PROVIDER    = os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER
-QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
+# without editing this file. Same no-key fallback as AI_PROVIDER above applies to each tier.
+FAST_PROVIDER    = _resolve_provider(os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER)
+QUALITY_PROVIDER = _resolve_provider(os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER)
 
 # Model overrides for the "claude" provider only — leave blank to use claude-opus-4-6.
 # NOTE: these are NOT applied to gemini/codex/claude_code — a Claude model id (e.g.
