@@ -57,6 +57,15 @@ Watch for one of these before spending implementation time (mirrors the pattern 
 | **B. Agentic browser driver for Workday/custom sites** — per `docs/backlog/step-10-auto-apply-subsystem.md` §5, use a computer-use/Claude-in-Chrome-style agent instead of schema-driven Playwright selectors: it self-locates fields, handles novel/multi-page forms, and pauses for the human on captcha/auth. | The only realistic path for the long tail (Workday's per-tenant UI, arbitrary custom sites) — survives selector drift instead of being brittle to it. | Real: slower, costs model calls per application, and Workday specifically still needs per-company account provisioning regardless of driver quality — that's a cost this option doesn't remove. |
 | **C. Leave as-is; improve the answer sheet instead.** No browser adapter work; invest instead in making the Layer-1 answer sheet faster to hand-apply from (e.g. one-click copy per field, a browser extension, or just better formatting). | Cheapest option available; matches the "answer sheet only, forever" posture already locked in for LinkedIn/Indeed, extended pragmatically to the others until real volume justifies more. | Doesn't reduce apply time the way a real fill would — it's a smaller win, but zero new risk (no new selectors, no new captcha handling, no new per-company accounts). |
 
+> **Update (2026-07-26): Option C has its own plan now** —
+> [`browser-extension-prefill.md`](browser-extension-prefill.md) works the "browser extension"
+> half of Option C out in full, and argues it is not merely the cheap consolation option assumed
+> above but a *better substrate* than A or B: an extension reads the live DOM inside your
+> already-authenticated session, which removes the per-ATS schema probe Option A depends on, the
+> per-page model cost of Option B, and Workday's per-tenant account provisioning entirely. The
+> sequencing below is written as if a Playwright adapter is the path; weigh it against that doc
+> before acting on it. Whichever of the two ships, the other doc gets deleted in the same change.
+
 ## Recommended sequencing (when triggered)
 
 1. **Confirm the trigger first** — don't build ahead of real Ashby/Workday/custom volume in the
