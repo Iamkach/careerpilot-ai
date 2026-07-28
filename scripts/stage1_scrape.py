@@ -109,7 +109,34 @@ _US_LOCATION_RE = re.compile(
     r'\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|'
     r'MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|'
     r'UT|VT|VA|WA|WV|WI|WY|DC)\b'
-    r'|United States|Remote',
+    r'|United States|Remote'
+    # "Georgia" deliberately excluded here — collides with the country (e.g. "Tbilisi,
+    # Georgia"), unlike every other US state name. The "GA" abbreviation above and the
+    # bare "Atlanta" entry below already cover the legitimate US cases.
+    r'|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|'
+    r'Florida|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|'
+    r'Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|'
+    r'Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|'
+    r'New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|'
+    r'Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|'
+    r'Virginia|Washington|West Virginia|Wisconsin|Wyoming'
+    # LinkedIn's standardized "Metropolitan Area"/"Bay Area" geo names — a fixed
+    # taxonomy, not free text, so this stays a bounded list rather than a guess
+    r'|Los Angeles Metropolitan Area|New York City Metropolitan Area|'
+    r'San Francisco Bay Area|Greater Chicago Area|Dallas-Fort Worth Metroplex|'
+    r'Greater Houston|Greater Boston|Greater Seattle Area|Greater Atlanta Area|'
+    r'Greater Phoenix Area|Greater Denver Area|Greater Miami Area|'
+    r'Washington DC-Baltimore Area|Memphis Metropolitan Area|'
+    r'San Francisco Office|SF Office'
+    # Major US tech-hub cities that Greenhouse/Ashby postings sometimes list bare,
+    # with no state/country suffix (e.g. Asana's "(San Francisco)"). Kept to
+    # unambiguous US-only names -- no "Cambridge"/"Portland"/"Birmingham" style
+    # entries that collide with a same-named non-US city.
+    r'|San Francisco|Mountain View|Sunnyvale|Redwood City|Palo Alto|Menlo Park|'
+    r'Cupertino|Santa Clara|Seattle|Austin|Dallas|Houston|Atlanta|Nashville|'
+    r'Pittsburgh|Philadelphia|Raleigh|Durham|Minneapolis|San Diego|San Jose|'
+    r'Sacramento|Oakland|Redmond|Bellevue|Irvine|Los Angeles|Chicago|Denver|'
+    r'Miami|Boston',
     re.IGNORECASE,
 )
 
