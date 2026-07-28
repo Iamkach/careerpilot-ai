@@ -10,49 +10,12 @@ This file is scoped to code and development-blocking work only. Outstanding runt
 
 ## Small, standalone fixes
 
-- **Step 3 manual QA run (2026-07-18)** — added 3 real `Interested` rows (Netflix, SmithRx/
-  Greenhouse, Amazon — via the scratch-note path) and ran `python run.py --ingest`. The
-  self-match fix holds (no row retired against itself). But it surfaced a real bug:
-  `scrape_job_urls()` only enriches `linkedin.com/jobs/view/...` URLs; all 3 non-LinkedIn URLs
-  matched 0 results and were scored anyway on an empty description, landing on `Scraped` with a
-  fabricated-looking score and no cached JD. Fixed: `scripts/sources.py` gained
-  `enrich_job_url()` — dispatches Greenhouse/Lever/Ashby URLs to their direct per-job JSON APIs,
-  everything else to a best-effort `generic_url_fetch()` HTML scrape; `ingest_interested_from_notion()`
-  now partitions by actual `linkedin.com` domain (not the old digit-run regex, which
-  false-matched non-LinkedIn URLs too) and never scores a job whose enrichment returned no
-  description — it's left as `Interested` for the next run instead. Verified by re-running
-  ingest against the same 3 rows: all landed on `Scraped` with real cached JD text and
-  differentiated scores. **Known residual gap — mostly closed (2026-07-19):**
-  `generic_url_fetch()` now probes for a schema.org `JobPosting` JSON-LD block before falling
-  back to raw `<title>`/tag-stripped text, recovering real title/company/location even out of
-  a near-empty SPA shell when that JSON-LD is present (Option A); when both that probe and the
-  raw-text fallback come up short, it now also tries a headless Chromium render (Playwright,
-  optional dependency) and retries the same extraction against the hydrated HTML (Option B —
-  built ahead of its trigger criteria, at explicit user request, since Playwright/Chromium
-  weight in the pipeline's real runtime environment hasn't been validated yet); degrades to the
-  old "treat as enrichment failure" behavior if Playwright isn't installed or the render fails.
-  `ingest_interested_from_notion()` also gained an `Enrichment Attempts` ceiling
-  (`MAX_ENRICHMENT_ATTEMPTS`, mirroring `MAX_SCORING_ATTEMPTS`) so a permanently unfetchable URL
-  gives up after N `--ingest` passes instead of retrying forever (Option D). Still open: a paid
-  scrape API (Option C) as a no-new-infra alternative to B remains deferred — only worth adding
-  if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
-  runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
-
-- **Step 11 forkable setup — Phases 1 + 2 landed (2026-07-22).**
-  `scripts/provision_notion.py` + `run.py --init` provision the "Careerpilot-ai" page + all three
-  databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
-  schema. **Phase 2 (identity) now done:** owner identity de-hardcoded in `config/settings.py`
-  (`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`, `RESUME_PATH`/`RESUME_TEMPLATE_PATH` →
-  `config/resume.docx`, `AI_PROVIDER` → `"claude"`) via a git-ignored `config/profile.json`
-  overlay (`_load_profile()`); `--init` grew a skippable profile-wizard block + `_sync_ci_secrets()`
-  (pushes `NOTION_DB_ID`/`APIFY_API_TOKEN`/provider key/`PROFILE_JSON` secrets via `gh`, or prints
-  paste-ready commands); `config/ats_tokens.json` is untracked and git-ignored (identity in
-  `config/profile.example.json`); `Achyuth`/`Iamkach`/DB-id references genericized across docs +
-  `.claude/*`. Resume files (`config/resume.txt` / `config/resume.docx`) stay **tracked in git as
-  usual** — an earlier draft that untracked them and shipped them to CI as base64-encoded secrets
-  was reverted as unneeded complexity; keep them current locally and commit them like any other
-  file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
-  `profile.json` from its secret. See `docs/backlog/step-11-forkable-setup.md`.
+- **Step 3 manual QA run (2026-07-18) — closed except Option C.** Manually ingesting 3 real
+  `Interested` rows surfaced a bug (non-LinkedIn URLs scored on a blank JD); fixed via
+  `enrich_job_url()`/`generic_url_fetch()`'s JSON-LD probe + headless-Chromium fallback (Options
+  A/B) and an `Enrichment Attempts` retry ceiling (Option D). Only Option C (a paid scrape API,
+  deferred — only worth it if headless rendering proves too heavy for the nightly runner) remains
+  open. Full history: `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 
 - **Nightly output retrieval (2026-07-26).** The nightly workflow's runner filesystem is
   discarded when the job ends, so every file a stage wrote to `output/` was lost — a scheduled
@@ -81,6 +44,23 @@ This file is scoped to code and development-blocking work only. Outstanding runt
   `tests/test_nightly_workflow_publish_resumes.py`, `tests/test_stage2_resume_link.py`, and new
   cases in `tests/test_autoapply_plan.py`. Not exercised against a real nightly run/push yet — see
   the same caveat already noted for stage 7's fill path never having run live.
+
+## Step 13 — Board-token harvesting (not started)
+
+`discover_tokens()` (`scripts/sources.py:818`) finds a company's ATS board by **guessing** its
+slug from its display name (`_slugify()`, `:746`). Measured on the live cache
+(`config/ats_tokens.json`, 2026-07-25): **23 of 100 companies resolve to a board** (14 Greenhouse,
+9 Ashby, 1 Lever); the other 77 are cached all-null and re-probed with the same failing guess every
+30 days. The fix is to stop guessing: LinkedIn/Indeed listings already carry the employer's real
+board URL, and we discard it — `scrape_indeed()` reads `externalApplyLink` only as a third-choice
+`url` fallback (`:245`), `scrape_linkedin()` does the same with `applyUrl` (`:184`). Phase 1
+harvests those into the token cache with a `provenance` field, makes **zero new network calls**,
+and compounds run over run.
+
+Deliberately excluded: following LinkedIn apply redirects (authwall ⇒ authenticated session ⇒ the
+exact surface `FILLABLE_CHANNELS` excludes LinkedIn from by rule).
+
+Full spec: `docs/backlog/step-13-board-token-harvesting.md`.
 
 ## Step 7 — Communications subsystem (not started)
 
@@ -160,4 +140,3 @@ irreducibly a browser problem.
 
 Full spec + the research findings that shaped the design:
 `docs/backlog/step-10-auto-apply-subsystem.md` §11.
-

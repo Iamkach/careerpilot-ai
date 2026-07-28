@@ -42,13 +42,22 @@ and deleted:
 - **Forkable setup** (`onboarding/forkable-setup.md`) — finalized, content merged into
   [`../backlog/step-11-forkable-setup.md`](../backlog/step-11-forkable-setup.md). Deleted.
 
-Two plans remain here because they are **not yet finalized/queued** — still idea-level or
+Three plans remain here because they are **not yet finalized/queued** — still idea-level or
 deliberately deferred pending a trigger:
 
 | Plan | Status | Covers |
 |---|---|---|
 | [`sourcing/career-site-enrichment-fallback.md`](sourcing/career-site-enrichment-fallback.md) | deferred — not queued, see trigger criteria | `generic_url_fetch()` gaps: no structured fields, JS-rendered SPAs return near-empty, no retry ceiling |
 | [`auto-apply/ashby-workday-custom-fill.md`](auto-apply/ashby-workday-custom-fill.md) | deferred — not queued, see trigger criteria | Stage 7 Layer 2 browser fill only covers Greenhouse/Lever; Ashby/Workday/custom careers sites get an answer sheet only |
+| [`auto-apply/browser-extension-prefill.md`](auto-apply/browser-extension-prefill.md) | deferred — not queued, design settled | A browser extension + localhost bridge as a Layer 3 pre-fill: reads the live DOM, so it covers Ashby/Workday/custom with no per-ATS schema or selector work |
+| [`tracking/inbound-email-status-sync.md`](tracking/inbound-email-status-sync.md) | idea-level, not queued | Read Gmail replies from applied companies, match to a tracker row, classify (rejection/interview/OA/offer), and update Notion `Status` under a narrow, auditable confidence gate |
+
+The two `auto-apply/` plans address the **same bottleneck** (hand-typing the answer sheet for
+non-Greenhouse/Lever forms) with different substrates, and are deliberately kept as two docs while
+both are unqueued — neither supersedes the other yet. If the extension plan is the one that ships,
+`ashby-workday-custom-fill.md` should be deleted as part of that same change (its Options A/B
+become moot and its Option C *is* the extension); if instead a Playwright adapter is chosen, the
+reverse applies.
 
 When either hits its trigger criteria and gets prioritized, fold it into a new
 `docs/backlog/step-N-*.md` story and delete it from here, following the pattern above.

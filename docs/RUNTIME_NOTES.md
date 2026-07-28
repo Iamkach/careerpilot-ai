@@ -15,11 +15,6 @@ notes assume.
 - **Stale Supabase Preview integration still reporting on PRs.** Vestigial now that
   `sync_notion_to_supabase()` is a no-op (Notion is the store). Decide whether to remove it
   from the repo's integrations — needs the same Settings access as above.
-- **`nightly-pipeline.yml` is missing two repo secrets.** `NOTION_DB_ID` and
-  `APIFY_API_TOKEN` aren't in the workflow's `env:` block, so a scheduled run currently points
-  at an empty `NOTION_DB_ID` and can't use Apify sources. Add both as repo secrets
-  (Settings → Secrets and variables → Actions) and wire them into the `env:` block the same way
-  `NOTION_API_KEY` already is. Surfaced 2026-07-22 during Step 11 (forkable setup) work.
 - **`CLAUDE_CODE_OAUTH_TOKEN` expires periodically.** If a scheduled run fails on subscription
   auth, re-mint it locally with `claude setup-token` (requires Claude Pro/Max) and update the
   repo secret — this is a token-rotation task, not a bug.

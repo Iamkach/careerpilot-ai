@@ -229,3 +229,22 @@ checking the same merged list as defense-in-depth, for a job that reached `Revie
 its company was added.
 
 Full spec (retired): `docs/backlog/step-12-sponsorship-restriction-marker.md`.
+
+## Step 11 — Forkable setup (Phases 1 + 2)
+
+`scripts/provision_notion.py` + `run.py --init` provision the "Careerpilot-ai" page + all three
+databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
+schema. **Phase 2 (identity):** owner identity de-hardcoded in `config/settings.py`
+(`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`, `RESUME_PATH`/`RESUME_TEMPLATE_PATH` →
+`config/resume.docx`, `AI_PROVIDER` → `"claude"`) via a git-ignored `config/profile.json`
+overlay (`_load_profile()`); `--init` grew a skippable profile-wizard block + `_sync_ci_secrets()`
+(pushes `NOTION_DB_ID`/`APIFY_API_TOKEN`/provider key/`PROFILE_JSON` secrets via `gh`, or prints
+paste-ready commands); `config/ats_tokens.json` is untracked and git-ignored (identity in
+`config/profile.example.json`); `Achyuth`/`Iamkach`/DB-id references genericized across docs +
+`.claude/*`. Resume files (`config/resume.txt` / `config/resume.docx`) stay **tracked in git as
+usual** — an earlier draft that untracked them and shipped them to CI as base64-encoded secrets
+was reverted as unneeded complexity; keep them current locally and commit them like any other
+file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
+`profile.json` from its secret.
+
+Full spec: `docs/backlog/step-11-forkable-setup.md`.
