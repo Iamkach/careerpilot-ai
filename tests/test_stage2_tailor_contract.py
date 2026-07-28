@@ -376,6 +376,11 @@ def _stub_run_dependencies(monkeypatch, jobs, description="Some JD text"):
     """Wire run() up to fakes for everything except the two functions under test
     (verify_tailored_scores_batch / verify_tailored_score), so a run() test can assert
     call counts on those without touching real Notion, AI, or .docx I/O."""
+    # _tailored_resume_link() branches on GITHUB_ACTIONS; these tests exercise the local
+    # file:// path (matching tests/test_stage2_resume_link.py's hermetic pattern) and would
+    # otherwise leak the real CI environment variable in and hit the CI-only branch's
+    # relative_to(ROOT) against the fake, non-repo "/fake/{page_id}.docx" path below.
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(stage2_tailor, "load_base_resume_text", lambda: "BASE RESUME")
     monkeypatch.setattr(stage2_tailor, "get_reviewed_jobs", lambda min_score=0: jobs)
     monkeypatch.setattr(stage2_tailor, "_sponsorship_gate", lambda js: js)
