@@ -11,6 +11,11 @@ touches this repo's code) live in `docs/RUNTIME_NOTES.md` instead.
 
 ## Small, standalone fixes
 
+- **Step 11 fresh-fork verification (2026-07-30).** Step 11 (`--init` wizard + Notion
+  provisioning + profile.json de-personalization) is fully implemented and merged to `main`; the
+  one thing never actually run is a fresh-fork dry run confirming `--init` end-to-end (Notion
+  provisioning + profile wizard + `gh` secret sync) works for someone who isn't the original owner.
+
 - **Step 3 manual QA run (2026-07-18) — closed except Option C.** Manually ingesting 3 real
   `Interested` rows surfaced a bug (non-LinkedIn URLs scored on a blank JD); fixed via
   `enrich_job_url()`/`generic_url_fetch()`'s JSON-LD probe + headless-Chromium fallback (Options
