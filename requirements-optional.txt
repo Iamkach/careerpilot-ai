@@ -8,3 +8,11 @@
 # gracefully (skips this path, logs a warning) if not installed.
 # After installing, also run: playwright install chromium
 playwright>=1.40.0,<2.0.0
+
+# docx->PDF conversion for Stage 7 auto-apply (scripts/autoapply_browser.py's
+# _resolve_upload_path(), backed by scripts/render_docx.convert_docx_to_pdf()) — used only when
+# a live ATS form's upload field rejects .docx (stage 2 only produces .docx). Not a pip package:
+# install LibreOffice from https://www.libreoffice.org/download/ (or your OS package manager,
+# e.g. `apt install libreoffice` / `brew install --cask libreoffice`) and make sure `soffice`
+# (or `libreoffice`) is on PATH. Missing/broken install degrades to the existing `pdf_only`
+# stop rather than raising.

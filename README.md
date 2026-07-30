@@ -1,10 +1,10 @@
 # 🤖 AI Job Search Pipeline
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](https://github.com/Iamkach/careerpilot-ai/actions)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF.svg?logo=githubactions&logoColor=white)](https://github.com/your-username/careerpilot-ai/actions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![AI Provider](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20OpenRouter-8a2be2.svg)](#switching-ai-provider)
 [![Data store](https://img.shields.io/badge/data%20store-Notion-black.svg)](https://www.notion.so/)
-[![Repo](https://img.shields.io/badge/repo-private-lightgrey.svg)](https://github.com/Iamkach/careerpilot-ai)
+[![Repo](https://img.shields.io/badge/repo-private-lightgrey.svg)](https://github.com/your-username/careerpilot-ai)
 
 Automated job search system using the Claude API — no N8N, no VPS required.
 Scrapes jobs from LinkedIn, Indeed, and company Greenhouse/Lever/Ashby boards, scores
@@ -102,7 +102,7 @@ careerpilot-ai/
 │   ├── settings.py              # API keys (env-sourced), user profile, target roles, AI models, source/filter config
 │   ├── ats_tokens.json          # Cached Greenhouse/Lever/Ashby board-token discovery (auto-maintained)
 │   ├── resume.txt               # Your resume (plain text, required)
-│   ├── Achyuth_Resume.docx      # Master resume template (edited in-place by stage 2)
+│   ├── resume.docx              # Master resume template (RESUME_TEMPLATE_PATH; edited in-place by stage 2)
 │   └── resume_template.docx     # DOCX scaffold for render_docx.py
 │
 ├── scripts/
@@ -169,7 +169,10 @@ Open `config/settings.py` and fill in. **All API keys are read from the environm
 - `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` — matching your provider
 - `APIFY_API_TOKEN`   — from https://apify.com (free tier) — powers the `linkedin`/`indeed` sources
 - `NOTION_API_KEY`    — from https://www.notion.so/my-integrations
-  - Create an integration, give it access to your Job Search Tracker database
+  - Create an integration and share one page with it; then run **`python run.py --init`** to
+    auto-provision the "Careerpilot-ai" page + the Job Search Tracker & Job Link Scratch Pad
+    databases (full schema) and write `NOTION_DB_ID` / `NOTION_SCRATCH_PAGE_ID` to `.env`.
+    (There is no default DB id — a fork provisions its own.)
 - `HUNTER_API_KEY`    — optional, only used by the Step 7 spike script, not the core pipeline
 - `ENABLED_SOURCES`   — which sources stage 1 crawls (`linkedin`, `indeed`, `greenhouse`,
   `lever`, `ashby`); the board sources are free/keyless and crawl `TARGET_COMPANIES` ∪
@@ -179,12 +182,14 @@ Open `config/settings.py` and fill in. **All API keys are read from the environm
 See [SETUP.md](SETUP.md) for the full walkthrough, including the Notion schema and the
 one-time Greenhouse/Lever/Ashby board-token discovery step.
 
-### 4. Verify setup
+### 4. First-run onboarding + verify setup
 ```bash
-python run.py --setup
+python run.py --init     # one-time: Notion details → provision page + DBs → write ids to .env
+python run.py --setup    # validate config, keys, and the live Notion schema
 ```
-Also prints the current `Retry` queue size (jobs whose AI scoring failed and will be
-automatically re-scored on the next stage 1 run).
+`--setup` also validates the tracker DB against the canonical schema
+(`scripts/provision_notion.py`) and prints the current `Retry` queue size (jobs whose AI
+scoring failed and will be automatically re-scored on the next stage 1 run).
 
 ---
 
@@ -339,7 +344,8 @@ hybrid pattern used on unattended off-hours runs.
 
 `.github/workflows/nightly-pipeline.yml` can run the pipeline off-hours on a cron schedule
 using hybrid AI provider routing (`FAST_PROVIDER=claude` metered + `QUALITY_PROVIDER=claude_code`
-subscription). See [SETUP.md](SETUP.md) §6 for the required repo secrets.
+subscription). See [docs/GITHUB_ACTIONS_SETUP.md](docs/GITHUB_ACTIONS_SETUP.md) for the full
+setup guide (repo secrets, enabling Actions, manual runs, known gaps/troubleshooting).
 
 ---
 

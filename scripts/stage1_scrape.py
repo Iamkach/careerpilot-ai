@@ -34,6 +34,7 @@ from scripts.utils import (
     db_update_status, get_notion_jobs_by_status,
     get_scratch_note_entries, archive_scratch_note_entry, db_add_interested_url,
     _notion_promote_to_scraped, log, today, matches_company_list,
+    get_restricted_sponsorship_companies,
 )
 from scripts.sources import (
     KEYWORD_SOURCES, BOARD_SOURCES, job_fingerprint, collapse_by_fingerprint,
@@ -108,7 +109,34 @@ _US_LOCATION_RE = re.compile(
     r'\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|'
     r'MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|'
     r'UT|VT|VA|WA|WV|WI|WY|DC)\b'
-    r'|United States|Remote',
+    r'|United States|Remote'
+    # "Georgia" deliberately excluded here — collides with the country (e.g. "Tbilisi,
+    # Georgia"), unlike every other US state name. The "GA" abbreviation above and the
+    # bare "Atlanta" entry below already cover the legitimate US cases.
+    r'|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|'
+    r'Florida|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|'
+    r'Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|'
+    r'Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|'
+    r'New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|'
+    r'Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|'
+    r'Virginia|Washington|West Virginia|Wisconsin|Wyoming'
+    # LinkedIn's standardized "Metropolitan Area"/"Bay Area" geo names — a fixed
+    # taxonomy, not free text, so this stays a bounded list rather than a guess
+    r'|Los Angeles Metropolitan Area|New York City Metropolitan Area|'
+    r'San Francisco Bay Area|Greater Chicago Area|Dallas-Fort Worth Metroplex|'
+    r'Greater Houston|Greater Boston|Greater Seattle Area|Greater Atlanta Area|'
+    r'Greater Phoenix Area|Greater Denver Area|Greater Miami Area|'
+    r'Washington DC-Baltimore Area|Memphis Metropolitan Area|'
+    r'San Francisco Office|SF Office'
+    # Major US tech-hub cities that Greenhouse/Ashby postings sometimes list bare,
+    # with no state/country suffix (e.g. Asana's "(San Francisco)"). Kept to
+    # unambiguous US-only names -- no "Cambridge"/"Portland"/"Birmingham" style
+    # entries that collide with a same-named non-US city.
+    r'|San Francisco|Mountain View|Sunnyvale|Redwood City|Palo Alto|Menlo Park|'
+    r'Cupertino|Santa Clara|Seattle|Austin|Dallas|Houston|Atlanta|Nashville|'
+    r'Pittsburgh|Philadelphia|Raleigh|Durham|Minneapolis|San Diego|San Jose|'
+    r'Sacramento|Oakland|Redmond|Bellevue|Irvine|Los Angeles|Chicago|Denver|'
+    r'Miami|Boston',
     re.IGNORECASE,
 )
 
@@ -137,6 +165,17 @@ def is_skipped_company(company: str) -> bool:
     if any(kw.lower() in name for kw in SKIP_COMPANY_KEYWORDS):
         return True
     return False
+
+
+def is_restricted_sponsorship_company(company: str, restricted: list[str]) -> bool:
+    """Word-boundary match against the merged restricted-sponsorship company list (Notion +
+    RESTRICTED_SPONSORSHIP_COMPANIES fallback, see get_restricted_sponsorship_companies()) —
+    same matcher as is_skipped_company(), kept as a separate predicate so a restricted-
+    sponsorship drop is distinguishable in logs/counters from a staffing/consulting drop."""
+    name = (company or "").lower().strip()
+    if not name:
+        return False
+    return matches_company_list(name, restricted)
 
 
 def is_skipped_title(title: str) -> bool:
@@ -586,13 +625,15 @@ def _log_drop(fh, reason: str, job: dict) -> None:
 # ── 7. Pre-filter helper ─────────────────────────────────────
 
 def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set,
-                 counters: dict, drop_fh) -> bool:
+                 counters: dict, drop_fh, restricted: list[str] = ()) -> bool:
     """Apply all pre-scoring filters. Returns True if job should be kept.
 
     `seen_urls`/`existing_fps` dedup within this run and against Notion respectively;
     `existing_urls` is a one-shot snapshot of every URL already in Notion, so the two
     together cover this run and all prior ones. (The within-run `seen_urls` check itself
-    lives in the caller, which is what maintains the set.)"""
+    lives in the caller, which is what maintains the set.) `restricted` is the merged
+    restricted-sponsorship company list, fetched once per scrape pass by the caller — not
+    re-fetched per job."""
     url             = job.get("url", "")
     title           = job.get("title", "")
     company         = job.get("company", "")
@@ -611,6 +652,11 @@ def _pre_filter(job: dict, seen_urls: set, existing_urls: set, existing_fps: set
         counters["company"] += 1
         _log_drop(drop_fh, "company", job)
         log(f"  ⊘ [company]       {company} — {title}")
+        return False
+    if is_restricted_sponsorship_company(company, restricted):
+        counters["restricted-sponsorship"] += 1
+        _log_drop(drop_fh, "restricted-sponsorship", job)
+        log(f"  ⊘ [restricted-sponsorship] {company} — {title}")
         return False
     if is_skipped_title(title):
         counters["title"] += 1
@@ -662,6 +708,7 @@ def _scrape_pass(drop_log_path, drop_fh):
         "company": 0, "title": 0, "location": 0, "stale": 0,
         "sponsorship": 0, "applicants": 0, "duplicate": 0, "low_score": 0,
         "staffing_ai": 0, "retry": 0, "auto_reviewed": 0, "write_failed": 0,
+        "restricted-sponsorship": 0,
     }
 
     # 8a-pre. Promote scratch-note URL drops to Interested rows
@@ -713,6 +760,10 @@ def _scrape_pass(drop_log_path, drop_fh):
     }
     log(f"  Notion snapshot: {len(existing_urls)} existing job URL(s), {len(existing_fps)} fingerprint(s)")
 
+    # Restricted-sponsorship company list (Notion + RESTRICTED_SPONSORSHIP_COMPANIES
+    # fallback) — fetched once per pass, not per job.
+    restricted_companies = get_restricted_sponsorship_companies()
+
     # 8b. Global gather — every enabled keyword source × TARGET_ROLES, plus every enabled
     # board source × discovered TARGET_COMPANIES token. A duplicate can span both roles and
     # sources, so this has to happen before any per-role filtering can see it.
@@ -753,7 +804,7 @@ def _scrape_pass(drop_log_path, drop_fh):
         if job["url"] in seen_urls:
             counters["duplicate"] += 1
             continue
-        if _pre_filter(job, seen_urls, existing_urls, existing_fps, counters, drop_fh):
+        if _pre_filter(job, seen_urls, existing_urls, existing_fps, counters, drop_fh, restricted_companies):
             seen_urls.add(job["url"])
             candidates.append(job)
 
@@ -864,7 +915,8 @@ def _scrape_pass(drop_log_path, drop_fh):
         f"{counters['auto_reviewed']} auto-reviewed (sponsorship!=no, score>={AUTO_REVIEW_MIN_SCORE})  |  "
         f"{counters['retry']} queued for retry (scoring failed)\n"
         f"Pre-filter drops -> "
-        f"stale:{counters['stale']}  company:{counters['company']}  title:{counters['title']}  "
+        f"stale:{counters['stale']}  company:{counters['company']}  "
+        f"restricted-sponsorship:{counters['restricted-sponsorship']}  title:{counters['title']}  "
         f"location:{counters['location']}  no-sponsor:{counters['sponsorship']}  "
         f"staffing/AI:{counters['staffing_ai']}  "
         f"high-applicants:{counters['applicants']}  duplicate:{counters['duplicate']}  "

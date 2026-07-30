@@ -4,9 +4,10 @@ stage2_tailor.py — AI resume tailoring per job
 ────────────────────────────────────────────────
 What it does:
   1. Fetches all "Reviewed" jobs from Notion (jobs marked for application)
-  2. Extracts text from config/Achyuth_Resume.docx as the base resume content
+  2. Extracts text from the base resume `.docx` (RESUME_TEMPLATE_PATH,
+     default config/resume.docx) as the base resume content
   3. For each job, asks Claude for targeted ATS keyword edits ({old, new} pairs)
-  4. Copies Achyuth_Resume.docx, applies edits in-place → output/resumes/*.docx
+  4. Copies that base `.docx`, applies edits in-place → output/resumes/*.docx
      (preserves all original formatting; also writes a .txt mirror for quick review)
   5. Updates Notion: Status → "Resume Tailored", Tailored Resume Link
 
@@ -14,7 +15,7 @@ Run:  python run.py --evaluate
   or: python run.py --stage 2 --min-score 60   (only score ≥ 60 from Reviewed status)
 """
 
-import sys, argparse
+import os, sys, argparse
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -23,6 +24,7 @@ from scripts.utils import (
     ai_chat_blocks, claude_chat, parse_json_response,
     db_update_status, db_get_jobs, db_get_job_description,
     log, today, ensure_dirs, ROOT, matches_company_list,
+    get_restricted_sponsorship_companies,
 )
 from scripts.render_docx import extract_docx_text, apply_docx_edits
 from scripts.stage1_scrape import score_jobs_batch
@@ -58,15 +60,20 @@ def get_reviewed_jobs(min_score: int = 0) -> list:
 # ── Sponsorship gate ──────────────────────────────────────────
 
 def _sponsorship_gate(jobs: list[dict]) -> list[dict]:
-    """Hold back jobs at RESTRICTED_SPONSORSHIP_COMPANIES (companies known to sponsor only
-    existing employees, not new hires) instead of tailoring a resume for them. A held job is
-    moved to Notion Status='Human Review' with a guidance note. It's released once the user
-    personally confirms sponsorship, adds SPONSORSHIP_CONFIRMED_MARKER to that job's Notion
-    Notes, and moves Status back to 'Reviewed' by hand — without the marker check, a job
-    moved back to 'Reviewed' would just get re-gated into 'Human Review' forever."""
+    """Hold back jobs at a restricted-sponsorship company (companies known to sponsor only
+    existing employees, not new hires) instead of tailoring a resume for them. The
+    restricted list is the merged Notion database + RESTRICTED_SPONSORSHIP_COMPANIES
+    fallback (get_restricted_sponsorship_companies()) — stage 1 already drops these
+    silently at scrape time, so this is defense-in-depth for a job that reached 'Reviewed'
+    before its company was added to the list. A held job is moved to Notion
+    Status='Human Review' with a guidance note. It's released once the user personally
+    confirms sponsorship, adds SPONSORSHIP_CONFIRMED_MARKER to that job's Notion Notes, and
+    moves Status back to 'Reviewed' by hand — without the marker check, a job moved back to
+    'Reviewed' would just get re-gated into 'Human Review' forever."""
+    restricted = get_restricted_sponsorship_companies()
     cleared = []
     for job in jobs:
-        if not matches_company_list(job["company"], RESTRICTED_SPONSORSHIP_COMPANIES):
+        if not matches_company_list(job["company"], restricted):
             cleared.append(job)
             continue
         notes = job.get("notes") or ""
@@ -120,8 +127,8 @@ def fetch_jd(url: str) -> str:
 def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
     """Return a list of {old, new} text edits to apply to the base resume .docx.
 
-    The resume_text is extracted verbatim from Achyuth_Resume.docx so Claude
-    can quote exact strings for the "old" fields.
+    The resume_text is extracted verbatim from the base resume .docx
+    (RESUME_TEMPLATE_PATH) so Claude can quote exact strings for the "old" fields.
     """
     resume_block = {
         "type": "text",
@@ -182,16 +189,33 @@ Return ONLY this JSON (no markdown fences, no commentary):
     return [], []
 
 
+_TAILOR_CHUNK_SIZE = 8  # keeps the max_tokens formula below (4000 + 1500*n) from saturating its 16000 cap
+
+
 def tailor_resumes_batch(
     resume_text: str,
     jobs_and_jds: list[tuple[dict, str]],
 ) -> dict[str, tuple[list, list]]:
-    """One AI call for all jobs. Returns {page_id: (edits, keywords)}.
-    Missing entries mean parse failed — caller falls back to _tailor_resume_single().
+    """Chunked AI calls covering all jobs, at most `_TAILOR_CHUNK_SIZE` per call — mirrors
+    verify_tailored_scores_batch()'s chunking below and stage 1's score_jobs_batch(). A single
+    unbounded call both grows the prompt (every job's JD) without limit and risks the model's
+    JSON reply being truncated by max_tokens, which fails parsing for the *whole* batch.
+    Returns {page_id: (edits, keywords)}. Missing entries mean that job's chunk failed to
+    parse — caller falls back to _tailor_resume_single().
     """
     if not jobs_and_jds:
         return {}
+    results: dict[str, tuple[list, list]] = {}
+    for i in range(0, len(jobs_and_jds), _TAILOR_CHUNK_SIZE):
+        results.update(_tailor_resumes_chunk(resume_text, jobs_and_jds[i:i + _TAILOR_CHUNK_SIZE]))
+    return results
 
+
+def _tailor_resumes_chunk(
+    resume_text: str,
+    jobs_and_jds: list[tuple[dict, str]],
+) -> dict[str, tuple[list, list]]:
+    """One AI call for one chunk of jobs. See tailor_resumes_batch for why chunking matters."""
     resume_block = {
         "type": "text",
         "text": f"RESUME (verbatim source for all 'old' fields):\n\n<resume>\n{resume_text}\n</resume>",
@@ -308,7 +332,7 @@ def _resume_title_line(resume_text: str) -> str:
 def save_resume(edits: list, job: dict, resume_text: str) -> str:
     """Apply edits to the base .docx and save to output/resumes/.
 
-    Copies Achyuth_Resume.docx, patches each edited paragraph in-place, and
+    Copies the base .docx (RESUME_TEMPLATE_PATH), patches each edited paragraph in-place, and
     writes a plain-text mirror alongside the .docx for quick review.
     Returns the path to the saved .docx.
 
@@ -341,6 +365,21 @@ def save_resume(edits: list, job: dict, resume_text: str) -> str:
     Path(txt_path).write_text(extract_docx_text(docx_path), encoding="utf-8")
 
     return docx_path
+
+
+def _tailored_resume_link(file_path: str) -> str:
+    """Build the URL written to Notion's Tailored Resume Link property.
+
+    Local runs: a file:// URI to the resolved path, openable directly on this machine.
+    CI (GITHUB_ACTIONS): the runner's filesystem is discarded when the job ends, so file://
+    would be dead on arrival — point at the raw content on the tailored-resumes orphan branch
+    (published by the nightly workflow's publish step) instead, a URL that doesn't expire.
+    """
+    if os.environ.get("GITHUB_ACTIONS"):
+        repo = os.environ["GITHUB_REPOSITORY"]
+        rel = Path(file_path).resolve().relative_to(ROOT).as_posix()
+        return f"https://raw.githubusercontent.com/{repo}/tailored-resumes/{rel}"
+    return f"file://{Path(file_path).resolve()}"
 
 
 # ── Post-tailor verification ──────────────────────────────────
@@ -611,13 +650,13 @@ def run(min_score: int = 0):
                 "move Status back to 'Reviewed' to retry tailoring."
             )
             db_update_status(job["page_id"], "Human Review", {
-                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "tailored_resume_link": _tailored_resume_link(file_path),
                 "notes": f"{notes}\n{guidance}" if notes else guidance,
             })
             log(f"  ⚠ Zero edits suggested — left in 'Human Review' instead of 'Resume Tailored'")
         else:
             db_update_status(job["page_id"], "Resume Tailored", {
-                "tailored_resume_link": f"file://{Path(file_path).resolve()}",
+                "tailored_resume_link": _tailored_resume_link(file_path),
             })
             log(f"  ✓ Status updated → Resume Tailored")
 

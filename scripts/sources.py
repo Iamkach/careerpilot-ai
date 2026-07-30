@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import (
     APIFY_API_TOKEN, TARGET_ROLES, MAX_JOB_AGE_DAYS, DROP_UNDATED_JOBS,
+    ENABLE_ATS_TOKEN_SEARCH_FALLBACK,
 )
 from scripts.utils import log
 
@@ -815,6 +816,43 @@ def _probe_ashby(company: str, slug: str) -> str | None:
         return None
 
 
+# Domain + prober function name per ATS, for the search-fallback tier below. Looked up by name
+# (via globals()) rather than captured by reference, so tests monkeypatching sources._probe_*
+# still take effect — same dynamic-lookup expectation the direct-guess probes above rely on.
+_ATS_SEARCH_TARGETS = {
+    "greenhouse": ("boards.greenhouse.io", "_probe_greenhouse"),
+    "lever": ("jobs.lever.co", "_probe_lever"),
+    "ashby": ("jobs.ashbyhq.com", "_probe_ashby"),
+}
+
+_DORK_TOKEN_RE_CACHE: dict[str, re.Pattern] = {}
+
+
+def _dork_candidate_slugs(company: str, domain: str) -> list[str]:
+    """Keyless DuckDuckGo HTML search for `site:{domain} "{company}"`, returning candidate
+    board-token slugs parsed out of matching result URLs, most-relevant first. Never raises —
+    any failure (timeout, non-200, no matches, parse error) returns []."""
+    pattern = _DORK_TOKEN_RE_CACHE.setdefault(
+        domain, re.compile(re.escape(domain) + r"/([a-zA-Z0-9_-]+)")
+    )
+    try:
+        r = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": f'site:{domain} "{company}"'},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; careerpilot-ai/1.0)"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        seen: list[str] = []
+        for slug in pattern.findall(r.text):
+            if slug not in seen:
+                seen.append(slug)
+        return seen
+    except Exception:
+        return []
+
+
 def discover_tokens(companies: list[str], max_new_probes: int = 20) -> dict:
     """Probe Greenhouse/Lever/Ashby for each company, caching hits AND misses to
     config/ats_tokens.json. Re-probes an all-null entry only if its `checked` date is
@@ -848,6 +886,22 @@ def discover_tokens(companies: list[str], max_new_probes: int = 20) -> dict:
         lv = _probe_lever(company, slug)
         time.sleep(0.4)
         ab = _probe_ashby(company, slug)
+
+        if ENABLE_ATS_TOKEN_SEARCH_FALLBACK:
+            results = {"greenhouse": gh, "lever": lv, "ashby": ab}
+            for ats, (domain, prober_name) in _ATS_SEARCH_TARGETS.items():
+                if results[ats] is not None:
+                    continue
+                prober = globals()[prober_name]
+                time.sleep(0.4)
+                for candidate in _dork_candidate_slugs(company, domain):
+                    if candidate == slug:
+                        continue  # already tried as the direct guess
+                    hit = prober(company, candidate)
+                    if hit:
+                        results[ats] = hit
+                        break
+            gh, lv, ab = results["greenhouse"], results["lever"], results["ashby"]
 
         tokens[company] = {
             "greenhouse": gh, "lever": lv, "ashby": ab,

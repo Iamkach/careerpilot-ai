@@ -35,6 +35,7 @@ Scrapes jobs from multiple sources (LinkedIn + Indeed via Apify, Greenhouse/Leve
 | 4 | `scripts/stage4_digest.py` | Generate morning HTML digest of ready-to-apply jobs |
 | 5 | `scripts/stage5_interview_prep.py` | Generate HTML interview prep guide |
 | 6 | `scripts/stage6_negotiate.py` | Research salary benchmarks and draft HTML negotiation brief |
+| 7 | `scripts/autoapply.py` (+ `scripts/autoapply_browser.py`) | Auto-apply prep: plan every application answer, emit an answer sheet, optionally pre-fill the form in a browser. **Never submits** |
 
 ### Data flow
 
@@ -71,6 +72,14 @@ filter → score**, in that order:
 misses to `config/ats_tokens.json` (re-probes an all-null entry only after ~30 days). Greenhouse
 responses are verifiable (`company_name` field) and rejected on a mismatch; Lever/Ashby have no
 such field, so an auto-accepted token is logged loudly for the user to pin or veto by hand.
+
+The direct guess is a single slugified-name probe (e.g. "Acme Inc" → `acmeinc`), which misses for
+any company whose real token doesn't match its display name. When that guess misses for a given
+ATS and `ENABLE_ATS_TOKEN_SEARCH_FALLBACK` is on (default), `discover_tokens()` falls back to a
+keyless DuckDuckGo HTML search (`_dork_candidate_slugs()`) for `site:{ats domain} "{company}"` and
+tries each candidate slug it finds through the same `_probe_*` function as the direct guess — the
+search only ever proposes a slug, the real ATS API still verifies it before it's accepted, so this
+adds no new unverified-trust surface beyond what the direct-guess path already has.
 
 **Backup plan if Apify sourcing (`valig`/`misceres`) stops being satisfactory:** adopt
 `python-jobspy` as a `KEYWORD_SOURCES` entry — see the "Backup plan" section in
@@ -112,6 +121,29 @@ Jobs the user finds by hand (e.g. LinkedIn connections/suggestions) are added **
 
 A lower-friction alternative to filling in a full Notion Jobs-Tracker row per link: create one small Notion **database** (a "list" view works well) — e.g. titled "Job Link Scratch Pad" — where each row's title is one job URL and nothing else needs filling in. Share it with the same integration used for `NOTION_API_KEY`, and set its database id as `NOTION_SCRATCH_PAGE_ID` (optional; the feature no-ops if unset). From mobile, adding a link is just "+ New" → paste the URL as the title. On the next Stage 1 run (or `python run.py --ingest`), `ingest_from_scratch_note()` runs first: it reads every row (finding the URL by the row's title property, whatever that column happens to be named — extra columns in the database are ignored), creates a minimal `Status = Interested` row (Job Title = "Pending intake") for every URL not already tracked anywhere in the Jobs DB, then archives that scratch-database row so it isn't reprocessed (a row whose row-creation fails is left un-archived and retried next run; a row whose URL is already tracked under any status is archived without creating a duplicate). `ingest_interested_from_notion()` then picks up those freshly-created rows in the same run exactly as if they'd been entered by hand.
 
+### Restricted-sponsorship company list (Notion-managed, Step 12)
+
+Companies known (from your own research/contacts) to sponsor only *existing* employees, not
+new external hires, are tracked in their own small Notion **database** — parallel to the Jobs
+Tracker and the Scratch Pad — rather than a hardcoded list, so you can add/remove a company
+visually with no code change or redeploy (this also matters once the pipeline runs from
+GitHub Actions, where a git-ignored local file wouldn't exist). `python run.py --init` (→
+`scripts/provision_notion.py`) provisions this database automatically alongside the Jobs
+Tracker and Scratch Pad, under the same "Careerpilot-ai" page, and writes its id to `.env` —
+or create it by hand: one small database (e.g. titled "Restricted Sponsorship Companies")
+where each row's title is one company name, shared with the same integration used for
+`NOTION_API_KEY`, with its database id set as `NOTION_RESTRICTED_COMPANIES_PAGE_ID` (optional;
+the feature no-ops if unset).
+`get_restricted_sponsorship_companies()` (`scripts/utils.py`) merges this Notion list with the
+hardcoded `RESTRICTED_SPONSORSHIP_COMPANIES` fallback/escape-hatch in `config/settings.py`
+(for when Notion is unreachable, or before the database exists) — the single call site both
+enforcement points below use. **Stage 1** (`is_restricted_sponsorship_company()` in
+`scripts/stage1_scrape.py`) drops a matching company silently at scrape time, the same as
+`SKIP_COMPANIES`, logged under the `restricted-sponsorship` drop counter — it never reaches
+the Jobs DB at all. **Stage 2**'s `_sponsorship_gate()` (see "Stage 2 Sponsorship Gate" below)
+checks the same merged list as defense-in-depth, for a job that reached `Reviewed` *before*
+its company was added to the list.
+
 ### Shared utilities (`scripts/utils.py`)
 
 - `ai_chat(prompt, system, max_tokens, quality)` — provider-agnostic chat; `claude_chat` is an alias
@@ -119,9 +151,11 @@ A lower-friction alternative to filling in a full Notion Jobs-Tracker row per li
 - `db_find_job_by_url()` — one-off URL lookup. Returns the page id, or `None` for a genuine miss; **raises `RuntimeError` on a failed read** rather than returning `None`, since `None` means "no such job" and callers act on it by creating a row
 - `db_add_job()`, `db_update_status()`, `db_get_jobs()`, `db_get_all_jobs()`, `db_get_ready_to_apply()`, `db_get_job_by_company()`, `db_get_job_description()` — Notion-backed CRUD (`page_id`/`id` is the Notion page id; the JD is cached in the page body via paragraph blocks)
 - `db_get_all_jobs()` — one unfiltered paginated read of every row (`page_id, title, company, location, url, status, ats_score`); backs Stage 1's in-memory dedup (URL set + fingerprint set). **Raises `RuntimeError` on a failed read** — Stage 1 aborts the scrape rather than treating a failed read as an empty DB (which would mass-duplicate the tracker)
+- `db_update_status_verified(job_id, status, extra_props)` — like `db_update_status()`, but re-reads the page and returns `False` (loudly logged) if Notion silently ignored the status. Used by stage 7, whose statuses are new select options a user may not have added yet; a silent no-op there would leave the job to be re-processed every run
 - `db_add_job_linked(job, notion_page_id)` — promote an existing manually-added Notion page ("Interested" intake) to "Scraped" in place (no duplicate page); caches the JD in its body
 - `get_notion_jobs_by_status(status)` — read Notion rows by status (paginated, via `_query_db()` like every other reader). **Raises `RuntimeError` on a failed read**, same contract as `db_get_all_jobs()` — a failed read must never be reported as "no rows with this status", since callers act on emptiness by creating rows. `sync_notion_to_supabase()` is now a no-op kept for compatibility (Notion is the store)
 - `get_scratch_note_entries()` / `archive_scratch_note_entry(page_id)` / `db_add_interested_url(url)` — the scratch-note read/archive/create helpers backing `ingest_from_scratch_note()` above (see "Scratch-note intake")
+- `get_restricted_companies_from_notion()` / `get_restricted_sponsorship_companies()` — the Notion read and hardcoded-fallback merge backing the restricted-sponsorship company list (see "Restricted-sponsorship company list" above)
 - `load_resume()`, `ensure_dirs()`, `today()`, `parse_json_response()` — misc helpers
 
 **Configuration:** `config/settings.py` — all API keys, user profile, target roles, AI model settings, output paths.
@@ -132,15 +166,23 @@ A lower-friction alternative to filling in a full Notion Jobs-Tracker row per li
 python run.py                                                    # Scrape + review digest (stages 1, 4) — STOP for review
 python run.py --ingest                                          # Promote scratch-note URL drops, then ingest Notion "Interested" jobs → Scraped
 python run.py --evaluate                                        # Sync "Reviewed" from Notion, then tailor + outreach + digest
-python run.py --setup                                            # Verify config
+python run.py --init                                             # One-time fork onboarding: Notion details → provision page + DBs → write ids to .env
+python run.py --setup                                            # Verify config (+ validate the live Notion schema)
 python run.py --stage 1                                          # Scrape only (also ingests "Interested")
 python run.py --stage 2 --min-score 65
 python run.py --stage 3 --company "Stripe" --contact "Jane Doe"
 python run.py --stage 4 --send
 python run.py --stage 5 --company "Meta" --role "Senior PM"
 python run.py --stage 6 --company "Stripe" --role "PM" --offer 185000
+python run.py --stage 7                                          # Auto-apply prep (never submits)
+python run.py --stage 7 --fill                                   # ...and pre-fill the form in a browser
 python run.py --ai-mode {metered,hybrid,subscription} --metered-provider {claude,codex,gemini,openrouter}  # Per-run override
 ```
+
+The `careerpilot-ai` Claude Code skill (`.claude/skills/careerpilot-ai/SKILL.md`) wraps these as
+`/careerpilot-ai <action>` (e.g. `/careerpilot-ai scrape`, `/careerpilot-ai apply`) — per-stage
+slash commands (`/scrape`, `/tailor`, ...) were consolidated into this one skill; use its action
+table for the full mapping.
 
 ## Key Design Patterns
 
@@ -157,6 +199,9 @@ python run.py --ai-mode {metered,hybrid,subscription} --metered-provider {claude
 
 Settings in `config/settings.py` control what gets saved:
 - `SKIP_COMPANIES` — word-boundary denylist for consulting/staffing firms; grows over time
+- `get_restricted_sponsorship_companies()` (Notion list + `RESTRICTED_SPONSORSHIP_COMPANIES`
+  fallback) — word-boundary denylist for companies known to sponsor only existing employees,
+  not new hires; see "Restricted-sponsorship company list" above
 - `EXCLUDE_NO_SPONSORSHIP = True` — skips jobs that explicitly deny visa sponsorship
 - `ENABLED_SOURCES` — which `scripts/sources.py` registry entries run (`linkedin`, `indeed`,
   `greenhouse`, `lever`, `ashby`)
@@ -169,16 +214,181 @@ Settings in `config/settings.py` control what gets saved:
 
 ## Stage 2 Sponsorship Gate
 
-`RESTRICTED_SPONSORSHIP_COMPANIES` in `config/settings.py` is a manually-curated list of
-product companies known (from your own research/contacts) to sponsor only **existing**
-employees, not new external hires — even when the JD reads as sponsorship-friendly or says
-nothing. Unlike `SKIP_COMPANIES`, these are **not** excluded in stage 1 — they're scraped,
-scored, and tracked normally. Instead, stage 2 (`_sponsorship_gate()`) holds back any
-`Reviewed` job whose company matches this list: it moves that job's Notion Status to
-`Human Review` and writes a guidance note, without tailoring a resume. To release a held
-job, confirm sponsorship for a new hire yourself, add `SPONSORSHIP_CONFIRMED_MARKER`
-(default: `"sponsorship confirmed"`) to that job's Notion **Notes** field, then move its
-Status back to `Reviewed` by hand — stage 2 checks for the marker before re-gating it.
+The restricted-sponsorship company list (see "Restricted-sponsorship company list" above —
+the Notion database at `NOTION_RESTRICTED_COMPANIES_PAGE_ID`, merged with the hardcoded
+`RESTRICTED_SPONSORSHIP_COMPANIES` fallback in `config/settings.py`) names companies known
+(from your own research/contacts) to sponsor only **existing** employees, not new external
+hires — even when the JD reads as sponsorship-friendly or says nothing. **Stage 1 is the
+primary enforcement point**: it drops a matching company silently at scrape time, like
+`SKIP_COMPANIES`, so these jobs are never scraped, scored, or tracked. Stage 2
+(`_sponsorship_gate()`) checks the same merged list as **defense-in-depth**, for the case
+where a job reached `Reviewed` *before* its company was added to the list: it holds back that
+`Reviewed` job by moving its Notion Status to `Human Review` and writing a guidance note,
+without tailoring a resume. To release a held job, confirm sponsorship for a new hire
+yourself, add `SPONSORSHIP_CONFIRMED_MARKER` (default: `"sponsorship confirmed"`) to that
+job's Notion **Notes** field, then move its Status back to `Reviewed` by hand — stage 2
+checks for the marker before re-gating it.
+
+## Stage 7 Auto-Apply (Step 10, Phases 1–2)
+
+Picks up jobs at `Resume Tailored` and prepares the application. **It never submits** — the
+human clicks Submit and then sets `Applied` by hand. Two deliberately decoupled layers:
+
+- **Layer 1 — planning (`scripts/autoapply.py`, no browser).** `detect_apply_channel()` routes
+  by URL domain (greenhouse/lever/ashby/workday/linkedin/indeed/unknown, matched on a real
+  domain boundary so `evilgreenhouse.io` doesn't route as Greenhouse). For Greenhouse it fetches
+  the public `?questions=true` field schema — the only public apply-side data any mainstream ATS
+  exposes; every other channel falls back to `GENERIC_QUESTIONS` with `schema_known=False`, which
+  hedges the readiness verdict since the real form will likely ask more. `build_application_plan()`
+  resolves each field to `ready`/`review_required`; `readiness_report()` gates on unresolved
+  *required* fields (the only guard — Greenhouse does not validate required fields server-side).
+  Writes Notion + an HTML answer sheet to `APPLICATIONS_DIR`. `resolve_tailored_resume()` turns
+  the job's `Tailored Resume Link` back into a real local file: a `file://` link (local stage 2
+  run) round-trips directly, while a `raw.githubusercontent.com` link (CI-tailored, see "Nightly
+  run output" above) is downloaded into `RESUMES_DIR` on the fly — either way a download/lookup
+  failure returns `""`, same as a missing local file, so the upload field falls back to
+  `review_required` rather than silently attaching nothing.
+- **Layer 2 — fill (`scripts/autoapply_browser.py`, Playwright).** Opens the live form, fills
+  only `ready` fields, attaches the tailored `.docx`, screenshots, stops. Guarded import and a
+  never-raises contract mirroring `_headless_fetch()` in `sources.py`, so Layer 1 keeps working
+  when the browser layer can't. **There is no submit code path in that module at all** — not
+  behind a flag — and `tests/test_autoapply_notion.py` asserts it stays that way.
+
+**Why no API:** there is no candidate-usable submit endpoint. Greenhouse's
+`POST /v1/boards/{token}/jobs/{id}` authenticates as the *employer* (Basic Auth, the company's
+board key) and their docs warn a direct post "would reveal your secret key to anybody that views
+source". Lever/Ashby are the same. Applying is a browser problem, not an API problem.
+
+**Answer sources (governing rule — enforced in `_resolve_field()`, not by prompt wording):**
+`APPLICATION_PROFILE` supplies facts; AI only ever drafts prose. Work authorization, sponsorship,
+salary and any yes/no eligibility answer come from the profile or the field is flagged
+`review_required` — **never guessed**, since a wrong answer there is disqualifying and
+unretractable. `None` means unknown and always blocks; `False` is a real answer and does not.
+`EEO_RESPONSES` answers demographic questions (default: decline). `COMMON_QUESTION_PRESETS` is an
+answer bank for recurring screeners; a preset left blank routes to human review rather than typing
+an empty answer into a real application. Presets whose answer is a **fact about your history**
+(have you interviewed here before, were you referred, have you worked for a competitor) ship
+blank on purpose — a fabricated "No" would be a false statement on a real application, so
+`run.py --setup-profile` asks you once instead of defaulting.
+
+Preset labels are matched by `_label_matches_pattern()` as an **ordered word subsequence, gaps
+allowed** (with a shared-5-char-prefix stem match, so "relocation" catches "relocating"), not as a
+raw substring. Substring matching was too literal to be useful: the single `years of experience`
+preset matched none of the three phrasings live Greenhouse boards actually use ("years of
+*professional* experience", "years of *industry software engineering* experience", …), leaving
+three required fields blocked on one already-known answer. Words shorter than 5 characters must
+match exactly, so "of" can never match "office" and fire the wrong preset.
+
+`_resolve_field()` in `scripts/autoapply.py` resolves fields in order: (a) file uploads → the
+stage 2 tailored resume, (b) direct name map (first/last/email/phone, `_FIELD_MAP`), (c) label
+rules (`_LABEL_RULES` — eligibility knockouts, EEO, links, and the structured-address fields
+below), (d) `COMMON_QUESTION_PRESETS`, (e) free-text → always `review_required` (a *draft* may be
+attached, see below), (f) anything else → `review_required`. `_LABEL_RULES` is matched on **label
+text**, not field `name` — beyond the confirmed-stable `first`/`last`/`email`/`phone` names in
+`_FIELD_MAP`, Greenhouse's other field `name` attributes are opaque/internal, so mapping must go
+by the human-readable question text instead.
+
+**Within `_LABEL_RULES`, sponsorship is checked before work authorization, and that order is
+load-bearing.** Real forms ask "Will you require work authorization/visa sponsorship…", whose
+label *contains* the substring "work authorization"; checked the other way round, a sponsorship
+question gets answered from `work_authorized`. That's silently wrong for anyone whose two flags
+differ (a citizen or GC holder: authorized = yes, sponsorship = no) — the exact disqualifying,
+unretractable error class this module refuses to risk elsewhere. Guarded by
+`tests/test_autoapply_answer_quality.py`.
+
+**Identity is derived, never a placeholder.** `APPLICATION_PROFILE`'s `first_name`/`last_name`
+come from `_split_display_name(YOUR_NAME)` in `config/settings.py` (rightmost-space split),
+and the un-configured placeholder `"Your Name"` deliberately derives to `("", "")` so those
+fields resolve `review_required`. They previously held the literal strings `"Your"`/`"Name"`,
+which read as *answered* — a fill run would have submitted real applications under that name,
+and nothing caught it because `autoapply_profile.py` skips asking for a name on the documented
+grounds that it is "derived". A rightmost-space split is wrong for a two-word given name or a
+compound surname, so `--setup-profile` now prompts for both halves explicitly.
+
+**Free-text drafting (`AUTOAPPLY_DRAFT_ESSAYS`, default on).** Per-job essays ("Why <company>?",
+"Describe a time when you disagreed with a technical approach") are the measured bulk of the
+per-application time cost — on the tracker's Greenhouse jobs they were 13 of 19 remaining
+blockers. `draft_free_text_answers()` drafts each one from the Notion-cached JD plus the stage 2
+tailored resume's `.txt` mirror (`_resume_text_for()`), and attaches it to the plan entry as a
+`draft` key rendered as a labelled DRAFT block in the answer sheet. **`status` and `value` are
+deliberately untouched**, so a drafted answer stays `review_required` and the Layer 2 browser fill
+still never types it — the gain is that you review prose instead of writing it. Drafting reaches
+only case (e) fields, so it structurally cannot touch an eligibility, salary, or yes/no answer.
+It never raises: an AI failure, an empty reply, or the model's `NEEDS_HUMAN` token leaves the
+field exactly as before, degrading to the pre-drafting behavior rather than failing the run.
+
+**Structured address section (`APPLICATION_ADDRESS`, `config/settings.py`).** Some Greenhouse
+forms ask a full address questionnaire (legal first/last name, address line 1/2, city, state,
+country, zip/postal code, address type) as separate fields under their own labels, distinct from
+the display name used on the resume/outreach. `run.py --setup-profile` (`scripts/autoapply_profile.py`)
+captures these in their own wizard section and persists them to `config/application_profile.json`
+alongside the rest of the profile; `config/settings.py` exposes the overlay as
+`APPLICATION_ADDRESS`, merged with `APPLICATION_PROFILE` when `build_application_plan()` resolves
+a schema (`{**APPLICATION_PROFILE, **APPLICATION_ADDRESS}`). `_LABEL_RULES` maps each field by its
+exact label text (e.g. `"legal first name"`, `"address line 1"`, `"zip code"`/`"zip/postal"`/
+`"postal code"`) — labels confirmed from a live Greenhouse fetch, not guessed.
+
+**Attachment/textarea dedupe.** Greenhouse emits two field rows under one logical attachment
+question: an `input_file` (or `attachment`) field plus a sibling `textarea` for pasting the resume
+text instead of uploading it. `build_application_plan()` detects this pairing per question (a
+`textarea` alongside an already-present `input_file`/`attachment` field under the same label,
+checked order-independently) and mirrors the attachment field's resolution onto the textarea
+instead of treating it as an unresolved free-text question — otherwise a fully-answered upload
+question would still block on its own redundant textarea sibling.
+
+**Never `Applied`.** `WRITABLE_STATUSES` excludes it on purpose. Comparable open-source
+auto-appliers are widely reported to mark jobs applied that were never submitted (captcha stalls,
+silent form errors), which corrupts the tracker in the unrecoverable direction — you stop
+re-applying to jobs you never actually applied to. This stage doesn't submit, so it must not
+claim success.
+
+**LinkedIn/Indeed are never filled.** `FILLABLE_CHANNELS` is `{greenhouse, lever}` by rule, not
+configuration: automated applying there violates ToS and is behaviorally detected. They get an
+answer sheet only.
+
+**Failure modes handled:** every browser wait is bounded (Turnstile-class challenges are usually
+invisible and *stall* rather than error, so a timeout is classified as a probable captcha and
+handed off, never retried); a fill resolving under `MIN_RESOLVE_RATIO` of planned fields aborts
+as `drift` rather than leaving a half-filled form the human would trust; a PDF-only upload first
+tries `render_docx.convert_docx_to_pdf()` (headless LibreOffice — stage 2 only produces `.docx`
+directly) and only stops as `pdf_only` if LibreOffice isn't installed or the conversion fails.
+
+`AUTOAPPLY_DAILY_CAP` (default 10) caps applications per run. That's a *quality* guard, not just
+politeness — ATSes score application velocity and flag high-volume submitters as low-intent
+before a human reads the application.
+
+**One-time setup (`run.py --setup-profile`).** Stage 7's answers come from `APPLICATION_PROFILE`
+/ `APPLICATION_ADDRESS` / `EEO_RESPONSES` / `COMMON_QUESTION_PRESETS` in `config/settings.py`, but
+editing a checked-in Python file to change your notice period — and committing personal details —
+is the wrong ergonomics. `scripts/autoapply_profile.py` (`run.py --setup-profile`) is an
+interactive wizard that writes your answers to a **git-ignored** `config/application_profile.json`,
+which `settings.py`'s `_apply_saved_profile()` overlays over the defaults at import (a missing or
+corrupt file is a no-op, so the defaults stand). Prompts pre-fill from the *effective* current
+value, so pressing Enter through the whole thing changes nothing; `clear` un-sets an eligibility
+answer back to "always ask me" (so a wrong sponsorship/work-auth answer is reversible — those two
+are never guessed). `--show` prints the saved answers without changing anything. Secrets stay
+env-sourced as before; this file only holds application answers.
+
+**Sampling before you trust it (`--dry-run` / `--limit`).** `--stage 7 --dry-run` builds real
+plans and writes real HTML answer sheets to `APPLICATIONS_DIR` but makes **zero Notion writes**,
+so a run is repeatable; `--limit N` overrides `AUTOAPPLY_DAILY_CAP` for a run to sample just a
+few. `--dry-run --fill` still never opens a browser. Use these to eyeball the output on real jobs
+before committing to the live path.
+
+```bash
+python run.py --setup-profile                 # one-time: capture your application answers (git-ignored)
+python run.py --setup-profile --show          # print saved answers, change nothing (via autoapply_profile.py)
+python run.py --stage 7                        # plan + answer sheets
+python run.py --stage 7 --dry-run --limit 3    # sample: real sheets, no Notion writes, first 3 jobs
+python run.py --stage 7 --fill                 # also pre-fill in a browser (stops before submit)
+python scripts/autoapply.py --sample           # offline plan against the bundled schema
+python scripts/autoapply.py --url <greenhouse job>   # live schema fetch
+```
+
+Before the first real (non-dry) run, add the new Notion schema once:
+`python scripts/setup_notion_schema.py --apply` (idempotent, dry-run by default) creates the six
+new `Status` options and four new properties Stage 7 writes. Skipping it isn't silent —
+`db_update_status_verified()` fails loudly on the first write rather than corrupting the tracker.
 
 ## Switching AI Provider
 
@@ -193,6 +403,16 @@ Set `AI_PROVIDER` in `config/settings.py`:
 | `"openrouter"` | `OPENROUTER_API_KEY` | `openrouter/auto` |
 
 Override per-call model with `AI_MODEL_OVERRIDE` (fast) and `QUALITY_MODEL` (strong).
+
+**No-key fallback:** if a tier (`AI_PROVIDER`, `FAST_PROVIDER`, or `QUALITY_PROVIDER`) would
+resolve to `"claude"` but `ANTHROPIC_API_KEY` isn't set, and the Claude Code subscription is
+usable (CLI on PATH, or `CLAUDE_CODE_OAUTH_TOKEN` set for headless auth), `config/settings.py`'s
+`_resolve_provider()` silently swaps that tier to `"claude_code"` instead of every AI call
+failing with an auth error — this is what makes a fork (or the nightly workflow, if
+`ANTHROPIC_API_KEY` was never added as a repo secret) runnable off just a subscription login
+with zero metered-key setup. If neither a key nor a usable subscription is present, the raw
+value is left as `"claude"` so `run.py --setup` still reports the key missing (no silent
+behavior change when nothing at all is configured).
 
 **`claude` (metered API, default):** calls the Anthropic API directly via `_chat_claude` in
 `scripts/utils.py`. Requires `ANTHROPIC_API_KEY`. No Claude Code CLI/login and no subscription
@@ -252,15 +472,34 @@ including the nightly workflow, which never passes it and keeps its own env vars
 ## Development Notes
 
 - **Resume:** `config/resume.txt` must exist before any stage runs
-- **Notion database schema:** the tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select — 14 options: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, **Retry**, plus the manual-only Disregard, Blacklist, Archived, Rejected, Human Review), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The live DB also carries `Notes` (rich_text), `Referral Contact` (rich_text), and `Job ID` (unique_id), none of which any stage reads or writes. `_notion_write_job()` additionally writes `Posted Date` (date), `Source` (rich_text), `Applicant Count` (number), and `Salary Range` (rich_text) when present on the job dict — add these properties (exact names/types) for Step 6's multi-source fields to land; their absence doesn't break the write (each is only added to `props` when the job dict has a value), it just means those columns stay empty. `Sponsorship` (select — yes/no/unknown) and `Scoring Attempts` (number) back the stage 1 scoring-retry queue (see below) and are written the same optionally-present way. `Enrichment Attempts` (number) backs the "Interested" intake enrichment-retry ceiling the same optionally-present way (see below). `Missing Keywords` (rich_text, comma-separated) is written the same optionally-present way by stage 1's `score_jobs_batch()` results and read back by `db_get_jobs()`/`_page_to_job()` into a list — stage 2 reads it as a prioritization hint for tailoring (see below); its absence doesn't break either stage, it just means stage 2 has no Stage-1 hint to work from. **`Retry` is not auto-created by the Notion API — add it to the `Status` select's options by hand once**, or `db_update_status`/`db_add_job` calls that try to set it will silently fail to apply that property (the page still gets created/updated, just without the new status). The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
+- **Notion database schema:** a fork provisions this whole schema automatically with `python run.py --init` (→ `scripts/provision_notion.py`, which owns the canonical `TRACKER_PROPERTIES` / `STATUS_OPTIONS` and creates the "Careerpilot-ai" page + Job Search Tracker + Job Link Scratch Pad + Restricted Sponsorship Companies databases under a shared parent page). The manual reference below is what that creates. The tracker DB (`NOTION_DB_ID`) must have these properties: `Job Title` (title), `Company` (rich_text), `Location` (rich_text), `Job URL` (url), `Status` (select — 14 options: Interested, Scraped, Reviewed, Resume Tailored, Applied, Outreach Sent, Interview Scheduled, Offer Received, **Retry**, plus the manual-only Disregard, Blacklist, Archived, Rejected, Human Review), `Date Scraped` (date), `ATS Match Score` (number), `Tailored Resume Link` (url), `Date Applied` (date), `Hiring Manager` (rich_text), `Hiring Manager LinkedIn` (url). The live DB also carries `Notes` (rich_text), `Referral Contact` (rich_text), and `Job ID` (unique_id), none of which any stage reads or writes. `_notion_write_job()` additionally writes `Posted Date` (date), `Source` (rich_text), `Applicant Count` (number), and `Salary Range` (rich_text) when present on the job dict — add these properties (exact names/types) for Step 6's multi-source fields to land; their absence doesn't break the write (each is only added to `props` when the job dict has a value), it just means those columns stay empty. `Sponsorship` (select — yes/no/unknown) and `Scoring Attempts` (number) back the stage 1 scoring-retry queue (see below) and are written the same optionally-present way. `Enrichment Attempts` (number) backs the "Interested" intake enrichment-retry ceiling the same optionally-present way (see below). `Missing Keywords` (rich_text, comma-separated) is written the same optionally-present way by stage 1's `score_jobs_batch()` results and read back by `db_get_jobs()`/`_page_to_job()` into a list — stage 2 reads it as a prioritization hint for tailoring (see below); its absence doesn't break either stage, it just means stage 2 has no Stage-1 hint to work from. Stage 7 (auto-apply) writes `Apply Channel` (select), `Apply Attempts` (number), `Needs Human Reason` (rich_text), and `Application Log` (rich_text) the same optionally-present way, and needs six new `Status` options: `Application Queued`, `Applying`, `Needs Human: Captcha`, `Needs Human: Auth`, `Needs Human: Question`, `Apply Failed`. **Run `python scripts/setup_notion_schema.py --apply` once to add all ten** — unlike `pages.update` (which silently ignores an unknown select option), the `databases.update` endpoint *can* extend the schema, so this part is scriptable; the script is idempotent, dry-run by default, and resends existing Status options with their ids so none are dropped. **`Retry` is not auto-created by the Notion API — add it to the `Status` select's options by hand once**, or `db_update_status`/`db_add_job` calls that try to set it will silently fail to apply that property (the page still gets created/updated, just without the new status) — the same applies to stage 7's six new options above, which is exactly why stage 7 writes status via `db_update_status_verified()` (writes, re-reads, and skips the job with a loud log if Notion ignored it) rather than `db_update_status()`. The job description is **not** a property — it is cached in the page **body** (paragraph blocks) by `db_add_job` / `db_add_job_linked` and read back by `db_get_job_description()`.
 - **"Interested" intake enrichment reliability:** `enrich_job_url()` (`scripts/sources.py`) returns `None` when a hand-picked job URL can't be enriched (e.g. `generic_url_fetch()`'s JSON-LD probe and raw-tag-stripped fallback both come up short on a JS-rendered career page). `ingest_interested_from_notion()` never scores against a blank JD — on a failed enrichment it increments `Enrichment Attempts` and leaves the row as `Interested` for the next `--ingest` run, mirroring `rescore_retry_jobs()`'s ceiling below. Once `Enrichment Attempts` exceeds `MAX_ENRICHMENT_ATTEMPTS` (`config/settings.py`, default 3), the row is promoted to `Scraped` with a `Notes` marker ("enrichment failed — add JD manually") instead of retried forever. `generic_url_fetch()` itself tries a schema.org `JobPosting` JSON-LD block (`<script type="application/ld+json">`) before falling back to raw `<title>`/tag-stripped text — many ATS-hosted and SEO-conscious career pages emit this even when the visible DOM is a client-rendered SPA shell, so it can recover a real `title`/`company`/`location`/`description` where the old tag-stripping fallback returned blank fields or too little text. If both the JSON-LD probe and the raw-text fallback come up short (a genuine client-rendered SPA shell with no server-rendered JobPosting data at all), it falls back once more to `_headless_fetch()` — a headless Chromium render via Playwright (optional dependency — `pip install -r requirements-optional.txt`, not part of the default `requirements.txt` install since nightly CI never exercises it; run `playwright install chromium` after installing) — and retries the identical extraction against the hydrated HTML. `_headless_fetch()` returns `None` (never raises) if Playwright isn't installed or the render itself fails, so its absence/failure degrades to the exact same "treat as enrichment failure" behavior as before this fallback existed.
 - **Stage 1 scoring reliability:** `score_jobs_batch()` never fabricates a placeholder score. On a failed AI call (after `ai_chat`'s own 3-attempt retry with backoff) or a URL missing from the response, that job comes back `scored: False` and is written to Notion as `Status = "Retry"` with an empty ATS score — no fabricated `50`. `rescore_retry_jobs()` runs at the top of every stage 1 `run()`, right after `ingest_interested_from_notion()`: it re-scores every `Retry` row from its already-cached JD body (**no repeat Apify call**), incrementing `Scoring Attempts` each pass. Once `Scoring Attempts` exceeds `MAX_SCORING_ATTEMPTS` (`config/settings.py`), the job is promoted to `Scraped` with an empty score rather than retried forever. The same scoring call also classifies `company_type` (`product | staffing_or_consulting | agency | unknown`); a job whose type is in `SKIP_COMPANY_TYPES` is dropped (logged `[STAFFING/AI]`) the same way a sponsorship-denying JD is — but only when `scored` is `True`, so an unscored/failed batch is never dropped on an `"unknown"` `company_type`. `ai_chat()`/`ai_chat_blocks()` in `scripts/utils.py` retry transient errors (timeouts, 429/5xx) with exponential backoff and raise `AIChatError` on final failure, or `AIUsageCapError` immediately (no blind retry) on a detected Claude Code subscription usage-cap error.
 - **Stage 2 keyword hint + post-tailor verification:** `tailor_resumes_batch()`/`_tailor_resume_single()` pass each job's stored `missing_keywords` into the tailoring prompt as a hint to verify against the full JD, not a checklist to blindly inject — Stage 1's list comes from a truncated JD excerpt, so the model still does its own extraction from the full JD and may find more (or discard a Stage-1 hint that doesn't actually fit). After `save_resume()`, `run()` calls `verify_tailored_score()` (reuses stage 1's `score_jobs_batch()` contract against the *tailored* resume text) and logs `ATS: {before} → {after}`; if `after` is below `MIN_TAILORED_ATS_SCORE` (`config/settings.py`, default 75), it logs a `⚠` warning only — it does not retry tailoring or change Notion status, matching the pipeline's existing non-blocking "log it, human decides in Notion" pattern.
 - **Output dirs:** Auto-created by `ensure_dirs()` on first run
+- **Nightly run output (GitHub Actions):** the runner's filesystem is discarded when the job ends, so `.github/workflows/nightly-pipeline.yml` ends with an `actions/upload-artifact@v4` step publishing all of `output/` as a single per-run bundle — download it from the run's summary page (GitHub zips it for you; no manual zip step). `if: always()` so a crashed run's partial output and stage 7 screenshots are still retrievable, `if-no-files-found: warn` so a failure before `output/` exists doesn't turn the run red, 30-day retention. This lives **only** in the workflow YAML — no `run.py` flag, no bundling code in the pipeline — so local runs never trigger it and keep writing to `output/` as before. Guarded by `tests/test_nightly_workflow_artifact.py`. A separate "Publish tailored resumes to tailored-resumes branch" step (gated by a workflow-level `permissions: contents: write`) pushes `output/resumes/*.docx` to a dedicated `tailored-resumes` orphan branch — self-bootstrapped on first run, additive only (never wipes earlier runs' files, since an older Notion row may still point at one) — so Notion's `Tailored Resume Link` can carry a stable `raw.githubusercontent.com` URL instead of a dead `file://` path. `scripts/stage2_tailor.py`'s `_tailored_resume_link()` picks the scheme via the `GITHUB_ACTIONS` env var, same guard pattern as `_load_local_env()`; local runs keep writing `file://` unchanged. Guarded by `tests/test_nightly_workflow_publish_resumes.py` and `tests/test_stage2_resume_link.py`.
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
-- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID` follows the same env-sourced pattern but is **optional** — see "Scratch-note intake" above — the feature it backs no-ops when it's unset, unlike the required keys in this list. `NOTION_DB_ID` is also env-overridable (`os.environ.get("NOTION_DB_ID", "") or "<default>"`), with the existing tracker id as the default so nothing changes for the current setup; a fork points at its own tracker by setting it in `.env` rather than editing the source.
+- **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID` and `NOTION_RESTRICTED_COMPANIES_PAGE_ID` follow the same env-sourced pattern but are **optional** — see "Scratch-note intake" and "Restricted-sponsorship company list" above — the features they back no-op when unset, unlike the required keys in this list. `NOTION_DB_ID` is env-sourced with **no hardcoded default** (`os.environ.get("NOTION_DB_ID", "")`) — a fork provisions its own tracker via `python run.py --init` (which writes the id to `.env`), or sets it by hand; `python run.py --setup` validates the live schema (via `provision_notion.validate_schema()`) and flags an unset/broken id. Existing owners must add their id to `.env` once (the literal was removed). `NOTION_SCRATCH_PAGE_ID` is set the same way by `--init` but stays optional.
 - **`HUNTER_API_KEY` / `LEAD_ACTOR`:** only consumed by `scripts/spike_phase0_leads.py`, the Step 7 (communications subsystem) Phase 0 spike — not part of the 6-stage pipeline above. See `docs/backlog/step-7-communications-subsystem.md`.
-- **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.
+- **`scripts/autoapply.py` / `scripts/autoapply_browser.py`:** Stage 7, the Step 10 Auto-Apply subsystem (Phases 1–2 landed; deliberate submit deferred to Phase 3). Wired into `run.py` as `--stage 7` / `--stage 7 --fill` (plus `--dry-run` / `--limit` for sampling). See the "Stage 7 Auto-Apply" section above and `docs/backlog/step-10-auto-apply-subsystem.md`.
+- **`scripts/autoapply_profile.py`:** Stage 7's one-time answer wizard (`run.py --setup-profile`, or `--show`). Writes the git-ignored `config/application_profile.json` that `config/settings.py` overlays over the `APPLICATION_PROFILE` / `APPLICATION_ADDRESS` / `EEO_RESPONSES` / `COMMON_QUESTION_PRESETS` defaults — so personal application answers stay out of version control and aren't edited into a checked-in file. Missing/corrupt file = defaults stand. See the "Stage 7 Auto-Apply" section above.
+- **`scripts/provision_notion.py`:** fork onboarding — creates the "Careerpilot-ai" page + **all three** databases (Job Search Tracker with the full schema/all 21 Status options, a clean single-URL-column Job Link Scratch Pad, and a clean single-company-name-column Restricted Sponsorship Companies) under a page the forker shared with their integration; returns the new ids. Owns the canonical `STATUS_OPTIONS` / `TRACKER_PROPERTIES` (single source of truth — `setup_notion_schema.py` imports the Stage-7 subset from it so create/patch can't drift) and exposes `validate_schema()` used by `run.py --setup`. Invoked by `python run.py --init`; also runnable standalone (`--parent-page <id>`) as the file-fallback path. Tolerates an API that rejects the `unique_id` `Job ID` column (retries without it — no stage reads it).
+- **`scripts/setup_notion_schema.py`:** one-time, idempotent Notion schema migration for Stage 7 on a **pre-existing** DB — `--apply` adds the six new `Status` options and four new properties; dry-run by default, resends existing Status options with their ids so none are dropped, and reads back to verify. Run once before the first real (non-dry) Stage 7 run. (A DB freshly made by `provision_notion.py` already has all of these — this script is for older/hand-built trackers.)
+- **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). `render_docx.convert_docx_to_pdf()` (headless LibreOffice) produces the PDF fallback Stage 7's browser fill uses when a live form's upload field rejects `.docx` — see "Stage 7 Auto-Apply" above. The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.
+
+## docs/ directory scope: refinement-plans vs. backlog
+
+`docs/refinement-plans/` holds a plan **while it's still at idea/discussion level** — design not
+finalized, or finalized but deliberately deferred pending a trigger. `docs/backlog/` holds a story
+**once it's finalized and lined up to be implemented**.
+
+A plan moves in exactly one direction: refinement-plans → backlog, never the reverse. When a plan
+is finalized and queued: fold its content into a `docs/backlog/step-N-*.md` story — condense the
+"why" (sources considered/rejected, binding decisions, risks) alongside the implementation
+checklist — then **delete** the refinement-plan doc. Don't leave the backlog story as a thin
+summary pointing back at a "full spec" refinement doc; that's the duplication this rule exists to
+avoid. One doc per story once it's queued. See `docs/backlog/README.md` and
+`docs/refinement-plans/README.md` for the same rule stated from each side.
 
 ## Testing a Change
 
@@ -271,7 +510,11 @@ including the nightly workflow, which never passes it and keeps its own env vars
    fakes from `tests/conftest.py`; see `tests/test_stage1_auto_review_gate.py` or
    `tests/test_stage2_sponsorship_gate.py` for reference). Run `pytest -v` — it's mocked, needs
    no API keys/Notion/Claude Code login, and finishes in ~1.5s — and make sure it's green before
-   calling the change done.
+   calling the change done. Stage 7's Layer 2 tests are the one exception: they drive a real
+   Chromium against a local `file://` fixture, so they're marked `browser` and **deselected by
+   default** (`addopts = -m "not browser"` in `pytest.ini`) to keep the default suite fast and
+   CI browser-free. Touching `scripts/autoapply_browser.py`? Also run `pytest -m browser`
+   (~80s, needs `playwright install chromium`).
 2. Touched an AI prompt (stage 1 scoring, stage 2 tailoring, stage 3 outreach) or a model
    setting (`QUALITY_MODEL`, `AI_MODEL_OVERRIDE`)? A green pytest suite only proves the
    *plumbing* against mocked/recorded responses — it can't see judgment drift. Also run

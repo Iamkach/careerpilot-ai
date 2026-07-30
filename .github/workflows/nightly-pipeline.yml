@@ -31,8 +31,13 @@ on:
           - stage5
           - stage6
 
+permissions:
+  contents: write   # nightly publish-resumes step pushes to the tailored-resumes branch
+
 env:
   NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+  NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+  APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
   FAST_PROVIDER: claude
@@ -44,6 +49,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Write profile.json from secrets
+        env:
+          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
+        run: |
+          [ -n "$PROFILE_JSON" ] && printf '%s' "$PROFILE_JSON" > config/profile.json
+          true
 
       - uses: actions/setup-node@v4
         with:
@@ -81,3 +93,68 @@ jobs:
             stage6)   python run.py --stage 6 ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac
+
+      # Stage 2 writes Tailored Resume Link as a file:// path when GITHUB_ACTIONS is set — dead
+      # on arrival, since the runner's filesystem is gone once the job ends. Publish the actual
+      # .docx files to a dedicated orphan branch instead, so Notion can carry a stable
+      # raw.githubusercontent.com URL (see scripts/stage2_tailor.py::_tailored_resume_link()).
+      # Additive only: this run's files are copied on top of the branch's existing tree, never
+      # replacing it, since older Notion rows may still point at a prior run's resume.
+      #
+      # NOTE: this step is GitHub-only, same as "Bundle run output" below — local `python run.py`
+      # never touches this, so local runs keep writing file:// as before.
+      - name: Publish tailored resumes to tailored-resumes branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          shopt -s nullglob
+          docx_files=(output/resumes/*.docx)
+          if [ ! -d output/resumes ] || [ ${#docx_files[@]} -eq 0 ]; then
+            echo "No tailored resumes to publish."
+            exit 0
+          fi
+
+          REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          WORKDIR="$(mktemp -d)"
+
+          if ! git clone --depth=1 --branch tailored-resumes "$REPO_URL" "$WORKDIR" 2>/dev/null; then
+            git clone --depth=1 "$REPO_URL" "$WORKDIR"
+            (cd "$WORKDIR" && git checkout --orphan tailored-resumes && git rm -rf . >/dev/null 2>&1 || true)
+          fi
+
+          mkdir -p "$WORKDIR/output/resumes"
+          cp "${docx_files[@]}" "$WORKDIR/output/resumes/"
+
+          cd "$WORKDIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/resumes
+          if git diff --cached --quiet; then
+            echo "No new/changed resumes."
+            exit 0
+          fi
+          git commit -m "Publish tailored resumes — nightly run #${GITHUB_RUN_NUMBER}"
+          git push origin tailored-resumes
+
+      # The runner's filesystem is discarded when the job ends, so every file a stage writes
+      # to output/ (tailored .docx resumes, outreach drafts, digest/prep/negotiation HTML,
+      # stage 7 answer sheets) would be lost. Upload the whole dir as one artifact instead —
+      # actions/upload-artifact zips it on download, so this is a single batch download from
+      # the run's summary page rather than fishing out one resume at a time.
+      #
+      # `if: always()` on purpose: a crashed run is exactly when the partial output and any
+      # stage 7 screenshots are worth reading. That also means this can fire when an earlier
+      # step died before output/ existed at all, hence if-no-files-found: warn — a missing
+      # dir must not turn an otherwise-green run red.
+      #
+      # NOTE: this step is GitHub-only. Local `python run.py` never parses this file, so local
+      # runs are untouched and keep writing to output/ as before.
+      - name: Bundle run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careerpilot-output-${{ github.run_number }}
+          path: output/
+          retention-days: 30
+          if-no-files-found: warn

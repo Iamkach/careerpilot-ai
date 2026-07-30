@@ -70,11 +70,11 @@ resume `.docx`, copies it per job, and applies targeted `{old → new}` ATS keyw
 **in-place** — so every tailored resume keeps your exact original formatting and only the
 wording changes.
 
-Put your resume at `config/Achyuth_Resume.docx` (path set by `RESUME_TEMPLATE_PATH` in
+Put your resume at `config/resume.docx` (path set by `RESUME_TEMPLATE_PATH` in
 `config/settings.py`). It's a plain Word document — **no placeholder tags required**.
 
 ```python
-RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"   # your base resume .docx
+RESUME_TEMPLATE_PATH = "config/resume.docx"   # your base resume .docx
 ```
 
 Stage 2 reads it via `extract_docx_text()` and edits it via `apply_docx_edits()` (both in
@@ -185,13 +185,23 @@ split them). Under `claude_code`, no AI key is needed. `HUNTER_API_KEY` is only 
 core pipeline never reads it.
 
 ### Notion (primary data store — required)
-```python
-NOTION_API_KEY = "***REMOVED-SECRET***"   # the integration token
-NOTION_DB_ID   = "2ac0907e693744698a1c748d37774a07"   # already set — your tracker DB
+```bash
+NOTION_API_KEY=...        # the integration token
+NOTION_DB_ID=...          # your tracker DB id — set automatically by `python run.py --init`
+NOTION_SCRATCH_PAGE_ID=... # scratch-note DB id — also set by --init (optional feature)
 ```
 Notion is the single source of truth. Create the integration at
-https://www.notion.so/my-integrations and **share your tracker database with it** —
-all reads and writes go through the Notion API (see step 5 for the required schema).
+https://www.notion.so/my-integrations. There is **no baked-in default** `NOTION_DB_ID` —
+the fastest path is to let the wizard provision everything for you:
+
+> **`python run.py --init`** — asks for your Notion token and one page you've **shared with the
+> integration**, then creates a "Careerpilot-ai" page holding the **Job Search Tracker** and
+> **Job Link Scratch Pad** databases (full schema, all Status options) and writes both ids to
+> `.env`. This replaces the manual step 5 below for new setups.
+
+Existing owners: the hardcoded default id was removed — put your existing
+`NOTION_DB_ID` in `.env` once (or re-run `--init`); `python run.py --setup` flags it if unset.
+Step 5 remains the reference schema (and the by-hand fallback if you'd rather not use `--init`).
 
 ### Gmail (optional — emailed digest)
 ```python
@@ -203,6 +213,12 @@ Only needed for `--send` on stage 4 (see step 6).
 ---
 
 ## 5. Set up the Notion database schema (once)
+
+> **Skip this if you ran `python run.py --init`** — it provisions the tracker with this exact
+> schema (plus the Stage 7 columns and `Enrichment Attempts`) automatically. This section is the
+> reference for what gets created, and the manual path if you're pointing at a pre-existing DB.
+> `scripts/provision_notion.py` owns the canonical schema; `python run.py --setup` validates a
+> live DB against it and reports anything missing.
 
 Notion is the primary data store. Your tracker DB (`NOTION_DB_ID`) must have these
 properties — **names and types must match exactly** (a missing or mistyped property
@@ -262,21 +278,10 @@ once into the select to create them).
 
 ## 6. (Optional) Unattended nightly runs via GitHub Actions
 
-`.github/workflows/nightly-pipeline.yml` runs the pipeline off-hours on a cron schedule
-(default `0 7 * * *` UTC — adjust the hour for your timezone/DST). It uses the hybrid
-provider split from step 4 above. Set these as **repo secrets** (Settings → Secrets and
-variables → Actions):
-
-| Secret | Required for |
-|---|---|
-| `NOTION_API_KEY` | always |
-| `ANTHROPIC_API_KEY` | `FAST_PROVIDER=claude` (metered, stage 1/3) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `QUALITY_PROVIDER=claude_code` (subscription, stage 2/5/6) — mint with `claude setup-token` locally (Pro/Max required) |
-
-`APIFY_API_TOKEN` isn't in that workflow's `env:` block yet — add it as a secret and wire it
-in the same way if you enable `ENABLED_SOURCES` entries that need Apify (`linkedin`,
-`indeed`). You can also trigger it manually via `workflow_dispatch` with a `mode` input
-(`full`, `scrape`, `evaluate`, `ingest`, or a single `stageN`).
+`.github/workflows/nightly-pipeline.yml` runs the pipeline off-hours on a cron schedule, using
+the hybrid provider split from step 4 above. Full setup (repo secrets, enabling Actions, cron/
+DST adjustment, manual `workflow_dispatch` runs, and known workflow gaps/CI troubleshooting) now
+lives in its own guide: **`docs/GITHUB_ACTIONS_SETUP.md`**.
 
 ## 7. (Optional) Gmail digest setup
 

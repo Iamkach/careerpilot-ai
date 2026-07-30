@@ -11,8 +11,8 @@ skipped entirely — and the helpers raise — when `NOTION_API_KEY` is unset.
 
 ## Notion database details
 
-**Database ID:** `2ac0907e693744698a1c748d37774a07`
-**Notion URL:** `https://www.notion.so/2ac0907e693744698a1c748d37774a07`
+**Database ID:** `NOTION_DB_ID` (env-sourced in `config/settings.py`; a fork provisions its own
+via `python run.py --init`) — the Notion URL is `https://www.notion.so/<NOTION_DB_ID>`.
 **Client:** `notion_client.Client(auth=NOTION_API_KEY)` constructed inline inside the
 `_notion_*` helpers in `scripts/utils.py` (there is no `get_notion()`). Notion is skipped
 entirely when `NOTION_API_KEY` is unset.

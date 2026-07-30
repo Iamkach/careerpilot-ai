@@ -136,6 +136,38 @@ def test_tailor_resumes_batch_full_parse_failure_returns_empty_dict(patch_ai_cha
     assert results == {}
 
 
+def test_tailor_resumes_batch_chunks_large_job_lists(patch_ai_chat, monkeypatch):
+    """More than _TAILOR_CHUNK_SIZE jobs must still cost multiple bounded calls (one per
+    chunk), never one unbounded call — mirrors verify_tailored_scores_batch's chunking."""
+    monkeypatch.setattr(stage2_tailor, "_TAILOR_CHUNK_SIZE", 2)
+    jobs = [
+        {**make_recorded_jobs(1)[0], "page_id": f"p{i+1}", "company": f"Company{i+1}"}
+        for i in range(5)
+    ]
+    jobs_and_jds = [(j, j["description"]) for j in jobs]
+
+    def _chunk_response(*companies_with_local_index):
+        # Each chunk's job_index restarts at 1 within that chunk, matching how
+        # _tailor_resumes_chunk() numbers its own job_entries per call.
+        return json.dumps([
+            {"job_index": local_idx, "company": company, "keywords_injected": ["k"],
+             "edits": [{"old": "x", "new": "y", "reason": "r"}]}
+            for local_idx, company in companies_with_local_index
+        ])
+
+    fake = patch_ai_chat(stage2_tailor)
+    fake.set_responses([
+        _chunk_response((1, "Company1"), (2, "Company2")),
+        _chunk_response((1, "Company3"), (2, "Company4")),
+        _chunk_response((1, "Company5")),
+    ])
+
+    results = stage2_tailor.tailor_resumes_batch("resume text", jobs_and_jds)
+
+    assert len(fake.calls) == 3  # ceil(5 / 2) chunks
+    assert set(results.keys()) == {"p1", "p2", "p3", "p4", "p5"}
+
+
 def test_tailor_resume_single_replays_recorded_huge_keyword_hint(patch_ai_chat):
     """_tailor_resume_single with an intentionally huge (80-entry) missing_keywords hint —
     confirms the batch-to-single fallback path still returns a well-formed (edits, keywords)
@@ -344,6 +376,11 @@ def _stub_run_dependencies(monkeypatch, jobs, description="Some JD text"):
     """Wire run() up to fakes for everything except the two functions under test
     (verify_tailored_scores_batch / verify_tailored_score), so a run() test can assert
     call counts on those without touching real Notion, AI, or .docx I/O."""
+    # _tailored_resume_link() branches on GITHUB_ACTIONS; these tests exercise the local
+    # file:// path (matching tests/test_stage2_resume_link.py's hermetic pattern) and would
+    # otherwise leak the real CI environment variable in and hit the CI-only branch's
+    # relative_to(ROOT) against the fake, non-repo "/fake/{page_id}.docx" path below.
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(stage2_tailor, "load_base_resume_text", lambda: "BASE RESUME")
     monkeypatch.setattr(stage2_tailor, "get_reviewed_jobs", lambda min_score=0: jobs)
     monkeypatch.setattr(stage2_tailor, "_sponsorship_gate", lambda js: js)

@@ -4,7 +4,7 @@ render_docx.py — in-place .docx text edits for tailored resumes
 ────────────────────────────────────────────────────────────────
 Primary role today: `extract_docx_text()` / `apply_docx_edits()` apply targeted
 `{old → new}` text replacements directly to a copy of the base resume `.docx`
-(`RESUME_TEMPLATE_PATH`, default `config/Achyuth_Resume.docx`) via python-docx,
+(`RESUME_TEMPLATE_PATH`, default `config/resume.docx`) via python-docx,
 preserving the original document's formatting (fonts, spacing, run-level
 bold/italic, ...) — this is the default flow stage 2 uses.
 
@@ -13,6 +13,12 @@ bold/italic, ...) — this is the default flow stage 2 uses.
 `config/resume_template.docx`) kept for reference but no longer used by the
 default flow; it requires the optional `docxtpl` package to be installed
 separately.
+
+`convert_docx_to_pdf()` shells out to a headless LibreOffice (`soffice`) to
+produce a PDF copy of a tailored resume, for the ATS forms Stage 7 (auto-apply)
+runs into whose upload field rejects .docx. LibreOffice is a system install,
+not a pip package — see scripts/autoapply_browser.py's `_accepts_docx()` /
+`pdf_only` handling for how a missing install degrades.
 
 Expected `data` schema for `render_resume_docx()` (see RESUME_SCHEMA_DOC below):
     {
@@ -39,6 +45,7 @@ Template placeholders (Jinja2 syntax inside the .docx):
 """
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from config.settings import YOUR_NAME
@@ -312,6 +319,38 @@ def apply_docx_edits(base_path: str, edits: list, out_path: str, job: dict | Non
 
     doc.save(out_path)
     return out_path, unmatched
+
+
+def convert_docx_to_pdf(docx_path: str, out_dir: str | None = None) -> str | None:
+    """Convert a .docx to .pdf via headless LibreOffice, for ATS forms whose upload field
+    rejects .docx (stage 2 emits .docx only). LibreOffice's `soffice` binary is a system
+    install, not a pip package, so a missing binary or a failed conversion both degrade to
+    None (never raises) — the same optional-dependency contract as
+    sources._headless_fetch(), letting the caller fall back to its existing pdf_only
+    handling instead of crashing.
+    """
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+
+    src = Path(docx_path)
+    if not src.exists():
+        return None
+
+    target_dir = Path(out_dir) if out_dir else src.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = target_dir / (src.stem + ".pdf")
+
+    try:
+        subprocess.run(
+            [soffice, "--headless", "--norestore", "--convert-to", "pdf",
+             "--outdir", str(target_dir), str(src)],
+            check=True, timeout=60, capture_output=True,
+        )
+    except Exception:
+        return None
+
+    return str(pdf_path) if pdf_path.exists() else None
 
 
 def resume_data_to_text(data: dict) -> str:
