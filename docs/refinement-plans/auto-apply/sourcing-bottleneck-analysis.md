@@ -2,6 +2,26 @@
 
 *See [`../README.md`](../README.md) for how this relates to the other auto-apply plans.*
 
+> ## ⚠ Correction (2026-07-30) — the recommendation below is superseded; the findings are not
+>
+> **Superseded:** the "Don't build the extension now… ~20% of 90 Indeed rows, roughly 18 jobs" line
+> and everything resting on it. The extension is queued as
+> [`../../backlog/step-15-application-prefill-extension.md`](../../backlog/step-15-application-prefill-extension.md).
+>
+> **Why:** the sizing used the wrong denominator. It counted *rows the pipeline can auto-route to a
+> fillable apply URL* — but an extension **routes nothing**. The human navigates, and it fills
+> whatever form is on screen, so its population is *every application opened by hand*, including
+> the custom career sites reached **through** a LinkedIn posting. "LinkedIn exposes no apply URL"
+> constrains automated routing and says nothing about a human already standing on the form.
+>
+> **Still valid, and the reason this doc is kept rather than deleted:** every measurement below —
+> LinkedIn 0/20 apply-URL fields across five candidate names, `sources.py:186`'s `applyUrl` as dead
+> code, Indeed's ~20% only under `followApplyRedirects: True` at +64% wall-clock against a 400s
+> poll budget, and the authenticated-LinkedIn path rejected on account-risk grounds. Do not
+> re-derive these. The upstream conclusion also still holds **for the Playwright layer**: weighting
+> `ENABLED_SOURCES` toward Greenhouse/Lever/Ashby is the only mechanism that puts a fillable apply
+> URL in the tracker for an *unattended* run.
+
 **Status (2026-07-29): analysis only, no action taken.** Written to capture a conversation that
 re-evaluated whether to build `ashby-workday-custom-fill.md` and/or `browser-extension-prefill.md`
 next. Nothing below has been applied to config, code, or the other two docs — this is a snapshot
