@@ -42,13 +42,77 @@ so it complements the Playwright layer rather than replacing it.
 
 ## Trigger criteria — when to actually pick this up
 
-Same gate as `ashby-workday-custom-fill.md`, since it addresses the same bottleneck: **enough
-real Ashby/Workday/custom-domain `Resume Tailored` rows that hand-typing the answer sheet is the
-actual daily bottleneck.** Per `docs/TODO.md`, the tracker is still 413 LinkedIn / 90 Indeed / 4
-unknown of 508 — so shifting `ENABLED_SOURCES` weight toward ATS boards remains a prerequisite
-this hasn't hit. One addition: if apply volume rises on *Greenhouse* too, that alone can justify
-this, since the extension is faster than `--stage 7 --fill` even where Playwright already works
-(no headless launch, no drift guard, you see it happen).
+**Corrected 2026-07-29 — the old trigger measured the wrong host.** It read "enough real
+Ashby/Workday/custom-domain `Resume Tailored` rows that hand-typing the answer sheet is the
+actual daily bottleneck", counted against the tracker's 413 LinkedIn / 90 Indeed / 4 unknown /
+1 Greenhouse of 508. That count is of **posting** hosts. What decides fillability is the
+**apply-form** host, and the two are routinely different — a LinkedIn posting whose Apply button
+bounces to a company's Greenhouse form is an application the already-shipped Layer 2 could fill
+today. Two supporting facts found while re-evaluating this plan:
+
+- `plan_for_job()` routes off `detect_apply_channel(job["url"])` — the Notion *Job URL*. There is
+  no redirect resolution anywhere in Layer 1, so such a row is classified `linkedin` and never
+  offered to Layer 2. Backlog §3 scenario #8 ("resolve the true destination first, then re-route")
+  was designed and never implemented; this is the direct cause of the mis-measurement.
+- `scripts/sources.py` **discards a real destination on the Indeed path**: `scrape_indeed()` puts
+  `externalApplyLink` third in the URL chain behind `job["url"]`, and sets
+  `followApplyRedirects: False` so that field mostly holds a wrapper anyway.
+  (`scrape_linkedin()` appears to drop `applyUrl` the same way — **measured false**, the field is
+  never populated at all; see the findings below. Stated here as originally written because the
+  correction is the more useful fact.)
+
+### Measured 2026-07-29 (`scripts/spike_apply_redirect.py`, since deleted)
+
+A throwaway spike measured the resolved apply host directly, including a live Apify probe of both
+keyword actors (20 fresh listings each). **The second bullet above turned out to be half wrong,
+and the correction matters more than the original claim.**
+
+| Source | Apply-URL field populated | Points somewhere fillable? |
+|---|---|---|
+| LinkedIn (`valig~linkedin-jobs-scraper`) | **0 / 20** across `applyUrl`, `applyLink`, `companyApplyUrl`, `externalApplyLink`, `link` | n/a — field never exists |
+| Indeed, `followApplyRedirects: False` (today) | 3 / 20 `externalApplyLink` | **0** — all indeed.com wrappers |
+| Indeed, `followApplyRedirects: True` | 4 / 20 `externalApplyLink` | 4 real, but **0 Greenhouse/Lever/Ashby/Workday** |
+
+1. **LinkedIn is not discarding anything — the field does not exist.** The actor returns no apply
+   URL under any of five candidate names, so `job.get("applyUrl")` at `scripts/sources.py:186` is
+   dead code, not a dropped signal. And the destination cannot be recovered later either: an
+   unauthenticated fetch of a LinkedIn job page returns a ~344 KB guest page carrying
+   sign-in/join-now/captcha markers and **zero** `applyUrl` / `externalApplyUrl` / "apply on
+   company" occurrences. For a LinkedIn-sourced row the apply destination is **structurally
+   unobtainable by this pipeline**, at scrape time or after.
+2. **Indeed's discard is real, and `followApplyRedirects` is the whole difference** — off, every
+   populated value is an `indeed.com` wrapper; on, all four resolve externally. Cost: 33.0s → 54.1s
+   for 20 items (~+64%), against `_apify_run()`'s 400s poll budget, and that helper *raises* rather
+   than returning a partial dataset — so flipping the flag without raising the poll count would
+   convert a slow scrape into a silently empty one.
+3. **But every reachable destination was a custom career site**, not an ATS:
+   `careers.cisco.com`, `careers.baptisthealth.net`, `careers.massmutual.com` — Phenom-style,
+   classified `unknown`. Only ~20% of Indeed listings expose an external apply link at all; the
+   other ~80% are Indeed Apply, permanently manual by rule.
+
+**What that means for this plan.** Finding 3 is the one point where the data *favors* this plan
+over [`ashby-workday-custom-fill.md`](ashby-workday-custom-fill.md): custom career sites are
+exactly what a live-DOM extension handles and what per-ATS Playwright adapters structurally cannot.
+But the addressable volume is ~20% of 90 Indeed rows (≈18 jobs) and **0%** of the 413 LinkedIn
+rows. **That is not a trigger.**
+
+**The trigger, restated on measured ground:** this plan is worth building once the tracker actually
+holds a meaningful body of `Resume Tailored` rows whose *apply* host is a custom career site or
+Workday. Reaching that state is gated on sourcing, not on this plan — see the note below.
+
+**Prerequisite, now sharper than "weight sourcing for volume".** The pipeline's two dominant
+sources *structurally cannot* produce a fillable apply URL: LinkedIn yields nothing at all, Indeed
+yields ~20% and those are custom sites. Shifting `ENABLED_SOURCES` weight toward
+Greenhouse/Lever/Ashby is therefore the **only** mechanism that puts a fillable apply URL in the
+tracker, because those sources hand over the ATS URL directly. Do that first; re-measure after.
+
+One addition unchanged by all of the above: if apply volume rises on *Greenhouse* too, that alone
+can justify this, since the extension is faster than `--stage 7 --fill` even where Playwright
+already works (no headless launch, no drift guard, you see it happen).
+
+**Standing caveat on this plan's own reach:** the extension never fills LinkedIn/Indeed by rule, so
+its addressable population is bounded by how many non-aggregator apply hosts the tracker holds —
+which is the number the prerequisite above is designed to move.
 
 ## Design decisions (settled)
 
