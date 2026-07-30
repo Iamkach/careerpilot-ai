@@ -118,10 +118,35 @@ irreducibly a browser problem.
   `tests/test_autoapply_plan.py` (388 passed). **The Layer-2 fill path has still never run
   against a live form** (only the bundled sample and a local `file://` fixture) — re-running the
   plan against the SmithRx job (or another live Greenhouse posting) to confirm the blocker count
-  actually drops is the natural next validation step, then exercising the fill path itself. Note
-  the tracker currently holds only **one** Greenhouse row (413 LinkedIn / 90 Indeed / 4 unknown
-  of 508), both of which are manual-only — so weighting `ENABLED_SOURCES` toward ATS boards is a
-  prerequisite for Stage 7 to matter at volume.
+  actually drops is the natural next validation step, then exercising the fill path itself.
+- **Why the tracker is starved of ATS rows — measured, and the answer is upstream of Stage 7
+  (2026-07-29).** The often-quoted split (1 Greenhouse / 413 LinkedIn / 90 Indeed / 4 unknown of
+  508) counts *posting* hosts, while fillability is decided by the *apply-form* host — and backlog
+  §3 scenario #8 ("external redirect — resolve the true destination first") is the one scenario in
+  that list never implemented. A throwaway spike (`scripts/spike_apply_redirect.py`, deleted after
+  transcription per the `spike_phase0_leads.py` contract) measured what implementing it would buy,
+  including a live Apify probe of both keyword actors at 20 fresh listings each:
+  - **LinkedIn: no apply URL exists.** 0/20 populated across `applyUrl`, `applyLink`,
+    `companyApplyUrl`, `externalApplyLink`, `link` — so the `job.get("applyUrl")` fallback at
+    `scripts/sources.py:186` is **dead code**, not a discarded signal (worth a small cleanup). Nor
+    is it recoverable later: an unauthenticated fetch of a LinkedIn job page returns a ~344 KB
+    guest page with sign-in/join-now/captcha markers and zero apply-URL occurrences.
+  - **Indeed: ~20% of listings**, and only with `followApplyRedirects: True` — under today's
+    `False`, all 3/20 populated `externalApplyLink` values were `indeed.com` wrappers; with `True`,
+    4/20 resolved externally. Cost ~+64% wall-clock (33.0s → 54.1s / 20 items) against
+    `_apify_run()`'s 400s poll budget; since that helper **raises** rather than returning a partial
+    dataset, flipping the flag without also raising its poll count would turn a slow scrape into a
+    silently empty one.
+  - **Every reachable destination was a custom career site, not an ATS**: `careers.cisco.com`,
+    `careers.baptisthealth.net`, `careers.massmutual.com` (Phenom-style, channel `unknown`). Zero
+    Greenhouse/Lever/Ashby/Workday.
+
+  **Conclusion:** resolving the apply URL would not feed the shipped Layer 2, so that work is not
+  worth doing on its own. The pipeline's two dominant sources structurally cannot produce a fillable
+  apply URL, which makes weighting `ENABLED_SOURCES` toward Greenhouse/Lever/Ashby the **only**
+  mechanism that puts one in the tracker — those sources hand over the ATS URL directly. Both
+  auto-apply refinement plans stay parked pending that shift; full numbers and per-substrate
+  implications are in `docs/refinement-plans/auto-apply/`.
 - **docx→PDF conversion — closed (2026-07-21).** `scripts/render_docx.py` gained
   `convert_docx_to_pdf()`, shelling out to a headless LibreOffice (`soffice --headless
   --convert-to pdf`) to produce a PDF copy of the tailored resume. `autoapply_browser.py`'s

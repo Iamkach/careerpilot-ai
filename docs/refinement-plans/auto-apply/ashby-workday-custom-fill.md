@@ -36,18 +36,50 @@ This is not one uniform gap:
 
 ## Trigger criteria — when to actually pick this up
 
-Watch for one of these before spending implementation time (mirrors the pattern in
-[`../sourcing/career-site-enrichment-fallback.md`](../sourcing/career-site-enrichment-fallback.md)):
+**Corrected 2026-07-29 — the old trigger measured the wrong host.** It counted Ashby/Workday/
+custom-domain rows by the tracker's **posting** host (413 LinkedIn / 90 Indeed / 4 unknown /
+1 Greenhouse of 508). Fillability is decided by the **apply-form** host, which is routinely
+different: `plan_for_job()` routes off `detect_apply_channel(job["url"])` with no redirect
+resolution anywhere in Layer 1 (backlog §3 scenario #8, designed and never implemented), and
+`scripts/sources.py` discards a real destination on the Indeed path — `scrape_indeed()` puts
+`externalApplyLink` third behind `job["url"]` and sets `followApplyRedirects: False`. So a
+LinkedIn-sourced row applying on a company's Greenhouse form counts against *this* plan today when
+Layer 2 could already fill it — that was the hypothesis. It was then measured; see below.
 
-- The tracker accumulates enough real Ashby/Workday/custom-domain `Resume Tailored` rows that
-  hand-typing the answer sheet becomes the actual bottleneck in daily use (today the tracker
-  holds effectively zero non-Greenhouse ATS rows at volume — see `docs/TODO.md` Step 10's note
-  that 413 LinkedIn / 90 Indeed / 4 unknown of 508 total, meaning `ENABLED_SOURCES` weighting
-  toward ATS boards is itself a prerequisite this hasn't hit yet).
-- Ashby specifically: a live schema-read attempt is worth trying cheaply first (see Option A) —
-  if Ashby's public postings JSON turns out to expose a `?questions=true`-equivalent the way
-  Greenhouse's does, most of the Layer-1 groundwork from gap #1 (label-based `_LABEL_RULES`
-  resolution) already carries over with no planner changes.
+### Measured 2026-07-29 (`scripts/spike_apply_redirect.py`, since deleted)
+
+A throwaway spike measured the resolved apply host, including a live Apify probe of both keyword
+actors (20 fresh listings each). Full numbers and the per-field table live in
+[`browser-extension-prefill.md`](browser-extension-prefill.md); the three results that bear on
+*this* plan:
+
+1. **LinkedIn cannot yield an apply destination at all** — the actor populates no apply-URL field
+   (0/20 across five candidate names, so `sources.py:186`'s `applyUrl` fallback is dead code), and
+   an unauthenticated fetch of a LinkedIn job page returns a guest/captcha shell with none either.
+   Structurally unobtainable, at scrape time or after.
+2. **Indeed exposes an external apply link on only ~20% of listings**, and only when
+   `followApplyRedirects: True` (off, all populated values are `indeed.com` wrappers). The flag
+   costs ~+64% wall-clock (33.0s → 54.1s / 20 items) against `_apify_run()`'s 400s poll budget —
+   and that helper raises rather than returning a partial dataset, so flipping it without raising
+   the poll count would turn a slow scrape into a silently empty one.
+3. **Every reachable destination was a custom career site, not an ATS** — `careers.cisco.com`,
+   `careers.baptisthealth.net`, `careers.massmutual.com` (Phenom-style, classified `unknown`).
+   **Zero** Greenhouse, Lever, Ashby, or Workday.
+
+**Consequence for this plan: result 3 argues against it specifically.** An Ashby adapter (Option A)
+and a Workday driver (Option B) are both bets that Ashby/Workday rows will accumulate. The measured
+reality is that the pipeline's dominant sources produce *custom career sites* when they produce
+anything fillable at all — which is the case
+[`browser-extension-prefill.md`](browser-extension-prefill.md) handles and per-ATS adapters
+structurally cannot. Nothing in the measurement supports building an Ashby or Workday adapter next.
+
+**Prerequisite before either option is worth revisiting.** LinkedIn yields no apply URL and Indeed
+yields ~20% custom sites, so shifting `ENABLED_SOURCES` weight toward Greenhouse/Lever/Ashby is the
+**only** mechanism that puts real ATS apply URLs in the tracker — those sources hand over the ATS
+URL directly. Do that, then re-measure. Only if Ashby rows specifically accumulate does Option A's
+cheap schema spike become worthwhile: if Ashby's public postings JSON exposes a
+`?questions=true`-equivalent the way Greenhouse's does, most of the Layer-1 groundwork from gap #1
+(label-based `_LABEL_RULES` resolution) carries over with no planner changes.
 
 ## Options considered
 

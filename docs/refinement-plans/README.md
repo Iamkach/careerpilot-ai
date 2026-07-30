@@ -59,5 +59,24 @@ both are unqueued — neither supersedes the other yet. If the extension plan is
 become moot and its Option C *is* the extension); if instead a Playwright adapter is chosen, the
 reverse applies.
 
+**Both were re-triggered on a measurement, and both stay parked (measured 2026-07-29).** Their
+original triggers counted the *posting* host (413 LinkedIn / 90 Indeed of 508), but fillability is
+decided by the *apply-form* host. A throwaway spike measured the difference, including a live Apify
+probe of both keyword actors, and returned three things:
+
+- **LinkedIn yields no apply destination at all** — the actor populates no apply-URL field (0/20
+  across five candidate names, making `sources.py:186`'s `applyUrl` fallback dead code), and the
+  unauthenticated job page carries none either. Unobtainable, at scrape time or after.
+- **Indeed exposes one on ~20% of listings**, and only with `followApplyRedirects: True` (off, all
+  populated values are `indeed.com` wrappers). The flag costs ~+64% wall-clock.
+- **Every reachable destination was a custom career site, not an ATS** — zero Greenhouse/Lever/
+  Ashby/Workday.
+
+So neither plan is triggered, and the binding constraint is upstream of both: because the two
+dominant sources structurally cannot produce a fillable apply URL, weighting `ENABLED_SOURCES`
+toward Greenhouse/Lever/Ashby is the **only** mechanism that puts one in the tracker. Each plan
+carries the full numbers and what they imply for its own substrate. The spike was deleted per its
+own contract once transcribed.
+
 When either hits its trigger criteria and gets prioritized, fold it into a new
 `docs/backlog/step-N-*.md` story and delete it from here, following the pattern above.
