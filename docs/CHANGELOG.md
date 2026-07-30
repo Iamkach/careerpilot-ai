@@ -247,4 +247,55 @@ was reverted as unneeded complexity; keep them current locally and commit them l
 file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
 `profile.json` from its secret.
 
+## Step 10 — Auto-Apply subsystem, Phases 1–2 (Stage 7)
+
+`scripts/autoapply.py` (Layer 1, no browser) + `scripts/autoapply_browser.py` (Layer 2,
+Playwright), wired in as `run.py --stage 7` / `--stage 7 --fill`. **Never submits** — the human
+clicks Submit and sets `Applied` by hand; `WRITABLE_STATUSES` excludes `Applied` on purpose, and
+there is no submit code path in `autoapply_browser.py` at all, guarded by
+`tests/test_autoapply_notion.py`. `detect_apply_channel()` routes by URL domain; Greenhouse gets a
+real field schema via its public `?questions=true` endpoint, everything else falls back to
+`GENERIC_QUESTIONS` with `schema_known=False`. `_resolve_field()` resolves each field through an
+ordered chain (file upload → name map → label rules → `COMMON_QUESTION_PRESETS` → free text →
+`review_required`); work authorization, sponsorship, and salary come only from
+`APPLICATION_PROFILE` or block — never guessed. `AUTOAPPLY_DRAFT_ESSAYS` drafts free-text answers
+from the cached JD + tailored resume but leaves `status`/`value` untouched, so a draft is never
+auto-typed. `run.py --setup-profile` (`scripts/autoapply_profile.py`) writes answers to a
+git-ignored `config/application_profile.json`. `FILLABLE_CHANNELS = {greenhouse, lever}` — LinkedIn
+and Indeed are excluded by rule (ToS/detection risk), not configuration.
+
+A later fix (commit `0e22a6c`, 2026-07-30) closed four defects found while planning real
+Greenhouse jobs, cutting projected blockers on a 12-job sample from 44 to 19: identity was
+resolving to the literal `"Your"`/`"Name"` and reading as answered (now derived from `YOUR_NAME`,
+and the placeholder correctly blocks); `COMMON_QUESTION_PRESETS` matching was raw substring and
+matched none of three real "years of experience" phrasings (now an ordered word-subsequence
+match, `_label_matches_pattern()`); free-text essays were never actually drafted despite being
+documented as AI-assisted; and `_LABEL_RULES` checked work-authorization before sponsorship, so a
+label containing both substrings resolved from the wrong key — silently wrong for anyone whose two
+flags differ, now reordered.
+
+**Phase 3 (deliberate submit) deferred by choice**, pending real-world use of the fill path. Full
+spec, open gaps, and Phase 3 design: `docs/backlog/step-10-auto-apply-subsystem.md`.
+
+## Step 15 — Application pre-fill browser extension (Stage 7 Layer 3)
+
+Queued 2026-07-30, not started. An MV3 extension + localhost bridge that pre-fills whatever
+application form is open in the user's own authenticated browser: the content script scrapes the
+live DOM into the exact schema shape `build_application_plan()` already consumes, so Ashby,
+Workday, and arbitrary custom career sites become one code path with no per-ATS schema or selector
+work, and the human is already past auth/captcha since it's their real session. Complements rather
+than replaces the Stage 7 Layer 2 Playwright path (which stays `{greenhouse, lever}`-only): the
+extension is interactive-only and does nothing for an unattended run.
+
+Folded from `docs/refinement-plans/auto-apply/browser-extension-prefill.md` on a scoping
+correction to `docs/refinement-plans/auto-apply/sourcing-bottleneck-analysis.md`'s original
+sizing, which counted rows the pipeline can auto-route to a fillable URL — an extension routes
+nothing, so the real population is every application opened by hand, including custom career
+sites reached through a LinkedIn posting. `docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md`
+(a per-ATS Playwright-adapter alternative to the same bottleneck) was superseded and deleted in
+the same change; its one still-live idea (Ashby in `FILLABLE_CHANNELS`, for unattended runs only)
+is harvested into the Step 15 story's "Considered and dropped."
+
+Full spec: `docs/backlog/step-15-application-prefill-extension.md`.
+
 Full spec: `docs/backlog/step-11-forkable-setup.md`.
