@@ -241,11 +241,33 @@ MIN_TAILORED_ATS_SCORE = 75
 # and unretractable. Anything unmapped becomes review_required, never a guess.
 #
 # A None/empty value is not a bug: it deliberately forces that field to human review.
+def _split_display_name(full: str) -> tuple[str, str]:
+    """Split YOUR_NAME into (first, last) for forms that ask the two separately.
+
+    Returns ("", "") for the un-configured placeholder, so those fields resolve
+    review_required rather than typing a literal "Your Name" into a real application — the
+    convention documented above, where an empty value deliberately forces human review. This
+    used to hold the literal strings "Your"/"Name", which read as *answered* and would submit
+    under that name; `scripts/autoapply_profile.py` skips asking precisely because it
+    documents these as "derived", so nothing else caught it.
+
+    A simple rightmost-space split is wrong for a two-word given name or a compound surname —
+    override either half in config/application_profile.json via `run.py --setup-profile`.
+    """
+    full = (full or "").strip()
+    if not full or full == "Your Name":
+        return "", ""
+    first, _, last = full.rpartition(" ")
+    return (first, last) if first else (full, "")
+
+
+_DERIVED_FIRST, _DERIVED_LAST = _split_display_name(YOUR_NAME)
+
 APPLICATION_PROFILE = {
-    # Identity — generic placeholders; a forker's real answers overlay these from the
+    # Identity — derived from YOUR_NAME; a forker's real answers overlay these from the
     # git-ignored config/application_profile.json (see _apply_saved_profile below).
-    "first_name":    "Your",
-    "last_name":     "Name",
+    "first_name":    _DERIVED_FIRST,
+    "last_name":     _DERIVED_LAST,
     "full_name":     YOUR_NAME,
     "email":         YOUR_EMAIL,
     "phone":         "",                 # empty -> review_required if a form asks
@@ -287,23 +309,44 @@ EEO_RESPONSES = {
 }
 
 # The recurring screener questions almost every application asks, answered once here instead of
-# retyped per job. Keys are lowercase substrings matched against the form's question label (first
-# match wins, so order matters — put more specific patterns first). An empty value means "I have
-# no preset answer", which routes that field to human review rather than inventing one.
+# retyped per job. Each key is matched against the form's question label as an ordered sequence
+# of words, gaps allowed (`_label_matches_pattern()` in scripts/autoapply.py) — so
+# "years of experience" also catches "how many years of *professional* experience...". First
+# match wins, so order matters: put more specific patterns first.
+#
+# An empty value means "I have no preset answer", which routes that field to human review
+# rather than inventing one. Values below are left blank ON PURPOSE wherever the answer is a
+# fact about you that this file has no business guessing — including questions whose likely
+# answer is "No" (have you interviewed here before, were you referred, have you worked for a
+# competitor). A fabricated "No" is a false statement on a real application, so these ship
+# blank and `run.py --setup-profile` asks you once.
 COMMON_QUESTION_PRESETS = {
-    "years of experience":   "",
-    "notice period":         "",
-    "salary expectation":    "",
-    "desired salary":        "",
-    "expected compensation": "",
-    "willing to relocate":   "",
-    "remote":                "",
-    "start date":            "",
-    "available to start":    "",
-    "how did you hear":      "Company website",
-    "referred by":           "",
-    "previously worked":     "No",
-    "previously applied":    "No",
+    # Compensation / timing
+    "notice period":            "",
+    "salary expectation":       "",
+    "desired salary":           "",
+    "expected compensation":    "",
+    "start date":               "",
+    "available to start":       "",
+    # Experience — one pattern now covers the several phrasings live boards actually use
+    # ("years of professional experience", "years of industry software engineering experience").
+    "years of experience":      "",
+    # Location / work model
+    "willing to relocate":      "",
+    "open to relocation":       "",
+    "remote":                   "",
+    "in person":                "",
+    "in office":                "",
+    "hybrid":                   "",
+    # Sourcing / history — blank by design, see the note above
+    "how did you hear":         "Company website",
+    "referred to this position": "",
+    "referred by":              "",
+    "ever interviewed":         "",
+    "previously been employed": "",
+    "previously worked":        "",
+    "previously applied":       "",
+    "worked for a competitor":  "",
 }
 
 
@@ -343,6 +386,13 @@ AUTOAPPLY_DAILY_CAP = 10
 # Run the stage-7 form fill in a headless browser. Default False — the whole point of the
 # semi-auto path is that you watch the filled form and click Submit yourself.
 AUTOAPPLY_HEADLESS = False
+
+# Have the model draft the per-job free-text answers ("Why <company>?", "Describe a time
+# when...") into the answer sheet. These are the measured bulk of the per-application time
+# cost; drafting turns writing them into reviewing them. A drafted answer is still marked
+# review_required and is never auto-typed into a form — see draft_free_text_answers() in
+# scripts/autoapply.py. Costs one AI call per free-text question, so set False to skip.
+AUTOAPPLY_DRAFT_ESSAYS = True
 
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
