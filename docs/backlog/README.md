@@ -16,9 +16,9 @@ implementation checklist — and **delete** the refinement-plan doc; don't leave
 
 Steps 0-1, 2-6, 8, 9, 12 (plus both quick-fixes' first item) are implemented and retired — see
 [`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and [`../TODO.md`](../TODO.md) for the
-small gaps each left behind (a missing `encoding="utf-8"`, an unlogged bare `except`, two unrun
-manual QA checks — the handful of gaps Step 9's test suite had characterized as not-yet-fixed
-are now fixed, see `../TODO.md`).
+small, standalone gaps each left behind (a missing `encoding="utf-8"`, an unlogged bare `except`,
+two unrun manual QA checks — the handful of gaps Step 9's test suite had characterized as
+not-yet-fixed are now fixed, see `../TODO.md`).
 
 Open stories:
 
@@ -29,14 +29,17 @@ Open stories:
 | [step-11-forkable-setup.md](step-11-forkable-setup.md) | ✅ Phase 1 landed (`--init`, `scripts/provision_notion.py` page + all three DBs, env-sourced `NOTION_DB_ID`, hardened `--setup`; ⚠ CI `NOTION_DB_ID` secret follow-up). ⏳ Phase 2: profile.json, de-personalize tracked files | current setup surface | S (remaining) |
 | [step-13-board-token-harvesting.md](step-13-board-token-harvesting.md) | Harvest the employer ATS board URL that LinkedIn/Indeed listings already carry (and we discard), so `config/ats_tokens.json` is built by **observation** instead of slug-guessing — today 23/100 companies resolve to a board | Step 6 (done) | S (Phase 1 = the whole value) |
 | [step-14-target-companies-notion.md](step-14-target-companies-notion.md) | New Notion database for the curated target-company list + their discovered Greenhouse/Lever/Ashby token, so it's visually editable and survives a GitHub Actions checkout instead of living only in git-ignored `config/profile.json` / `config/ats_tokens.json` | Step 6 (done), search-fallback (done 2026-07-29) | M |
+| [step-15-application-prefill-extension.md](step-15-application-prefill-extension.md) | Stage 7 **Layer 3**: MV3 extension + localhost bridge that pre-fills the application form open in your own authenticated browser — live DOM is the schema, so Ashby/Workday/custom career sites are one code path. Attaches the tailored resume, surfaces essay drafts for review, and confirms `Applied` to Notion from the popup | Step 10 Phases 1-2 (done) | L |
 
-Read `docs/TODO.md` first — it's the current index of exactly what's left, cross-referenced
-to file:line. Each story here is the full spec for one TODO section — not a summary pointing
-elsewhere.
+Each story here is fully self-contained — problem statement, binding decisions, and its own
+"open residual gaps" list, kept current in the story itself rather than duplicated in
+`docs/TODO.md`. `docs/TODO.md` is scoped to small, standalone fixes/reminders only, not a roadmap
+index — read the table above for what's open, and open the story directly for the current state.
 
 ## Source material
 
 - [`../refinement-plans/README.md`](../refinement-plans/README.md) — 2 plans remain, still
-  idea-level/deferred (6 are retired or folded in; see `../CHANGELOG.md`).
+  idea-level/deferred (7 are retired or folded in; see `../CHANGELOG.md`), plus
+  `auto-apply/sourcing-bottleneck-analysis.md`, kept as a measurement record rather than a plan.
 - [`../architecture/architecture-analysis.md`](../architecture/architecture-analysis.md) — the
   original three-horizon LLD/ERD/component analysis this backlog implements.

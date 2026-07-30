@@ -333,42 +333,105 @@ Sources: [Greenhouse Job Board API](https://developers.greenhouse.io/job-board.h
 [auto-apply detection](https://www.crossclassify.com/resources/articles/recruitment/how-to-detect-auto-apply-candidate-fraud-before-it-pollutes-your-ats/) ·
 [Turnstile under Playwright](https://www.capsolver.com/blog/cloudflare/playwright-blocked-by-cloudflare-turnstile-causes-fix)
 
-### Known gaps (see `docs/TODO.md` "Step 10" for the current, authoritative list)
+### Open residual gaps (moved here from `docs/TODO.md` 2026-07-30 — this section is now the
+authoritative, current list; TODO.md no longer carries a Step 10 section)
 
-- **docx→PDF conversion — closed (2026-07-21).** `render_docx.convert_docx_to_pdf()` shells out to
-  headless LibreOffice; `autoapply_browser.py` calls it only when the form's upload field rejects
-  `.docx`, degrading to the `pdf_only` stop if LibreOffice isn't installed. Unit-tested with a
-  mocked `subprocess.run`; still untested against a live PDF-only form (none seen in the tracker
-  yet).
-- **Address/attachment mapping gaps — closed (2026-07-21).** The Greenhouse `?questions=true`
-  fetch, run once against a real tracker job (SmithRx), surfaced two mapping bugs, both now fixed:
-  the structured-address block (`Legal First/Last Name`, `Address Line 1/2`, `City`, `State`,
-  `Country`, `Zip Code`, `Address Type`) is captured by the `--setup-profile` wizard's `address`
-  section (`APPLICATION_ADDRESS`) and matched via new `_LABEL_RULES` entries; the dual-field
-  attachment quirk (`input_file` + sibling `textarea` under one label) is deduped in
-  `build_application_plan()`, order-independent.
-- **Layer-2 fill path has still never run against a live form** — only the bundled sample and a
-  local `file://` fixture have exercised it. Re-running the plan against a live Greenhouse posting
-  (the SmithRx job or similar) to confirm the blocker count actually drops, then exercising the
-  fill path itself, is the next validation step.
-- **Tracker is starved of fillable-channel jobs — and the cause is now measured, not guessed
-  (2026-07-29).** Only 1 Greenhouse row of 508 (413 LinkedIn / 90 Indeed / 4 unknown). That count
-  is of *posting* hosts, so it was suspected of understating fillability; a spike measured the
-  resolved apply host instead and found the opposite of a hidden upside. Per scenario #8 above:
-  LinkedIn exposes no apply URL at all (unobtainable at scrape time and after), Indeed exposes one
-  on ~20% of listings and only with `followApplyRedirects: True`, and every reachable destination
-  was a custom career site rather than an ATS.
-  **The actionable conclusion:** the pipeline's two dominant sources *structurally cannot* produce
-  a fillable apply URL, so weighting `ENABLED_SOURCES` toward Greenhouse/Lever/Ashby is not merely
-  a volume prerequisite — it is the **only** mechanism that can put one in the tracker, because
-  those sources return the ATS URL directly. Both auto-apply refinement plans stay parked pending
-  that shift; see `docs/refinement-plans/auto-apply/` for the full numbers per substrate.
-- **Phase 3 (deliberate submit) deferred by choice**, pending real-world use of the fill path —
-  ATSes score application velocity and flag high-volume submitters as low-intent, so rushing the
-  final-click automation is lower value than it looks.
-- **Phase 4 (Workday/agentic long tail) not started.** `FILLABLE_CHANNELS = {"greenhouse",
+- **Live schema fetch validated once; address/attachment mapping gaps closed (2026-07-21).** The
+  Greenhouse `?questions=true` fetch was run for the first time against a real tracker job
+  (SmithRx, "Senior Staff Automation Engineer") and **worked** — 25 fields returned and mapped,
+  confirming the core Phase-1 read premise on a live board. It surfaced two mapping gaps, both
+  now fixed: (a) the structured-address block (`Legal First/Last Name`, `Address Line 1/2`,
+  `City`, `State`, `Country`, `Zip Code`, `Address Type`) is now captured by a new `"address"`
+  section in the `run.py --setup-profile` wizard, persisted to `config/application_profile.json`
+  alongside the existing sections, exposed as `APPLICATION_ADDRESS` in `config/settings.py`, and
+  matched via new `_LABEL_RULES` keyword entries in `scripts/autoapply.py` (label text, not field
+  `name` — Greenhouse's `name` attributes for these fields are opaque, unlike the
+  confirmed-stable `first_name`/`last_name`/`email`/`phone` in `_FIELD_MAP`); legal name is
+  deliberately independent of the resume/outreach display name, since a candidate's legal and
+  preferred names can differ. (b) The dual-field attachment quirk (Greenhouse emits an
+  `input_file` + a `textarea` under one label, e.g. "Resume/CV") is fixed in
+  `build_application_plan()`: the `textarea` sibling of an already-resolved attachment field now
+  mirrors that field's resolution instead of being independently evaluated as an unresolved
+  free-text question, order-independent (works whichever field is listed first). Covered by new
+  tests in `tests/test_autoapply_profile.py` and `tests/test_autoapply_plan.py` (388 passed).
+- **Real-tracker readiness measured (2026-07-30), after filling the 7 preset answers the
+  `0e22a6c` fix added.** `python run.py --stage 7 --dry-run --limit 341` planned every job at
+  `Resume Tailored` (the full backlog, zero Notion writes). Channel mix: 229 linkedin / 82 indeed
+  / 12 greenhouse / 11 unknown / 7 ashby / 0 lever — confirms `FILLABLE_CHANNELS =
+  {greenhouse, lever}` reaches only 12/341 (3.5%) of this backlog, and Lever specifically has
+  zero live rows to validate against right now. Of those 12 Greenhouse rows: **2 READY** (would
+  actually open the Layer-2 browser and fill), **9 NEEDS HUMAN** (blocked on a required,
+  company-specific knockout question — e.g. Customer.io's "have you worked for a company that
+  uses Customer.io," which no generic preset can ever cover), **1 PARTIAL** — the SmithRx job
+  used in the 2026-07-21 validation now 404s (`⚠ Greenhouse schema fetch failed (HTTP Error 404:
+  Not Found) — falling back to generic fields`), i.e. that specific posting closed; degrades
+  correctly, not a bug, but means SmithRx can no longer serve as the live-fill validation target
+  — needs a replacement job. **Net: the effective Greenhouse fill rate is ~17% of an already
+  3.5%-wide channel (2/341 ≈ 0.6% of the full backlog)** — matches
+  `step-15-application-prefill-extension.md`'s "near zero, not 3%" claim almost exactly, now with
+  a real number instead of an estimate.
+- **The Layer-2 fill path (actual browser open via `--fill`) has still never run against a live
+  form** — only the bundled sample, a local `file://` fixture, and now this dry-run plan (Layer 1
+  only) have exercised it. The 2 READY Anthropic jobs above (Staff+ Software Engineer, Enterprise
+  AI Products / Claude Science) are real, currently-open live-fill candidates — running
+  `--stage 7 --fill` (not `--dry-run`) against one of them is the next validation step.
+- **Why the tracker is starved of ATS rows — measured, and the answer is upstream of Stage 7
+  (2026-07-29).** The often-quoted split (1 Greenhouse / 413 LinkedIn / 90 Indeed / 4 unknown of
+  508) counts *posting* hosts, while fillability is decided by the *apply-form* host — and
+  scenario #8 above ("external redirect — resolve the true destination first") is the one
+  scenario in that list never implemented. A throwaway spike (`scripts/spike_apply_redirect.py`,
+  deleted after transcription per the `spike_phase0_leads.py` contract) measured what
+  implementing it would buy, including a live Apify probe of both keyword actors at 20 fresh
+  listings each:
+  - **LinkedIn: no apply URL exists.** 0/20 populated across `applyUrl`, `applyLink`,
+    `companyApplyUrl`, `externalApplyLink`, `link` — so the `job.get("applyUrl")` fallback at
+    `scripts/sources.py:186` is **dead code**, not a discarded signal (worth a small cleanup). Nor
+    is it recoverable later: an unauthenticated fetch of a LinkedIn job page returns a ~344 KB
+    guest page with sign-in/join-now/captcha markers and zero apply-URL occurrences.
+  - **Indeed: ~20% of listings**, and only with `followApplyRedirects: True` — under today's
+    `False`, all 3/20 populated `externalApplyLink` values were `indeed.com` wrappers; with `True`,
+    4/20 resolved externally. Cost ~+64% wall-clock (33.0s → 54.1s / 20 items) against
+    `_apify_run()`'s 400s poll budget; since that helper **raises** rather than returning a partial
+    dataset, flipping the flag without also raising its poll count would turn a slow scrape into a
+    silently empty one.
+  - **Every reachable destination was a custom career site, not an ATS**: `careers.cisco.com`,
+    `careers.baptisthealth.net`, `careers.massmutual.com` (Phenom-style, channel `unknown`). Zero
+    Greenhouse/Lever/Ashby/Workday.
+
+  **Conclusion:** resolving the apply URL would not feed the shipped Layer 2, so that work is not
+  worth doing on its own. The pipeline's two dominant sources structurally cannot produce a fillable
+  apply URL, which makes weighting `ENABLED_SOURCES` toward Greenhouse/Lever/Ashby the **only**
+  mechanism that puts one in the tracker — those sources hand over the ATS URL directly. Both
+  auto-apply refinement plans stay parked pending that shift; full numbers and per-substrate
+  implications are in `docs/refinement-plans/auto-apply/`.
+- **docx→PDF conversion — closed (2026-07-21).** `scripts/render_docx.py` gained
+  `convert_docx_to_pdf()`, shelling out to a headless LibreOffice (`soffice --headless
+  --convert-to pdf`) to produce a PDF copy of the tailored resume. `autoapply_browser.py`'s
+  `_resolve_upload_path()` calls it only when `_accepts_docx()` says the form's file input
+  rejects `.docx`; if LibreOffice isn't installed or the conversion fails, it degrades to the
+  original `pdf_only` stop (never raises — same optional-dependency contract as
+  `sources._headless_fetch()`). LibreOffice is a system install, not a pip package, so nothing
+  changes for an environment that doesn't have `soffice`/`libreoffice` on PATH. Untested against
+  a live PDF-only form (none seen yet in the tracker); unit-tested with a mocked `subprocess.run`
+  in `tests/test_render_docx.py` and `tests/test_autoapply_browser_pdf_fallback.py`.
+- **Phase 3 (deliberate submit) deferred by choice** pending real use of the fill path. The
+  research argues against rushing it: ATSes now score application velocity and flag high-volume
+  submitters as low-intent before a human reads the application, so the marginal value of
+  automating the final click is lower than it looks.
+- **Phase 4 (Workday/agentic long tail) not started via the Playwright route.** Workday runs a
+  separate tenant per company and its resume parser fails ~30% of the time; account provisioning
+  is the real cost. **Related, written down 2026-07-21:** `FILLABLE_CHANNELS = {"greenhouse",
   "lever"}` is the only gate Layer 2 checks — Ashby, Workday, and any custom company careers page
-  (`unknown` channel) get Layer 1's answer sheet only, never a browser fill, today. Deferred (not
-  queued) in `docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md`.
-- **Six `Status` select options must be hand-added in Notion** before stage 7 can transition
-  anything — `db_update_status_verified()` fails loudly rather than silently no-opping.
+  (`unknown` channel, e.g. a site like Netflix's own) get Layer 1's answer sheet only, never a
+  browser fill, today. LinkedIn/Indeed are excluded *by rule* (ToS/detection) and are out of scope
+  for this. A per-ATS Playwright adapter for Ashby/Workday/custom
+  (`docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md`) was superseded and deleted
+  2026-07-30 in favor of `docs/backlog/step-15-application-prefill-extension.md` (Stage 7 Layer 3,
+  a browser extension), which covers the same gap interactively with one code path instead of a
+  per-ATS adapter — queued, not started.
+- **Schema migration must be run once** before stage 7 can transition anything:
+  `python scripts/setup_notion_schema.py --apply` adds the six new `Status` options and the four
+  new properties. (`databases.update` can extend the schema even though `pages.update` silently
+  ignores an unknown select option — so only the per-page write is unscriptable.) Idempotent and
+  dry-run by default. If skipped, `db_update_status_verified()` fails loudly rather than silently
+  no-opping, so it surfaces on first run rather than corrupting state.
