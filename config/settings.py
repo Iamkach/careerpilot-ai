@@ -70,6 +70,13 @@ MAX_JOB_AGE_DAYS = 14
 # True to drop undated listings instead of assuming they're fresh.
 DROP_UNDATED_JOBS = False
 
+# discover_tokens() first guesses each company's Greenhouse/Lever/Ashby token as its slugified
+# name; when that single guess misses (a company whose real token doesn't match its display
+# name), it falls back to a keyless DuckDuckGo HTML search for candidate slugs, still verifying
+# each candidate against the real ATS API before accepting it. Flip off if DuckDuckGo starts
+# blocking/rate-limiting the search requests.
+ENABLE_ATS_TOKEN_SEARCH_FALLBACK = True
+
 # --- Company denylist (stage 1) -----------------------------
 # Two-layer filter:
 #   SKIP_COMPANIES — word-boundary token sub-sequence match (case-insensitive), not a
