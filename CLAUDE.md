@@ -73,6 +73,14 @@ misses to `config/ats_tokens.json` (re-probes an all-null entry only after ~30 d
 responses are verifiable (`company_name` field) and rejected on a mismatch; Lever/Ashby have no
 such field, so an auto-accepted token is logged loudly for the user to pin or veto by hand.
 
+The direct guess is a single slugified-name probe (e.g. "Acme Inc" → `acmeinc`), which misses for
+any company whose real token doesn't match its display name. When that guess misses for a given
+ATS and `ENABLE_ATS_TOKEN_SEARCH_FALLBACK` is on (default), `discover_tokens()` falls back to a
+keyless DuckDuckGo HTML search (`_dork_candidate_slugs()`) for `site:{ats domain} "{company}"` and
+tries each candidate slug it finds through the same `_probe_*` function as the direct guess — the
+search only ever proposes a slug, the real ATS API still verifies it before it's accepted, so this
+adds no new unverified-trust surface beyond what the direct-guess path already has.
+
 **Backup plan if Apify sourcing (`valig`/`misceres`) stops being satisfactory:** adopt
 `python-jobspy` as a `KEYWORD_SOURCES` entry — see the "Backup plan" section in
 `docs/backlog/step-6-multi-source-phase1.md` for the concrete integration steps and the two known
