@@ -62,6 +62,19 @@ exact surface `FILLABLE_CHANNELS` excludes LinkedIn from by rule).
 
 Full spec: `docs/backlog/step-13-board-token-harvesting.md`.
 
+## Step 14 — Target Companies Notion database (not started)
+
+`config/profile.json`'s `target_companies` (git-ignored) and `config/ats_tokens.json` (also
+git-ignored, `.gitignore:27`) both mean the curated target-company list and its discovered
+Greenhouse/Lever/Ashby tokens can't be edited from a phone and don't survive a GitHub Actions
+checkout — every nightly run's `discover_tokens()` re-probes from zero instead of compounding. Adds
+a fourth Notion database (same optional, no-op-if-unset pattern as Step 12's restricted-companies
+list) as the durable, visually-editable source of truth for the curated list only — the broader
+auto-discovered company tail stays on the local-only cache. Absorbs the "mirror to Notion" item
+Step 13 had deferred.
+
+Full spec: `docs/backlog/step-14-target-companies-notion.md`.
+
 ## Step 7 — Communications subsystem (not started)
 
 Two new stages (LinkedIn leads discovery + Hunter-verified cold email), a new ~22-property
