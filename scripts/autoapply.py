@@ -39,6 +39,7 @@ Run:
 
 from __future__ import annotations
 
+import re
 import sys
 import json
 import html
@@ -51,9 +52,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import (
     APPLICATION_PROFILE, EEO_RESPONSES, COMMON_QUESTION_PRESETS, APPLICATION_ADDRESS,
     AUTOAPPLY_DAILY_CAP, AUTOAPPLY_HEADLESS, APPLICATIONS_DIR, RESUMES_DIR,
+    AUTOAPPLY_DRAFT_ESSAYS, RESUME_PATH,
 )
 from scripts.utils import (
-    log, today, ensure_dirs,
+    log, today, ensure_dirs, ai_chat,
     db_get_jobs, db_update_status_verified, db_get_job_description,
 )
 
@@ -233,9 +235,22 @@ _FIELD_MAP = {
 # Label-keyword → profile key. Ordered: the eligibility knockouts that MUST be deterministic
 # come first so a vaguely-worded label can't fall through to a looser rule.
 _LABEL_RULES = [
-    (("authorized to work", "legally authorized", "work authorization"), "work_authorized"),
-    (("require sponsorship", "need sponsorship", "visa sponsorship", "sponsorship for employment"),
-     "requires_sponsorship"),
+    # Sponsorship BEFORE work-authorization, and this order is load-bearing: real forms ask
+    # "Will you require work authorization/visa sponsorship...", which contains the substring
+    # "work authorization". Checked the other way round, a *sponsorship* question is answered
+    # from `work_authorized` — silently wrong for anyone whose two flags differ (a citizen or
+    # GC holder answers "no sponsorship needed" but "yes, authorized"), which is exactly the
+    # disqualifying, unretractable error class this module refuses to risk elsewhere.
+    (("require sponsorship", "need sponsorship", "visa sponsorship", "sponsorship for employment",
+      "require work authorization"),                   "requires_sponsorship"),
+    (("authorized to work", "legally authorized", "work authorization",
+      "legally eligible"),                             "work_authorized"),
+    # Identity restated in the form's own words. "Preferred" here means preferred *form* of the
+    # name (vs. the legal name captured in APPLICATION_ADDRESS), not a separate nickname field,
+    # so it resolves deterministically from the profile rather than routing to human review.
+    (("preferred first and last name", "preferred full name"), "full_name"),
+    (("preferred first name",),                        "first_name"),
+    (("preferred last name",),                         "last_name"),
     (("linkedin",),                                    "linkedin_url"),
     (("github",),                                      "github_url"),
     (("portfolio", "personal website"),                "portfolio_url"),
@@ -266,12 +281,58 @@ def _eeo_answer(label: str) -> str:
     return EEO_RESPONSES.get("gender", "Decline To Self Identify")
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+# Two words count as the same word when they share at least this many leading characters, which
+# absorbs inflection without a stemmer dependency ("relocation"/"relocating" share 7,
+# "remote"/"remotely" share 6). Words shorter than this must match exactly, which is what stops
+# a short function word from matching an unrelated long one — "of" must never match "office",
+# since that would fire the wrong preset onto a real application field.
+_STEM_MATCH_MIN = 5
+
+
+def _same_word(word: str, pat_word: str) -> bool:
+    if word == pat_word:
+        return True
+    if len(word) < _STEM_MATCH_MIN or len(pat_word) < _STEM_MATCH_MIN:
+        return False
+    shared = 0
+    for a, b in zip(word, pat_word):
+        if a != b:
+            break
+        shared += 1
+    return shared >= _STEM_MATCH_MIN
+
+
+def _label_matches_pattern(label_l: str, pattern: str) -> bool:
+    """True when every word of `pattern` appears in `label_l` in order, gaps allowed.
+
+    Plain substring matching was too literal to be useful on real forms: the single preset
+    "years of experience" matched none of the three phrasings live Greenhouse boards actually
+    use — "years of *professional* experience", "years of *industry software engineering*
+    experience", "years of professional *software engineering* experience" — leaving three
+    required fields blocked on one already-known answer. An ordered word subsequence absorbs
+    those interposed words without degrading into unordered bag-of-words, which would match
+    far too much.
+    """
+    ptokens = _WORD_RE.findall(pattern.lower())
+    if not ptokens:
+        return False
+    i = 0
+    for word in _WORD_RE.findall(label_l):
+        if _same_word(word, ptokens[i]):
+            i += 1
+            if i == len(ptokens):
+                return True
+    return False
+
+
 def _preset_answer(label: str) -> str | None:
     """Look the label up in the common-screener answer bank. Returns None on no match, and ''
     when a preset exists but is intentionally blank (→ review_required, not a guess)."""
     l = (label or "").lower()
     for pattern, answer in COMMON_QUESTION_PRESETS.items():
-        if pattern in l:
+        if _label_matches_pattern(l, pattern):
             return answer
     return None
 
@@ -465,6 +526,12 @@ def _answer_sheet_html(job: dict, plan: dict, rpt: dict, channel: str) -> str:
         else:
             shown = html.escape(str(val)) or "<em>blank</em>"
         cls = "ready" if f["status"] == "ready" else ("blocking" if f["required"] else "optional")
+        # A drafted free-text answer is shown as copy-ready prose, explicitly labelled a draft:
+        # it is still review_required and is never auto-typed into the form, so the sheet must
+        # not present it as a settled answer.
+        if f.get("draft"):
+            shown = (f'<div class="draft"><span class="dlabel">DRAFT — review before use</span>'
+                     f'<p>{html.escape(f["draft"])}</p></div>')
         return (f'<tr class="{cls}"><td>{mark}</td><td>{html.escape(f["label"])}</td>'
                 f'<td>{shown}</td><td class="src">{html.escape(f["source"])}</td></tr>')
 
@@ -481,6 +548,9 @@ def _answer_sheet_html(job: dict, plan: dict, rpt: dict, channel: str) -> str:
  table{{border-collapse:collapse;width:100%}} td,th{{padding:.5rem .6rem;border-bottom:1px solid #eee;vertical-align:top}}
  tr.blocking{{background:#fff4f4}} tr.ready td:first-child{{color:#0a0}} .src{{color:#888;font-size:.85em}}
  .warn{{background:#fffbe6;border-left:3px solid #e6c000;padding:.6rem .8rem}}
+ .draft{{background:#f5f8ff;border-left:3px solid #7a9cff;padding:.5rem .7rem;border-radius:3px}}
+ .draft p{{margin:.35rem 0 0;white-space:pre-wrap}}
+ .dlabel{{font-size:.72em;letter-spacing:.06em;color:#4a63b8;font-weight:700}}
  .verdict{{font-weight:600;margin:.6rem 0 1rem}}
 </style>
 <h1>{html.escape(job.get('company',''))} — {html.escape(job.get('title',''))}</h1>
@@ -509,6 +579,90 @@ def write_answer_sheet(job: dict, plan: dict, rpt: dict, channel: str) -> str:
     path = out_dir / f"{stem}.html"
     path.write_text(_answer_sheet_html(job, plan, rpt, channel), encoding="utf-8")
     return str(path)
+
+
+# ── 5b. Free-text drafting ────────────────────────────────────────────────────
+# The measured bottleneck. Across the tracker's Greenhouse jobs the blocking questions split
+# into recurring boilerplate (answered once via COMMON_QUESTION_PRESETS) and per-job essays
+# ("Why <company>?", "Describe a time when you disagreed with a technical approach"). The
+# essays are what actually cost ~20 minutes per application, and nothing here drafted them —
+# `_resolve_field()` case (e) returned review_required with no text at all, so every one was
+# written from scratch by hand.
+#
+# What this does NOT change: a drafted answer stays `review_required`, so the browser fill
+# still never types it. The gain is that your job becomes reviewing prose instead of writing
+# it. Drafting is prose only — it never touches an eligibility, salary, or yes/no field,
+# because those never reach case (e) in the first place.
+_DRAFT_SOURCE = "free-text (human writes/reviews)"
+
+_DRAFT_SYSTEM = (
+    "You draft first-person answers to job-application free-text questions. "
+    "Use ONLY facts present in the candidate's resume and the job description. "
+    "Never invent an employer, title, date, metric, credential, or technology the resume "
+    "does not state. Write plainly, no marketing register, no em-dashes. "
+    "If the resume genuinely lacks the material to answer, reply with the single token NEEDS_HUMAN."
+)
+
+
+def draft_free_text_answers(plan: dict, job: dict, jd: str, resume_text: str) -> int:
+    """Draft prose for each unresolved free-text field, in place. Returns the count drafted.
+
+    Never raises: a drafting failure leaves the field exactly as it was (unresolved, no
+    draft), which is the pre-existing behavior — so an AI outage degrades this stage to what
+    it did before rather than failing the run. Each entry gains a `draft` key; `status` and
+    `value` are deliberately untouched so the fill layer's contract is unchanged.
+    """
+    targets = [f for f in plan.get("fields", []) if f.get("source") == _DRAFT_SOURCE]
+    if not targets or not (jd or resume_text):
+        return 0
+
+    company = job.get("company", "")
+    role = job.get("title", "") or plan.get("title", "")
+    drafted = 0
+    for f in targets:
+        question = (f.get("label") or "").strip()
+        if not question:
+            continue
+        prompt = (
+            f"Company: {company}\nRole: {role}\n\n"
+            f"--- JOB DESCRIPTION ---\n{(jd or '')[:6000]}\n\n"
+            f"--- CANDIDATE RESUME ---\n{(resume_text or '')[:6000]}\n\n"
+            f"--- APPLICATION QUESTION ---\n{question}\n\n"
+            "Draft the candidate's answer. Be specific to this company and role, and ground "
+            "every claim in the resume above. Aim for 80-150 words unless the question asks "
+            "for a list. Output the answer text only, with no preamble or quotation marks."
+        )
+        try:
+            text = (ai_chat(prompt, system=_DRAFT_SYSTEM, max_tokens=600) or "").strip()
+        except Exception as e:
+            log(f"  ⚠ Draft failed for '{question[:50]}': {type(e).__name__}")
+            continue
+        if not text or "NEEDS_HUMAN" in text:
+            continue
+        f["draft"] = text
+        drafted += 1
+    return drafted
+
+
+def _resume_text_for(job: dict) -> str:
+    """Best-effort text of the tailored resume, for grounding drafts.
+
+    Stage 2 writes a `.txt` mirror beside every tailored `.docx`, so prefer that; fall back to
+    the base resume. Returns "" if neither is readable — `draft_free_text_answers()` treats
+    that as "nothing to ground on" and skips drafting rather than inventing content.
+    """
+    docx = resolve_tailored_resume(job)
+    if docx:
+        mirror = Path(docx).with_suffix(".txt")
+        if mirror.exists():
+            try:
+                return mirror.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+    try:
+        return (ROOT / RESUME_PATH).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 # ── 6. Per-job planning ───────────────────────────────────────────────────────
@@ -570,6 +724,12 @@ def run(min_score: int = 0, fill: bool = False, limit: int = 0, dry_run: bool = 
         log(f"  channel: {channel} · {CHANNEL_POLICY.get(channel, '')}")
         c = rpt["counts"]
         log(f"  {rpt['verdict']} ({c['ready']}/{c['total']} ready, {c['blocking']} blocking)")
+
+        if AUTOAPPLY_DRAFT_ESSAYS:
+            n = draft_free_text_answers(
+                plan, job, db_get_job_description(job["page_id"]), _resume_text_for(job))
+            if n:
+                log(f"  ✎ drafted {n} free-text answer(s) — review them in the sheet")
 
         sheet = write_answer_sheet(job, plan, rpt, channel)
         log(f"  ✓ Answer sheet: {sheet}")

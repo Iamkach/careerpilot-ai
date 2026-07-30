@@ -47,9 +47,12 @@ def say(msg: str = "") -> None:
 
 
 # Each entry: (section, key, prompt, kind). kind ∈ {"text", "yesno", "choice"}.
-# Only the fields worth asking a human are here — name/email already live in settings.py as
-# YOUR_NAME/YOUR_EMAIL and are derived, not re-asked.
+# Email is derived from settings.YOUR_EMAIL and not re-asked. First/last name ARE asked: they
+# default to a rightmost-space split of YOUR_NAME (settings._split_display_name), which is
+# wrong for a two-word given name or a compound surname, and these go on real applications.
 QUESTIONS = [
+    ("profile", "first_name", "First name, as it should appear on an application", "text"),
+    ("profile", "last_name", "Last name, as it should appear on an application", "text"),
     ("profile", "phone", "Phone number (as you'd type it on an application)", "text"),
     ("profile", "location", "Current location (e.g. 'Austin, TX')", "text"),
     ("profile", "linkedin_url", "LinkedIn profile URL", "text"),
@@ -77,8 +80,21 @@ QUESTIONS = [
     ("presets", "salary expectation", "Salary expectation (e.g. '180000' or 'Negotiable')", "text"),
     ("presets", "notice period", "Notice period (e.g. '2 weeks', 'Immediate')", "text"),
     ("presets", "willing to relocate", "Willing to relocate?", "text"),
+    ("presets", "open to relocation", "Open to relocation for a specific role?", "text"),
     ("presets", "start date", "Earliest start date (e.g. 'Immediately', '2026-09-01')", "text"),
     ("presets", "how did you hear", "Default answer to 'How did you hear about this job?'", "text"),
+    # Recurring screeners measured on live Greenhouse boards. Blank keeps being asked by hand;
+    # these are facts about you, so nothing here is defaulted on your behalf.
+    ("presets", "in person", "Open to working in-person/hybrid some of the time?", "text"),
+    ("presets", "remote", "Default answer to remote-work questions", "text"),
+    ("presets", "ever interviewed",
+     "Default answer to 'Have you ever interviewed here before?'", "text"),
+    ("presets", "referred to this position",
+     "Default answer to 'Were you referred by an employee?'", "text"),
+    ("presets", "previously been employed",
+     "Default answer to 'Have you previously been employed here?'", "text"),
+    ("presets", "worked for a competitor",
+     "Default answer to 'Do you/did you work for a competitor or partner?'", "text"),
 
     ("eeo", "gender", "EEO — gender", "text"),
     ("eeo", "race", "EEO — race", "text"),

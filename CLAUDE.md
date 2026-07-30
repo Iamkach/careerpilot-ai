@@ -264,18 +264,58 @@ source". Lever/Ashby are the same. Applying is a browser problem, not an API pro
 salary and any yes/no eligibility answer come from the profile or the field is flagged
 `review_required` — **never guessed**, since a wrong answer there is disqualifying and
 unretractable. `None` means unknown and always blocks; `False` is a real answer and does not.
-`EEO_RESPONSES` answers demographic questions (default: decline). `COMMON_QUESTION_PRESETS` is a
-label-substring answer bank for recurring screeners; a preset left blank routes to human review
-rather than typing an empty answer into a real application.
+`EEO_RESPONSES` answers demographic questions (default: decline). `COMMON_QUESTION_PRESETS` is an
+answer bank for recurring screeners; a preset left blank routes to human review rather than typing
+an empty answer into a real application. Presets whose answer is a **fact about your history**
+(have you interviewed here before, were you referred, have you worked for a competitor) ship
+blank on purpose — a fabricated "No" would be a false statement on a real application, so
+`run.py --setup-profile` asks you once instead of defaulting.
+
+Preset labels are matched by `_label_matches_pattern()` as an **ordered word subsequence, gaps
+allowed** (with a shared-5-char-prefix stem match, so "relocation" catches "relocating"), not as a
+raw substring. Substring matching was too literal to be useful: the single `years of experience`
+preset matched none of the three phrasings live Greenhouse boards actually use ("years of
+*professional* experience", "years of *industry software engineering* experience", …), leaving
+three required fields blocked on one already-known answer. Words shorter than 5 characters must
+match exactly, so "of" can never match "office" and fire the wrong preset.
 
 `_resolve_field()` in `scripts/autoapply.py` resolves fields in order: (a) file uploads → the
 stage 2 tailored resume, (b) direct name map (first/last/email/phone, `_FIELD_MAP`), (c) label
 rules (`_LABEL_RULES` — eligibility knockouts, EEO, links, and the structured-address fields
-below), (d) `COMMON_QUESTION_PRESETS`, (e) free-text → always `review_required`, (f) anything
-else → `review_required`. `_LABEL_RULES` is matched on **label text**, not field `name` — beyond
-the confirmed-stable `first`/`last`/`email`/`phone` names in `_FIELD_MAP`, Greenhouse's other
-field `name` attributes are opaque/internal, so mapping must go by the human-readable question
-text instead.
+below), (d) `COMMON_QUESTION_PRESETS`, (e) free-text → always `review_required` (a *draft* may be
+attached, see below), (f) anything else → `review_required`. `_LABEL_RULES` is matched on **label
+text**, not field `name` — beyond the confirmed-stable `first`/`last`/`email`/`phone` names in
+`_FIELD_MAP`, Greenhouse's other field `name` attributes are opaque/internal, so mapping must go
+by the human-readable question text instead.
+
+**Within `_LABEL_RULES`, sponsorship is checked before work authorization, and that order is
+load-bearing.** Real forms ask "Will you require work authorization/visa sponsorship…", whose
+label *contains* the substring "work authorization"; checked the other way round, a sponsorship
+question gets answered from `work_authorized`. That's silently wrong for anyone whose two flags
+differ (a citizen or GC holder: authorized = yes, sponsorship = no) — the exact disqualifying,
+unretractable error class this module refuses to risk elsewhere. Guarded by
+`tests/test_autoapply_answer_quality.py`.
+
+**Identity is derived, never a placeholder.** `APPLICATION_PROFILE`'s `first_name`/`last_name`
+come from `_split_display_name(YOUR_NAME)` in `config/settings.py` (rightmost-space split),
+and the un-configured placeholder `"Your Name"` deliberately derives to `("", "")` so those
+fields resolve `review_required`. They previously held the literal strings `"Your"`/`"Name"`,
+which read as *answered* — a fill run would have submitted real applications under that name,
+and nothing caught it because `autoapply_profile.py` skips asking for a name on the documented
+grounds that it is "derived". A rightmost-space split is wrong for a two-word given name or a
+compound surname, so `--setup-profile` now prompts for both halves explicitly.
+
+**Free-text drafting (`AUTOAPPLY_DRAFT_ESSAYS`, default on).** Per-job essays ("Why <company>?",
+"Describe a time when you disagreed with a technical approach") are the measured bulk of the
+per-application time cost — on the tracker's Greenhouse jobs they were 13 of 19 remaining
+blockers. `draft_free_text_answers()` drafts each one from the Notion-cached JD plus the stage 2
+tailored resume's `.txt` mirror (`_resume_text_for()`), and attaches it to the plan entry as a
+`draft` key rendered as a labelled DRAFT block in the answer sheet. **`status` and `value` are
+deliberately untouched**, so a drafted answer stays `review_required` and the Layer 2 browser fill
+still never types it — the gain is that you review prose instead of writing it. Drafting reaches
+only case (e) fields, so it structurally cannot touch an eligibility, salary, or yes/no answer.
+It never raises: an AI failure, an empty reply, or the model's `NEEDS_HUMAN` token leaves the
+field exactly as before, degrading to the pre-drafting behavior rather than failing the run.
 
 **Structured address section (`APPLICATION_ADDRESS`, `config/settings.py`).** Some Greenhouse
 forms ask a full address questionnaire (legal first/last name, address line 1/2, city, state,
