@@ -107,3 +107,41 @@ def test_parse_json_response_truncated_json_raises_value_error():
 def test_parse_json_response_empty_string_raises_value_error():
     with pytest.raises(ValueError):
         utils.parse_json_response("")
+
+
+# ── score-property readers: absent must stay distinct from a real 0 ──────────
+# _prop_number_opt backs ATS Match Score, where "unscored" (None) must never read
+# back as a numeric 0 (see _unscored()/score_jobs_batch's contract). _prop_number
+# keeps its 0 default for the counter properties whose (x or 0)+1 increments rely on it.
+
+def test_prop_number_opt_absent_returns_none():
+    assert utils._prop_number_opt({}, "ATS Match Score") is None
+    assert utils._prop_number_opt({"ATS Match Score": {}}, "ATS Match Score") is None
+    assert utils._prop_number_opt({"ATS Match Score": {"number": None}}, "ATS Match Score") is None
+
+
+def test_prop_number_opt_real_zero_stays_zero():
+    assert utils._prop_number_opt({"ATS Match Score": {"number": 0}}, "ATS Match Score") == 0
+    assert utils._prop_number_opt({"ATS Match Score": {"number": 72}}, "ATS Match Score") == 72
+
+
+def test_prop_number_counter_default_unchanged():
+    # Counters (Scoring/Enrichment/Apply Attempts, Applicant Count) still default to 0
+    # so (x or 0)+1 increments work whether the property is absent or a real 0.
+    assert utils._prop_number({}, "Scoring Attempts") == 0
+    assert utils._prop_number({"Scoring Attempts": {"number": 0}}, "Scoring Attempts") == 0
+    assert utils._prop_number({"Scoring Attempts": {"number": 3}}, "Scoring Attempts") == 3
+
+
+def test_page_to_job_unscored_yields_none_not_zero():
+    page = {"id": "pg1", "properties": {}}
+    job = utils._page_to_job(page)
+    assert job["ats"] is None
+    assert job["ats_score"] is None
+
+
+def test_page_to_job_real_zero_preserved():
+    page = {"id": "pg2", "properties": {"ATS Match Score": {"number": 0}}}
+    job = utils._page_to_job(page)
+    assert job["ats"] == 0
+    assert job["ats_score"] == 0

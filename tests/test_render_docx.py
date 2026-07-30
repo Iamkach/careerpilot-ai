@@ -7,8 +7,10 @@ golden-file/snapshot-testing target. The fixture itself is built in code by
 tests/fixtures/build_fixture_docx.py (see `fixture_docx_path` in conftest.py) rather than
 committed as an opaque binary, so its exact structure stays reviewable in a diff.
 """
+from pathlib import Path
+
 import scripts.render_docx as render_docx
-from scripts.render_docx import extract_docx_text, apply_docx_edits
+from scripts.render_docx import extract_docx_text, apply_docx_edits, convert_docx_to_pdf
 
 
 # ── module docstring / python-docx dependency (PR #11 review item #7/#14) ──
@@ -284,3 +286,56 @@ def test_apply_docx_edits_matches_text_inside_a_table_cell(tmp_path):
     assert unmatched == []
     text = extract_docx_text(result_path)
     assert "Experienced with AWS, GCP, and Docker." in text
+
+
+# ── convert_docx_to_pdf ──────────────────────────────────────────────────
+# Step 10 residual gap #2: Stage 7's fill path (autoapply_browser._resolve_upload_path)
+# needs a .docx→.pdf fallback for ATS forms that reject .docx. LibreOffice (`soffice`) is a
+# system install, not a pip package, so every path here must degrade to None rather than
+# raise when it's missing — mirroring sources._headless_fetch()'s optional-dependency
+# contract — and none of these tests require LibreOffice to actually be installed.
+
+def test_convert_docx_to_pdf_returns_none_when_soffice_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(render_docx.shutil, "which", lambda name: None)
+    docx = tmp_path / "resume.docx"
+    docx.write_text("not a real docx, just needs to exist")
+    assert convert_docx_to_pdf(str(docx)) is None
+
+
+def test_convert_docx_to_pdf_returns_none_for_missing_source_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(render_docx.shutil, "which", lambda name: "/usr/bin/soffice")
+    assert convert_docx_to_pdf(str(tmp_path / "does_not_exist.docx")) is None
+
+
+def test_convert_docx_to_pdf_returns_none_when_subprocess_fails(monkeypatch, tmp_path):
+    import subprocess as _subprocess
+
+    monkeypatch.setattr(render_docx.shutil, "which", lambda name: "/usr/bin/soffice")
+
+    def _raise(*args, **kwargs):
+        raise _subprocess.CalledProcessError(1, "soffice")
+
+    monkeypatch.setattr(render_docx.subprocess, "run", _raise)
+    docx = tmp_path / "resume.docx"
+    docx.write_text("not a real docx, just needs to exist")
+    assert convert_docx_to_pdf(str(docx)) is None
+
+
+def test_convert_docx_to_pdf_returns_pdf_path_on_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(render_docx.shutil, "which", lambda name: "/usr/bin/soffice")
+
+    def _fake_run(cmd, **kwargs):
+        # Simulate soffice actually writing the .pdf next to the .docx.
+        out_dir = Path(cmd[cmd.index("--outdir") + 1])
+        src = Path(cmd[-1])
+        (out_dir / (src.stem + ".pdf")).write_bytes(b"%PDF-1.4 fake")
+        return None
+
+    monkeypatch.setattr(render_docx.subprocess, "run", _fake_run)
+    docx = tmp_path / "resume.docx"
+    docx.write_text("not a real docx, just needs to exist")
+
+    result = convert_docx_to_pdf(str(docx))
+
+    assert result == str(tmp_path / "resume.pdf")
+    assert Path(result).exists()

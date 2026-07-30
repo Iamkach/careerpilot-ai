@@ -3,6 +3,7 @@
 # ============================================================
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -22,17 +23,39 @@ def _load_local_env(path=Path(__file__).resolve().parent.parent / ".env"):
 
 _load_local_env()
 
+
+def _load_profile(path=Path(__file__).resolve().parent / "profile.json"):
+    """Read a git-ignored config/profile.json overlay of forker identity (name, targets,
+    resume paths, AI provider) and return it as a dict.
+
+    Mirrors _load_local_env() above and _apply_saved_profile() below: the checked-in literals
+    in this module stay as generic placeholder defaults, while a forker's real identity lives
+    in a git-ignored JSON so personal details never enter version control and no one has to
+    edit this module to run the pipeline. A missing or corrupt file returns {} — the generic
+    defaults simply stand — so a bad file can never break an import or a pipeline run. Written
+    by `python run.py --init` (seeded from the tracked config/profile.example.json).
+    """
+    import json
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_profile = _load_profile()
+
 # --- Your profile -------------------------------------------
-YOUR_NAME        = "Krishna Achyuth"
-YOUR_EMAIL       = "kachyuth06@gmail.com"
-YOUR_BIO         = "Senior Software Engineer with deep experience building scalable, reliable products across backend, full-stack, and cloud systems. I bring strong technical execution, product-minded judgment, and a track record of turning complex requirements into maintainable software that moves business outcomes."
+YOUR_NAME        = _profile.get("name", "Your Name")
+YOUR_EMAIL       = _profile.get("email", "you@example.com")
+YOUR_BIO         = _profile.get("bio", "One-paragraph professional summary used in outreach drafts.")
 
 # --- Job search targets -------------------------------------
-TARGET_ROLES     = ["Software Engineer", "Senior Software Engineer", "Backend Engineer", "Full Stack Engineer", "Staff Software Engineer"]  # list of 2-3 roles you're targeting
+TARGET_ROLES     = _profile.get("target_roles", ["Software Engineer", "Senior Software Engineer"])  # list of 2-3 roles you're targeting
 # Search is always US-wide. Jobs are filtered to US locations post-scrape.
 # Seeds scripts/sources.py's discover_tokens() (Greenhouse/Lever/Ashby board-token probing) —
 # union'd at runtime with every distinct company already in the Notion DB.
-TARGET_COMPANIES = ["Google", "Meta", "Stripe", "Notion", "Figma"]
+TARGET_COMPANIES = _profile.get("target_companies", ["Stripe", "Notion", "Figma"])
 
 # --- Multi-source sourcing (stage 1, Step 6 Phase 1) ---------
 # Which scripts/sources.py registry entries run each scrape. Keyword sources
@@ -46,6 +69,13 @@ MAX_JOB_AGE_DAYS = 14
 # A source that doesn't expose a post date (posted_date=None) is kept by default — flip to
 # True to drop undated listings instead of assuming they're fresh.
 DROP_UNDATED_JOBS = False
+
+# discover_tokens() first guesses each company's Greenhouse/Lever/Ashby token as its slugified
+# name; when that single guess misses (a company whose real token doesn't match its display
+# name), it falls back to a keyless DuckDuckGo HTML search for candidate slugs, still verifying
+# each candidate against the real ATS API before accepting it. Flip off if DuckDuckGo starts
+# blocking/rate-limiting the search requests.
+ENABLE_ATS_TOKEN_SEARCH_FALLBACK = True
 
 # --- Company denylist (stage 1) -----------------------------
 # Two-layer filter:
@@ -140,15 +170,21 @@ MAX_APPLICANT_COUNT = 200
 # Jobs that say they sponsor OR are silent on the topic are kept.
 EXCLUDE_NO_SPONSORSHIP = True
 
-# --- Sponsorship gate (stage 2) ------------------------------
-# Product companies known (from your own research/contacts) to sponsor only EXISTING
-# employees (e.g. H-1B transfers), not new external hires -- even when the JD reads as
-# sponsorship-friendly or says nothing. Unlike SKIP_COMPANIES, these are NOT excluded in
-# stage 1 -- still scraped, scored, tracked normally. Stage 2 instead moves a matching
-# "Reviewed" job to "Human Review" instead of tailoring a resume for it. Once you've
-# personally confirmed the company will sponsor a NEW hire, add SPONSORSHIP_CONFIRMED_MARKER
-# to that job's Notion "Notes" field and move Status back to "Reviewed" to release it.
-# Matched using the same word-boundary token matching as SKIP_COMPANIES.
+# --- Sponsorship gate (stage 1 + stage 2) ---------------------
+# Fallback/escape hatch for the restricted-sponsorship company check -- companies known
+# (from your own research/contacts) to sponsor only EXISTING employees (e.g. H-1B
+# transfers), not new external hires -- even when the JD reads as sponsorship-friendly or
+# says nothing. The PRIMARY/expected way to manage this list is the Notion database at
+# NOTION_RESTRICTED_COMPANIES_PAGE_ID above (visual, no redeploy); this hardcoded list is
+# merged (OR'd) with it via get_restricted_sponsorship_companies() in scripts/utils.py, for
+# when Notion is unreachable or before that database exists. Stage 1 drops a matching
+# company silently at scrape time (like SKIP_COMPANIES); stage 2's _sponsorship_gate() also
+# checks the same merged list as defense-in-depth, moving a matching "Reviewed" job to
+# "Human Review" instead of tailoring a resume for it, in case a job reached "Reviewed"
+# before its company was added. Once you've personally confirmed the company will sponsor a
+# NEW hire, add SPONSORSHIP_CONFIRMED_MARKER to that job's Notion "Notes" field and move
+# Status back to "Reviewed" to release it. Matched using the same word-boundary token
+# matching as SKIP_COMPANIES.
 RESTRICTED_SPONSORSHIP_COMPANIES = [
     # e.g. "Example Corp",   # sponsors H-1B transfers only, per recruiter YYYY-MM-DD
 ]
@@ -196,14 +232,176 @@ SKIP_COMPANY_TYPES = {"staffing_or_consulting"}
 # does not change Notion status or retry tailoring, just surfaces a weak result in the logs.
 MIN_TAILORED_ATS_SCORE = 75
 
+# --- Auto-Apply subsystem (stage 7, Step 10) ------------------
+# The structured source of truth for every deterministic application answer.
+#
+# GOVERNING RULE (enforced in code, not by prompt wording): facts come from here; AI only ever
+# drafts free-text prose. The model NEVER invents an answer to work-authorization, sponsorship,
+# salary, or any yes/no eligibility question — a wrong answer to one of those is disqualifying
+# and unretractable. Anything unmapped becomes review_required, never a guess.
+#
+# A None/empty value is not a bug: it deliberately forces that field to human review.
+def _split_display_name(full: str) -> tuple[str, str]:
+    """Split YOUR_NAME into (first, last) for forms that ask the two separately.
+
+    Returns ("", "") for the un-configured placeholder, so those fields resolve
+    review_required rather than typing a literal "Your Name" into a real application — the
+    convention documented above, where an empty value deliberately forces human review. This
+    used to hold the literal strings "Your"/"Name", which read as *answered* and would submit
+    under that name; `scripts/autoapply_profile.py` skips asking precisely because it
+    documents these as "derived", so nothing else caught it.
+
+    A simple rightmost-space split is wrong for a two-word given name or a compound surname —
+    override either half in config/application_profile.json via `run.py --setup-profile`.
+    """
+    full = (full or "").strip()
+    if not full or full == "Your Name":
+        return "", ""
+    first, _, last = full.rpartition(" ")
+    return (first, last) if first else (full, "")
+
+
+_DERIVED_FIRST, _DERIVED_LAST = _split_display_name(YOUR_NAME)
+
+APPLICATION_PROFILE = {
+    # Identity — derived from YOUR_NAME; a forker's real answers overlay these from the
+    # git-ignored config/application_profile.json (see _apply_saved_profile below).
+    "first_name":    _DERIVED_FIRST,
+    "last_name":     _DERIVED_LAST,
+    "full_name":     YOUR_NAME,
+    "email":         YOUR_EMAIL,
+    "phone":         "",                 # empty -> review_required if a form asks
+    "location":      "",
+    # Links
+    "linkedin_url":  "",
+    "github_url":    "",
+    "portfolio_url": "",
+    # Eligibility facts — deterministic, never model-guessed. Set to None to force review.
+    "work_authorized":      True,
+    "requires_sponsorship": True,
+}
+
+# Structured mailing address. Split out from APPLICATION_PROFILE's freeform `location` because
+# real ATS forms (confirmed live on Greenhouse) ask these as discrete fields, not one string.
+# The legal name here may differ from APPLICATION_PROFILE's first_name/last_name (a resume/
+# outreach display name) — this is the name as it appears on government ID.
+APPLICATION_ADDRESS = {
+    "legal_first_name": "",
+    "legal_last_name":  "",
+    "address_line1":    "",
+    "address_line2":    "",
+    "city":              "",
+    "state":             "",
+    "country":           "",
+    "zip_code":          "",
+    "address_type":      "",
+}
+
+# EEO / demographic presets. Per spec §7 these default to declining rather than being guessed —
+# never let a model infer a protected attribute. Edit any value to a real answer if you prefer to
+# disclose; the exact string must match one of the form's offered options to be selectable.
+EEO_RESPONSES = {
+    "gender":     "Decline To Self Identify",
+    "race":       "Decline To Self Identify",
+    "ethnicity":  "Decline To Self Identify",
+    "veteran":    "I don't wish to answer",
+    "disability": "I don't wish to answer",
+}
+
+# The recurring screener questions almost every application asks, answered once here instead of
+# retyped per job. Each key is matched against the form's question label as an ordered sequence
+# of words, gaps allowed (`_label_matches_pattern()` in scripts/autoapply.py) — so
+# "years of experience" also catches "how many years of *professional* experience...". First
+# match wins, so order matters: put more specific patterns first.
+#
+# An empty value means "I have no preset answer", which routes that field to human review
+# rather than inventing one. Values below are left blank ON PURPOSE wherever the answer is a
+# fact about you that this file has no business guessing — including questions whose likely
+# answer is "No" (have you interviewed here before, were you referred, have you worked for a
+# competitor). A fabricated "No" is a false statement on a real application, so these ship
+# blank and `run.py --setup-profile` asks you once.
+COMMON_QUESTION_PRESETS = {
+    # Compensation / timing
+    "notice period":            "",
+    "salary expectation":       "",
+    "desired salary":           "",
+    "expected compensation":    "",
+    "start date":               "",
+    "available to start":       "",
+    # Experience — one pattern now covers the several phrasings live boards actually use
+    # ("years of professional experience", "years of industry software engineering experience").
+    "years of experience":      "",
+    # Location / work model
+    "willing to relocate":      "",
+    "open to relocation":       "",
+    "remote":                   "",
+    "in person":                "",
+    "in office":                "",
+    "hybrid":                   "",
+    # Sourcing / history — blank by design, see the note above
+    "how did you hear":         "Company website",
+    "referred to this position": "",
+    "referred by":              "",
+    "ever interviewed":         "",
+    "previously been employed": "",
+    "previously worked":        "",
+    "previously applied":       "",
+    "worked for a competitor":  "",
+}
+
+
+def _apply_saved_profile():
+    """Overlay config/application_profile.json (written by `run.py --setup-profile`) onto the
+    three dicts above.
+
+    The defaults above stay as the checked-in fallback; your actual answers live in a
+    git-ignored JSON file so personal details never enter version control and you never have to
+    edit this module to change a notice period. A missing or corrupt file is a no-op — the
+    defaults simply stand — so a bad file can never break a pipeline run.
+    """
+    import json
+    path = Path(__file__).resolve().parent / "application_profile.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(saved, dict):
+        return
+    for section, target in (("profile", APPLICATION_PROFILE),
+                            ("presets", COMMON_QUESTION_PRESETS),
+                            ("eeo", EEO_RESPONSES),
+                            ("address", APPLICATION_ADDRESS)):
+        values = saved.get(section)
+        if isinstance(values, dict):
+            target.update(values)
+
+
+_apply_saved_profile()
+
+# Applications prepared per day. This is not only ban-avoidance: ATSes now score application
+# velocity and flag high-volume submitters as "low intent" before a human reads the application,
+# so a low cap protects application *quality*, not just the account. Keep it small on purpose.
+AUTOAPPLY_DAILY_CAP = 10
+
+# Run the stage-7 form fill in a headless browser. Default False — the whole point of the
+# semi-auto path is that you watch the filled form and click Submit yourself.
+AUTOAPPLY_HEADLESS = False
+
+# Have the model draft the per-job free-text answers ("Why <company>?", "Describe a time
+# when...") into the answer sheet. These are the measured bulk of the per-application time
+# cost; drafting turns writing them into reviewing them. A drafted answer is still marked
+# review_required and is never auto-typed into a form — see draft_free_text_answers() in
+# scripts/autoapply.py. Costs one AI call per free-text question, so set False to skip.
+AUTOAPPLY_DRAFT_ESSAYS = True
+
 # --- Resume -------------------------------------------------
 # Upload your resume as a .txt or .md file and set path here
-RESUME_PATH      = "config/resume.txt"
+RESUME_PATH      = _profile.get("resume_path", "config/resume.txt")
 GDRIVE_RESUME_ID = ""    # Optional: Google Drive file ID of master resume
 # Base resume .docx used as the source for tailoring (stage 2). The pipeline
 # copies this file and applies targeted ATS keyword edits in-place, preserving
 # all formatting. Must be a plain Word document (no Jinja2 placeholders needed).
-RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
+RESUME_TEMPLATE_PATH = _profile.get("resume_template_path", "config/resume.docx")
 
 # --- AI Provider --------------------------------------------
 # Choose which LLM powers all pipeline stages (run.py is the only entry point in use).
@@ -212,7 +410,33 @@ RESUME_TEMPLATE_PATH = "config/Achyuth_Resume.docx"
 # "claude" calls the metered Anthropic API directly (requires ANTHROPIC_API_KEY below).
 # No Claude Code CLI login or session-window limit — every stage script (via ai_chat())
 # runs independently of any subscription session, and prompt caching is enabled.
-AI_PROVIDER = "codex"
+#
+# No-key fallback: if a tier would resolve to "claude" but ANTHROPIC_API_KEY isn't set, and
+# the Claude Code CLI/subscription is usable (CLI on PATH, or CLAUDE_CODE_OAUTH_TOKEN set for
+# headless auth), that tier silently falls back to "claude_code" instead of failing every AI
+# call with an auth error. This keeps a fork runnable on just a subscription login with zero
+# metered-key setup. If neither a key nor a usable subscription is present, the raw value is
+# left as "claude" and `run.py --setup` reports it missing as before (no silent behavior change
+# when nothing at all is configured).
+_ANTHROPIC_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+
+
+def _claude_code_available() -> bool:
+    cli_found = bool(
+        shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
+    )
+    return cli_found or bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""))
+
+
+def _resolve_provider(raw: str) -> str:
+    if raw == "claude" and not _ANTHROPIC_KEY_PRESENT and _claude_code_available():
+        print(f"[settings] ANTHROPIC_API_KEY not set — falling back to 'claude_code' (subscription) "
+              f"for a tier that requested 'claude'")
+        return "claude_code"
+    return raw
+
+
+AI_PROVIDER = _resolve_provider(_profile.get("ai_provider", "claude"))
 
 # Optional: route stage scripts (run.py path) through a different provider than AI_PROVIDER.
 # Leave blank to fall through to AI_PROVIDER above (default behavior).
@@ -228,9 +452,9 @@ STAGE_AI_PROVIDER = ""
 # today's all-metered behavior for local/manual runs; only overridden when the env vars below
 # are set (e.g. in the GitHub Actions workflow env). Interactively, `python run.py
 # --ai-mode {metered,hybrid,subscription}` sets these same two env vars for a single run
-# without editing this file.
-FAST_PROVIDER    = os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER
-QUALITY_PROVIDER = os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER
+# without editing this file. Same no-key fallback as AI_PROVIDER above applies to each tier.
+FAST_PROVIDER    = _resolve_provider(os.environ.get("FAST_PROVIDER", "") or AI_PROVIDER)
+QUALITY_PROVIDER = _resolve_provider(os.environ.get("QUALITY_PROVIDER", "") or AI_PROVIDER)
 
 # Model overrides for the "claude" provider only — leave blank to use claude-opus-4-6.
 # NOTE: these are NOT applied to gemini/codex/claude_code — a Claude model id (e.g.
@@ -268,11 +492,12 @@ HUNTER_API_KEY    = os.environ.get("HUNTER_API_KEY", "")   # set in your env (St
 # See scripts/spike_phase0_leads.py and docs/backlog/step-7-communications-subsystem.md.
 LEAD_ACTOR = "coregent~linkedin-recruiter-job-poster-finder"
 
-# --- Notion IDs (already created for you) -------------------
-# Env-overridable like every other id/key here, with the existing tracker as the default so
-# nothing changes for the current setup. A fork points at its own tracker by setting
-# NOTION_DB_ID in .env — no source edit (see docs/backlog/step-11-forkable-setup.md).
-NOTION_DB_ID      = os.environ.get("NOTION_DB_ID", "") or "2ac0907e693744698a1c748d37774a07"   # Job Search Tracker
+# --- Notion IDs (env-sourced — set by `python run.py --init`) ------------------
+# Your "Job Search Tracker" database id. No hardcoded default: a fork provisions its own DB
+# (python run.py --init, which calls scripts/provision_notion.py) and the id is written to the
+# git-ignored .env. Existing owners: put your id in .env once — `python run.py --setup` flags it
+# if unset. (See docs/backlog/step-11-forkable-setup.md.)
+NOTION_DB_ID      = os.environ.get("NOTION_DB_ID", "")   # Job Search Tracker
 
 # --- Notion scratch-note intake (optional) -------------------
 # Database id of a small Notion database (a "list" view works well) where each row's
@@ -280,6 +505,18 @@ NOTION_DB_ID      = os.environ.get("NOTION_DB_ID", "") or "2ac0907e693744698a1c7
 # -- if unset, ingest_from_scratch_note() is a no-op. Create the database once, share it
 # with the integration, paste its id here.
 NOTION_SCRATCH_PAGE_ID = os.environ.get("NOTION_SCRATCH_PAGE_ID", "")
+
+# --- Notion restricted-sponsorship company list (optional) ---
+# Database id of a small Notion database (a "list" view works well) where each row's title
+# is one company name known to sponsor only existing employees, not new hires -- add/remove
+# entries visually in Notion, no code change or redeploy needed. Primary source for the
+# restricted-company check in scripts/stage1_scrape.py (silent drop, like SKIP_COMPANIES)
+# and scripts/stage2_tailor.py's _sponsorship_gate() (Human Review defense-in-depth for a
+# job that reached "Reviewed" before its company was added). Optional -- if unset,
+# get_restricted_companies_from_notion() returns []; RESTRICTED_SPONSORSHIP_COMPANIES below
+# still applies as a fallback. Create the database once, share it with the integration,
+# paste its id here.
+NOTION_RESTRICTED_COMPANIES_PAGE_ID = os.environ.get("NOTION_RESTRICTED_COMPANIES_PAGE_ID", "")
 
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials
@@ -296,3 +533,5 @@ INMAIL_ATS_THRESHOLD = 70
 OUTPUT_DIR        = "output"
 RESUMES_DIR       = "output/resumes"
 PREP_GUIDES_DIR   = "output/prep_guides"
+# Stage 7 answer sheets + filled-form screenshots.
+APPLICATIONS_DIR  = "output/applications"

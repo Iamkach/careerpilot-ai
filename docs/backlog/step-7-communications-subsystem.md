@@ -7,10 +7,9 @@ blocking Phase-0 spike returns.
 decision)
 **Size:** XL — two new stages, a new Notion database (~22 props), a new module, a digest refactor,
 two new vendors, a new execution model (GitHub Actions)
-**Source plan(s):**
-[`refinement-plans/communications/communications-subsystem.md`](../refinement-plans/communications/communications-subsystem.md)
-(full spec — this story is a condensed implementation checklist; read the source doc's Phases 0-6
-before starting)
+**Source plan:** originally drafted in `refinement-plans/communications/communications-subsystem.md`
+(finalized and folded into this doc — no separate refinement doc remains; see git history for the
+discussion-stage draft).
 
 ## Context
 
@@ -23,6 +22,61 @@ prompt.
 
 Today there is no scheduling infrastructure, no contact-data source, no Leads store, and no digest
 section primitive. This is largely greenfield.
+
+### Sources: chosen and rejected
+
+| Source | Verdict |
+|---|---|
+| **Hunter.io** — Email Finder, Email Verifier, Domain Search | **Core.** Domain Search returns *people* (name, title, seniority, department, LinkedIn, confidence), not just addresses, and accepts a `company` name. Covers prong 2 end-to-end, no scraping. |
+| **Apify `coregent~linkedin-recruiter-job-poster-finder`** | **Core, narrow.** Uses LinkedIn's public guest job endpoints — no `li_at` cookie, so ban risk lands on the actor's proxies, not the account. ~$2.40/1k unique leads; person-less jobs/duplicates not billed. Only viable way to learn who posted a *specific* req. |
+| `apt_marble~linkedin-recruiter-scraper` | **Fallback only.** $1.50/1k, no-cookie, but returns recruiters unattached to a job (no `job_url`, no join). Prefer coregent. |
+| Apollo.io | **Rejected.** Free People Search obfuscates `last_name`, which breaks Email Finder (needs a full name). |
+| People Data Labs | **Rejected.** 100 lookups/mo, email fields gated behind paid access. |
+| Clearbit enrichment | **Rejected** as a primary source (free tier sunset April 2025) — its keyless *autocomplete* endpoint is used opportunistically for company→domain only, never depended on. |
+| Proxycurl | **Rejected.** Shut down July 2025. |
+| Scraping LinkedIn's guest endpoint directly | **Rejected.** Brittle, IP-blocked, worse ToS posture than a vendor that absorbs it. |
+
+Apify is not eliminated — reduced to the one job (per-req poster identity) it alone can do.
+`valig~linkedin-jobs-scraper` (already swapped in for Step 1/6 cost reasons) returns
+`recruiterName`/`recruiterUrl` with no cookie, so **prong 1's job-linked contact data arrives free
+as a side effect of scraping**, no second actor needed for that half.
+
+### Binding decisions
+
+- **No authenticated LinkedIn scraping.** Anything requiring an `li_at` session cookie risks
+  restricting the very account whose network this feature exists to leverage. Public,
+  unauthenticated endpoints only.
+- **Hunter free tier, budget-gated.** 50 credits/month; Email Finder = 1 credit per email *found*
+  (0 if not found), Verifier = 0.5. Needs a budget guard and a priority queue ordered by ATS score.
+  A repeated identical search is counted once per calendar month, so caching is genuinely free.
+- **`accept_all` policy.** Many large product companies run catch-all domains where SMTP can't
+  confirm a specific mailbox. Record the address only when Hunter itself returned it (never
+  constructed from Hunter's `pattern` field) and `score ≥ ACCEPT_ALL_MIN`; persist
+  `Email Status = accept_all`, `Verified = false`. Digest renders it as "unverified — send at your
+  discretion." It never counts as verified.
+- **Scheduling: GitHub Actions** (cron + `workflow_dispatch`), with the local agentic orchestrator
+  remaining usable by hand. This choice forces three consequences (below).
+
+### Why GitHub Actions reshapes the design
+
+1. **The provider split stops being optional.** `AI_PROVIDER = "claude_code"` requires an
+   interactive `claude /login` session, which cannot exist on a GitHub runner — CI must run
+   `AI_PROVIDER="claude"` with a metered key. `settings.py`'s `AI_PROVIDER` becomes
+   `os.environ.get("AI_PROVIDER", "claude_code")`: local behavior unchanged, CI overrides via env.
+2. **Ephemeral runners kill a SQLite credit ledger.** `actions/cache` is evictable and would
+   silently lose spend history; committing a binary DB back to the repo invites races. Replaced
+   with Hunter's own free `GET /v2/account` (authoritative, real-time remaining quota) — query
+   before draining the queue, stop at the reserve floor. Mutual exclusion moves to a
+   `concurrency:` group; the company→domain cache moves to committed `config/company_domains.json`.
+3. **Ephemeral filesystem means outputs must leave the runner.** Drafts are written into the
+   **Notion lead page body** (durable, and where the human reviews anyway), mirroring how
+   `db_add_job` already caches the JD in the job page body. Workflow artifacts are a secondary
+   copy. Gmail OAuth's consent flow can't run headless — do it once locally, store the
+   refresh-token JSON as a GitHub Secret, materialize it at job start (or ship CI with `--send`
+   off initially).
+
+Secret rotation: `APIFY_API_TOKEN` is a committed plaintext literal in git history — rotate it and
+move it env-only before any workflow references it. Same bar for `HUNTER_API_KEY`.
 
 ## Phase 0 — blocking spike (do this first; nothing downstream is written until it returns)
 
@@ -205,11 +259,32 @@ section primitive. This is largely greenfield.
 `scripts/stage4_digest.py`, `config/settings.py`, `config/company_domains.json` (new),
 `workflow.py`, `.github/workflows/communications.yml` (new), `CLAUDE.md`.
 
+## Risks
+
+- **Phase 0 is load-bearing** — the verification policy, the `linkedin_handle` shortcut, and the
+  coregent field map all depend on live output; coding before the spike returns means guessing at
+  exactly what the governing rule forbids guessing about.
+- **Free-tier capacity is the real constraint** — ~33-50 people/month, roughly one a day. Selective
+  by construction; a feature for outreach, but prong 2 will never be high-volume.
+- **`accept_all` may swallow the best targets** — large product companies often run catch-all
+  domains, so top-tier employers may persistently land "unverified." That's Hunter telling the
+  truth, not a bug.
+- **`is_direct_job_poster` is frequently false** — many postings expose no hiring-team member;
+  expect meaningful yield loss (Mode A stays cheap since person-less jobs aren't billed; Mode B is
+  the fallback).
+- **Still personal data** — no-cookie removes account ban risk, not GDPR/CCPA obligations. The
+  human-sends-manually gate is non-negotiable; no lead data leaves Notion.
+- **Vendor concentration** — coregent rides LinkedIn's public guest endpoints, which LinkedIn can
+  close; acceptance criterion "loud failure" exists so that breakage is loud, not a silent zero.
+- **Mode B cost** (~$9/mo daily) is real — keep off by default, run weekly if enabled.
+- **CI metering is a new, real cost** — scheduled runs bill per token against `ANTHROPIC_API_KEY`
+  instead of riding the subscription. Volume is small but no longer $0; keep the cheap model on
+  stage 7's persona ranking, reserve `QUALITY_MODEL` for drafting.
+- **Two providers, two code paths that can drift** — CI exercises `claude`, local exercises
+  `claude_code`; the CI-parity acceptance criterion exists to catch a stage that works on one and
+  not the other.
+
 ## References
 
 - Architecture analysis §C.6 (Stages 7-8 flow diagram), §C.9 (complexity ranking — Plan 5 ranks
   most complex).
-- `refinement-plans/README.md` Step 7.
-- `refinement-plans/communications/communications-subsystem.md` — full spec; its "Verification"
-  section (items 1-13) and "Risks" section map directly onto the acceptance criteria and
-  out-of-scope notes above.

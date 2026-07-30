@@ -1,6 +1,20 @@
 # Backlog — remaining work
 
-Steps 0-1, 2-6, 8, 9 (plus both quick-fixes' first item) are implemented and retired — see
+## Scope: backlog vs. refinement-plans
+
+This directory holds a story **once its design is finalized and lined up to be implemented**.
+[`../refinement-plans/`](../refinement-plans/) holds a plan while it's still at idea/discussion
+level (not finalized, or finalized but deliberately deferred pending a trigger).
+
+When a plan there gets finalized and queued, fold its content into a `step-N-*.md` story here —
+condense the "why" (sources considered/rejected, binding decisions, risks) alongside the
+implementation checklist — and **delete** the refinement-plan doc; don't leave it as a duplicate
+"full spec" this story points back to. One doc per story once it's queued. See
+[`../refinement-plans/README.md`](../refinement-plans/README.md) for the reverse direction.
+
+---
+
+Steps 0-1, 2-6, 8, 9, 12 (plus both quick-fixes' first item) are implemented and retired — see
 [`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and [`../TODO.md`](../TODO.md) for the
 small gaps each left behind (a missing `encoding="utf-8"`, an unlogged bare `except`, two unrun
 manual QA checks — the handful of gaps Step 9's test suite had characterized as not-yet-fixed
@@ -11,15 +25,18 @@ Open stories:
 | Story | What it does | Depends on | Size |
 |---|---|---|---|
 | [step-7-communications-subsystem.md](step-7-communications-subsystem.md) | Stages 7-8: LinkedIn leads + Hunter-verified cold email, new Leads DB, GitHub Actions | Step 6 (done) | XL |
-| [step-11-forkable-setup.md](step-11-forkable-setup.md) | One-time `python run.py --init` wizard: profile.json, env-sourced `NOTION_DB_ID`, Notion DB auto-provisioning, de-personalize tracked files | current setup surface | M |
-| [step-12-sponsorship-restriction-marker.md](step-12-sponsorship-restriction-marker.md) | Per-job Notion Notes marker to hold a specific posting from sponsorship tailoring, replacing the hardcoded `RESTRICTED_SPONSORSHIP_COMPANIES` list | Stage 2 sponsorship gate (done) | S |
+| [step-10-auto-apply-subsystem.md](step-10-auto-apply-subsystem.md) | Proposed Stage 7: browser-automation capability router to submit applications, semi-auto by default. `scripts/autoapply.py` is the Phase 1 read-only-plan PoC (Greenhouse only, no submit) | Stage 2 (done), Notion status pipeline | L-XL (phaseable; Phase 1 PoC is S) |
+| [step-11-forkable-setup.md](step-11-forkable-setup.md) | ✅ Phase 1 landed (`--init`, `scripts/provision_notion.py` page + all three DBs, env-sourced `NOTION_DB_ID`, hardened `--setup`; ⚠ CI `NOTION_DB_ID` secret follow-up). ⏳ Phase 2: profile.json, de-personalize tracked files | current setup surface | S (remaining) |
+| [step-13-board-token-harvesting.md](step-13-board-token-harvesting.md) | Harvest the employer ATS board URL that LinkedIn/Indeed listings already carry (and we discard), so `config/ats_tokens.json` is built by **observation** instead of slug-guessing — today 23/100 companies resolve to a board | Step 6 (done) | S (Phase 1 = the whole value) |
+| [step-14-target-companies-notion.md](step-14-target-companies-notion.md) | New Notion database for the curated target-company list + their discovered Greenhouse/Lever/Ashby token, so it's visually editable and survives a GitHub Actions checkout instead of living only in git-ignored `config/profile.json` / `config/ats_tokens.json` | Step 6 (done), search-fallback (done 2026-07-29) | M |
 
 Read `docs/TODO.md` first — it's the current index of exactly what's left, cross-referenced
-to file:line. Each story here is the full spec for one TODO section.
+to file:line. Each story here is the full spec for one TODO section — not a summary pointing
+elsewhere.
 
 ## Source material
 
-- [`../refinement-plans/README.md`](../refinement-plans/README.md) — the 1 remaining plan doc
-  (4 are retired; see `../CHANGELOG.md`).
+- [`../refinement-plans/README.md`](../refinement-plans/README.md) — 2 plans remain, still
+  idea-level/deferred (6 are retired or folded in; see `../CHANGELOG.md`).
 - [`../architecture/architecture-analysis.md`](../architecture/architecture-analysis.md) — the
   original three-horizon LLD/ERD/component analysis this backlog implements.

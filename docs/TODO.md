@@ -4,89 +4,76 @@ Everything below is verified against code, not doc checkboxes. See `docs/CHANGEL
 what's already landed. The full spec for the largest remaining item (Step 7) still lives in
 `docs/refinement-plans/` and `docs/backlog/` — this file is the index, not a replacement.
 
+This file is scoped to code and development-blocking work only. Outstanding runtime/ops issues
+(GitHub Actions secrets, CI gate, integrations — nothing that touches this repo's code) live in
+`docs/RUNTIME_NOTES.md` instead.
+
 ## Small, standalone fixes
 
-- **Step 3 manual QA run (2026-07-18)** — added 3 real `Interested` rows (Netflix, SmithRx/
-  Greenhouse, Amazon — via the scratch-note path) and ran `python run.py --ingest`. The
-  self-match fix holds (no row retired against itself). But it surfaced a real bug:
-  `scrape_job_urls()` only enriches `linkedin.com/jobs/view/...` URLs; all 3 non-LinkedIn URLs
-  matched 0 results and were scored anyway on an empty description, landing on `Scraped` with a
-  fabricated-looking score and no cached JD. Fixed: `scripts/sources.py` gained
-  `enrich_job_url()` — dispatches Greenhouse/Lever/Ashby URLs to their direct per-job JSON APIs,
-  everything else to a best-effort `generic_url_fetch()` HTML scrape; `ingest_interested_from_notion()`
-  now partitions by actual `linkedin.com` domain (not the old digit-run regex, which
-  false-matched non-LinkedIn URLs too) and never scores a job whose enrichment returned no
-  description — it's left as `Interested` for the next run instead. Verified by re-running
-  ingest against the same 3 rows: all landed on `Scraped` with real cached JD text and
-  differentiated scores. **Known residual gap — mostly closed (2026-07-19):**
-  `generic_url_fetch()` now probes for a schema.org `JobPosting` JSON-LD block before falling
-  back to raw `<title>`/tag-stripped text, recovering real title/company/location even out of
-  a near-empty SPA shell when that JSON-LD is present (Option A); when both that probe and the
-  raw-text fallback come up short, it now also tries a headless Chromium render (Playwright,
-  optional dependency) and retries the same extraction against the hydrated HTML (Option B —
-  built ahead of its trigger criteria, at explicit user request, since Playwright/Chromium
-  weight in the pipeline's real runtime environment hasn't been validated yet); degrades to the
-  old "treat as enrichment failure" behavior if Playwright isn't installed or the render fails.
-  `ingest_interested_from_notion()` also gained an `Enrichment Attempts` ceiling
-  (`MAX_ENRICHMENT_ATTEMPTS`, mirroring `MAX_SCORING_ATTEMPTS`) so a permanently unfetchable URL
-  gives up after N `--ingest` passes instead of retrying forever (Option D). Still open: a paid
-  scrape API (Option C) as a no-new-infra alternative to B remains deferred — only worth adding
-  if headless rendering proves too heavy for the actual runtime (e.g. the nightly GitHub Actions
-  runner). Details in `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
-- ~~**Known gaps characterized (not fixed) by the Step 9 test suite**~~ — fixed:
-  `score_jobs_batch` now clamps `int(entry.get("score", 0))` to `[0, 100]`
-  (`scripts/stage1_scrape.py`); stage 3's `_draft_cold_email_single` fallback now reuses
-  `parse_json_response` instead of ad-hoc `str.strip()` fence-trimming, so it recovers JSON from
-  a prose-wrapped response like every other AI-parsing path; the stage 5/6 markdown→HTML
-  converters now wrap consecutive `<li>` lines in `<ul>`/`</ul>` via the shared
-  `scripts/utils.wrap_consecutive_li()`; `stage6_negotiate.py`'s module docstring no longer
-  claims "Claude + web search" — it now says comp numbers come from the model's training
-  knowledge only and can go stale, pointing at `scripts/run_evals.py --comp-check` as the manual
-  spot-check.
+- **Step 3 manual QA run (2026-07-18) — closed except Option C.** Manually ingesting 3 real
+  `Interested` rows surfaced a bug (non-LinkedIn URLs scored on a blank JD); fixed via
+  `enrich_job_url()`/`generic_url_fetch()`'s JSON-LD probe + headless-Chromium fallback (Options
+  A/B) and an `Enrichment Attempts` retry ceiling (Option D). Only Option C (a paid scrape API,
+  deferred — only worth it if headless rendering proves too heavy for the nightly runner) remains
+  open. Full history: `docs/refinement-plans/sourcing/career-site-enrichment-fallback.md`.
 
-## Open for review — deferred out of the PR #11 review fixes (2026-07-19)
+- **Nightly output retrieval (2026-07-26).** The nightly workflow's runner filesystem is
+  discarded when the job ends, so every file a stage wrote to `output/` was lost — a scheduled
+  run produced resumes and drafts nobody could ever read. `.github/workflows/nightly-pipeline.yml`
+  now ends with an `actions/upload-artifact@v4` step (`if: always()`, `output/`, 30-day retention,
+  `if-no-files-found: warn`) publishing the whole dir as one downloadable bundle per run; guarded
+  by `tests/test_nightly_workflow_artifact.py`. Deliberately workflow-YAML-only — no `run.py` flag
+  and no bundling code in the pipeline — so local runs are untouched by construction rather than
+  by a `GITHUB_ACTIONS` env guard that could be wrong.
 
-Both surfaced reviewing PR #11 (`feature/god-speed` → `main`) and were deliberately **not**
-actioned in commit `7d460ba`, which fixed the other ten findings. Neither is a one-line
-cleanup; both want a decision before any code moves. Nothing here is committed to yet.
+  **Closed (2026-07-26 follow-up).** Object storage and Notion's native file-upload API were both
+  evaluated and rejected — object storage adds an account/secret a fork-friendly project shouldn't
+  require, and Notion's file-upload API needs a second Notion client pinned to a newer
+  `Notion-Version` (risking the `databases.query` behavior this repo's pinned `notion-client`
+  version protects) for URLs that then expire after ~1 hour anyway, which would have forced stage
+  4's digest to link to the Notion page instead of the file. Went with a **dedicated orphan branch**
+  instead: the nightly workflow's new "Publish tailored resumes to tailored-resumes branch" step
+  (`.github/workflows/nightly-pipeline.yml`, gated by a new `permissions: contents: write`) pushes
+  `output/resumes/*.docx` to a `tailored-resumes` branch (self-bootstrapped on first run, additive
+  only — never wipes earlier runs' files). `scripts/stage2_tailor.py`'s `_tailored_resume_link()`
+  writes a `raw.githubusercontent.com` URL instead of `file://` whenever `GITHUB_ACTIONS` is set;
+  local runs are byte-for-byte unaffected (same env-var-guard pattern as `_load_local_env()`). A
+  raw GitHub URL doesn't expire, so stage 4's digest needed **no change**. Stage 7's
+  `resolve_tailored_resume()` (`scripts/autoapply.py`) now downloads the bytes into `RESUMES_DIR`
+  on the fly for a CI-tailored job instead of failing its local-file check. Guarded by
+  `tests/test_nightly_workflow_publish_resumes.py`, `tests/test_stage2_resume_link.py`, and new
+  cases in `tests/test_autoapply_plan.py`. Not exercised against a real nightly run/push yet — see
+  the same caveat already noted for stage 7's fill path never having run live.
 
-- **`_prop_number()` conflates "absent" with a real `0`** (`scripts/utils.py`). It returns
-  `(props.get(name) or {}).get("number") or 0`, so a row with an empty `ATS Match Score` and a
-  row genuinely scored `0` read back identically. That sits at odds with the contract the rest
-  of stage 1 is built on — `score_jobs_batch()` returns `scored: False` rather than fabricate a
-  number, and `_unscored()` exists specifically so a missing score never becomes a numeric one.
-  Once it passes through `_page_to_job()`, that distinction is gone anyway.
-  **Why it wasn't just fixed:** returning `None` is a regression, not a fix. `db_get_jobs()`
-  sorts on the value, `rescore_retry_jobs()` and stage 2 compare it against `MIN_ATS_SCORE` /
-  `MIN_TAILORED_ATS_SCORE`, and the same helper backs `Scoring Attempts` / `Enrichment
-  Attempts` / `Applicant Count`, where `0` is the correct default and `None` would break the
-  `(x or 0) + 1` increments. A real fix needs a separate nullable reader used only at the
-  score call sites, plus a decision on what a `None` score means to each consumer (skip? sort
-  last? treat as unscored and re-queue?).
-  **Open questions:** is the ambiguity actually causing observable harm today, or is it
-  theoretical? Does any real row sit at a legitimate `0`, or does `MIN_ATS_SCORE` mean a 0 is
-  always dropped before it's written? Cheapest correct fix might be at the *write* side
-  (never write `0`, write nothing) rather than the read side.
+## Step 13 — Board-token harvesting (not started)
 
-- **`tests.yml` has never actually run** — every Actions run on `feature/god-speed` is
-  `startup_failure` at 0s with no job name (runs `29711371199` pull_request, `29711381997`
-  push). Both workflow files parse fine and the suite is green locally (212 passed), so this
-  is environmental, not a code defect: most likely Actions disabled for the repo, or a
-  spending/billing limit on the private repo — the only check reporting on the PR is a stale
-  Supabase Preview integration, itself vestigial now that `sync_notion_to_supabase()` is a
-  no-op. Until it's resolved, "CI gate on every PR/push" is a claim the repo doesn't hold up,
-  and the local `pytest` run is the only evidence the suite passes.
-  **Needs a human with repo settings access:** check Settings → Actions and the billing page.
-  Separately, decide whether to remove the Supabase integration.
+`discover_tokens()` (`scripts/sources.py:818`) finds a company's ATS board by **guessing** its
+slug from its display name (`_slugify()`, `:746`). Measured on the live cache
+(`config/ats_tokens.json`, 2026-07-25): **23 of 100 companies resolve to a board** (14 Greenhouse,
+9 Ashby, 1 Lever); the other 77 are cached all-null and re-probed with the same failing guess every
+30 days. The fix is to stop guessing: LinkedIn/Indeed listings already carry the employer's real
+board URL, and we discard it — `scrape_indeed()` reads `externalApplyLink` only as a third-choice
+`url` fallback (`:245`), `scrape_linkedin()` does the same with `applyUrl` (`:184`). Phase 1
+harvests those into the token cache with a `provenance` field, makes **zero new network calls**,
+and compounds run over run.
 
-- **Other `run.py` routines still traceback on a failed Notion read** — `--ingest` now reports
-  a clean message and exits 1 (commit below), but `--retry-only`, `--stage 2/3/4` and
-  `--evaluate` reach `db_get_jobs()` → `_query_db()`, which has always propagated. **This is
-  pre-existing, not introduced by the PR #11 review fixes** — `db_get_jobs()` never caught. The
-  question is whether to give every CLI entry point the same clean-message + non-zero-exit
-  treatment `ingest_routine()` now has, or leave the raw traceback (which at least exits
-  non-zero, so the nightly workflow does fail correctly either way). Not actioned because it
-  changes the exit behavior of five more CLI paths, which is a decision rather than a fix.
+Deliberately excluded: following LinkedIn apply redirects (authwall ⇒ authenticated session ⇒ the
+exact surface `FILLABLE_CHANNELS` excludes LinkedIn from by rule).
+
+Full spec: `docs/backlog/step-13-board-token-harvesting.md`.
+
+## Step 14 — Target Companies Notion database (not started)
+
+`config/profile.json`'s `target_companies` (git-ignored) and `config/ats_tokens.json` (also
+git-ignored, `.gitignore:27`) both mean the curated target-company list and its discovered
+Greenhouse/Lever/Ashby tokens can't be edited from a phone and don't survive a GitHub Actions
+checkout — every nightly run's `discover_tokens()` re-probes from zero instead of compounding. Adds
+a fourth Notion database (same optional, no-op-if-unset pattern as Step 12's restricted-companies
+list) as the durable, visually-editable source of truth for the curated list only — the broader
+auto-discovered company tail stays on the local-only cache. Absorbs the "mirror to Notion" item
+Step 13 had deferred.
+
+Full spec: `docs/backlog/step-14-target-companies-notion.md`.
 
 ## Step 7 — Communications subsystem (not started)
 
@@ -96,6 +83,98 @@ remaining item in the roadmap — has its own blocking Phase-0 spike (Hunter ver
 semantics, `linkedin_handle` support, billing edges, Clearbit keyless autocomplete) that must
 run before any Phase 1+ code.
 
-Full spec: `docs/backlog/step-7-communications-subsystem.md` and
-`docs/refinement-plans/communications/communications-subsystem.md`.
+Full spec: `docs/backlog/step-7-communications-subsystem.md`.
 
+## Step 10 — Auto-Apply subsystem (Phases 1–2 landed 2026-07-19)
+
+Stage 7 (`scripts/autoapply.py` + `scripts/autoapply_browser.py`, wired as `run.py --stage 7`
+/ `--stage 7 --fill`) now plans every application answer, gates on anything it can't answer
+confidently, emits an HTML answer sheet, and optionally pre-fills the live form in Chromium.
+**It never submits** — `WRITABLE_STATUSES` excludes `Applied` on purpose, and the browser
+module contains no submit code path at all. Confirmed during research: no candidate-usable
+submit API exists (Greenhouse's endpoint authenticates as the *employer*), so this is
+irreducibly a browser problem.
+
+**Open residual gaps:**
+
+- **Live schema fetch validated once; address/attachment mapping gaps closed (2026-07-21); fill
+  path still not run live.** The Greenhouse `?questions=true` fetch was run for the first time
+  against a real tracker job (SmithRx, "Senior Staff Automation Engineer") and **worked** — 25
+  fields returned and mapped, confirming the core Phase-1 read premise on a live board. It
+  surfaced two mapping gaps, both now fixed: (a) the structured-address block (`Legal First/Last
+  Name`, `Address Line 1/2`, `City`, `State`, `Country`, `Zip Code`, `Address Type`) is now
+  captured by a new `"address"` section in the `run.py --setup-profile` wizard, persisted to
+  `config/application_profile.json` alongside the existing sections, exposed as
+  `APPLICATION_ADDRESS` in `config/settings.py`, and matched via new `_LABEL_RULES` keyword
+  entries in `scripts/autoapply.py` (label text, not field `name` — Greenhouse's `name`
+  attributes for these fields are opaque, unlike the confirmed-stable `first_name`/`last_name`/
+  `email`/`phone` in `_FIELD_MAP`); legal name is deliberately independent of the resume/outreach
+  display name, since a candidate's legal and preferred names can differ. (b) The dual-field
+  attachment quirk (Greenhouse emits an `input_file` + a `textarea` under one label, e.g.
+  "Resume/CV") is fixed in `build_application_plan()`: the `textarea` sibling of an already-
+  resolved attachment field now mirrors that field's resolution instead of being independently
+  evaluated as an unresolved free-text question, order-independent (works whichever field is
+  listed first). Covered by new tests in `tests/test_autoapply_profile.py` and
+  `tests/test_autoapply_plan.py` (388 passed). **The Layer-2 fill path has still never run
+  against a live form** (only the bundled sample and a local `file://` fixture) — re-running the
+  plan against the SmithRx job (or another live Greenhouse posting) to confirm the blocker count
+  actually drops is the natural next validation step, then exercising the fill path itself.
+- **Why the tracker is starved of ATS rows — measured, and the answer is upstream of Stage 7
+  (2026-07-29).** The often-quoted split (1 Greenhouse / 413 LinkedIn / 90 Indeed / 4 unknown of
+  508) counts *posting* hosts, while fillability is decided by the *apply-form* host — and backlog
+  §3 scenario #8 ("external redirect — resolve the true destination first") is the one scenario in
+  that list never implemented. A throwaway spike (`scripts/spike_apply_redirect.py`, deleted after
+  transcription per the `spike_phase0_leads.py` contract) measured what implementing it would buy,
+  including a live Apify probe of both keyword actors at 20 fresh listings each:
+  - **LinkedIn: no apply URL exists.** 0/20 populated across `applyUrl`, `applyLink`,
+    `companyApplyUrl`, `externalApplyLink`, `link` — so the `job.get("applyUrl")` fallback at
+    `scripts/sources.py:186` is **dead code**, not a discarded signal (worth a small cleanup). Nor
+    is it recoverable later: an unauthenticated fetch of a LinkedIn job page returns a ~344 KB
+    guest page with sign-in/join-now/captcha markers and zero apply-URL occurrences.
+  - **Indeed: ~20% of listings**, and only with `followApplyRedirects: True` — under today's
+    `False`, all 3/20 populated `externalApplyLink` values were `indeed.com` wrappers; with `True`,
+    4/20 resolved externally. Cost ~+64% wall-clock (33.0s → 54.1s / 20 items) against
+    `_apify_run()`'s 400s poll budget; since that helper **raises** rather than returning a partial
+    dataset, flipping the flag without also raising its poll count would turn a slow scrape into a
+    silently empty one.
+  - **Every reachable destination was a custom career site, not an ATS**: `careers.cisco.com`,
+    `careers.baptisthealth.net`, `careers.massmutual.com` (Phenom-style, channel `unknown`). Zero
+    Greenhouse/Lever/Ashby/Workday.
+
+  **Conclusion:** resolving the apply URL would not feed the shipped Layer 2, so that work is not
+  worth doing on its own. The pipeline's two dominant sources structurally cannot produce a fillable
+  apply URL, which makes weighting `ENABLED_SOURCES` toward Greenhouse/Lever/Ashby the **only**
+  mechanism that puts one in the tracker — those sources hand over the ATS URL directly. Both
+  auto-apply refinement plans stay parked pending that shift; full numbers and per-substrate
+  implications are in `docs/refinement-plans/auto-apply/`.
+- **docx→PDF conversion — closed (2026-07-21).** `scripts/render_docx.py` gained
+  `convert_docx_to_pdf()`, shelling out to a headless LibreOffice (`soffice --headless
+  --convert-to pdf`) to produce a PDF copy of the tailored resume. `autoapply_browser.py`'s
+  `_resolve_upload_path()` calls it only when `_accepts_docx()` says the form's file input
+  rejects `.docx`; if LibreOffice isn't installed or the conversion fails, it degrades to the
+  original `pdf_only` stop (never raises — same optional-dependency contract as
+  `sources._headless_fetch()`). LibreOffice is a system install, not a pip package, so nothing
+  changes for an environment that doesn't have `soffice`/`libreoffice` on PATH. Untested against
+  a live PDF-only form (none seen yet in the tracker); unit-tested with a mocked `subprocess.run`
+  in `tests/test_render_docx.py` and `tests/test_autoapply_browser_pdf_fallback.py`.
+- **Phase 3 (deliberate submit) deferred by choice** pending real use of the fill path. The
+  research argues against rushing it: ATSes now score application velocity and flag high-volume
+  submitters as low-intent before a human reads the application, so the marginal value of
+  automating the final click is lower than it looks.
+- **Phase 4 (Workday/agentic long tail) not started.** Workday runs a separate tenant per
+  company and its resume parser fails ~30% of the time; account provisioning is the real cost.
+  **Related, written down 2026-07-21:** `FILLABLE_CHANNELS = {"greenhouse", "lever"}` is the only
+  gate Layer 2 checks — Ashby, Workday, and any custom company careers page (`unknown` channel,
+  e.g. a site like Netflix's own) get Layer 1's answer sheet only, never a browser fill, today.
+  LinkedIn/Indeed are excluded *by rule* (ToS/detection) and are out of scope for this; Ashby/
+  Workday/custom are just not built yet. Deferred — not queued, see trigger criteria — in
+  `docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md`.
+- **Schema migration must be run once** before stage 7 can transition anything:
+  `python scripts/setup_notion_schema.py --apply` adds the six new `Status` options and the four
+  new properties. (`databases.update` can extend the schema even though `pages.update` silently
+  ignores an unknown select option — so only the per-page write is unscriptable.) Idempotent and
+  dry-run by default. If skipped, `db_update_status_verified()` fails loudly rather than silently
+  no-opping, so it surfaces on first run rather than corrupting state.
+
+Full spec + the research findings that shaped the design:
+`docs/backlog/step-10-auto-apply-subsystem.md` §11.

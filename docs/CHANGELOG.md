@@ -131,6 +131,26 @@ logic.
 
 ## Not in any refinement plan, but shipped
 
+- **Typed `NotionReadError` — clean read-failure handling across every CLI path (2026-07-21).**
+  Closes the `docs/TODO.md` "Open for review" item where only `--ingest` turned a failed Notion
+  read into a clean message + non-zero exit, while `--retry-only`, `--evaluate`, and
+  `--stage 2/3/4` (via the previously-unguarded `db_get_jobs()` / `db_get_ready_to_apply()`)
+  dumped a raw traceback. `scripts/utils._query_db()` — the single funnel every reader uses —
+  now raises `NotionReadError` (a `RuntimeError` subclass) on failure; `run.py`'s `main()`
+  catches it once around the whole dispatch. Typed on purpose so the unrelated `RuntimeError`s
+  from Apify / provider setup / stage 5 are **not** mislabeled as a tracker read failure. Tests:
+  `tests/test_run_notion_read_failure.py` + contract cases in
+  `tests/test_utils_read_failure_contract.py`.
+- **`_prop_number_opt()` — absent-vs-real-`0` score reads (2026-07-21).** Closes the other
+  `docs/TODO.md` "Open for review" item: `_prop_number()` returned `0` for both an empty
+  property and a genuine `0`, colliding with stage 1's "never fabricate a score" contract. A new
+  nullable reader `_prop_number_opt()` returns `None` for absent / the real number otherwise, and
+  is used **only** for `ATS Match Score` in `_page_to_job()` / `db_get_all_jobs()`; `_prop_number`
+  still backs the counters (`Scoring Attempts`/`Enrichment Attempts`/`Applicant Count`/`Apply
+  Attempts`) where `0` is the right default. Score consumers in `stage4_digest.py` /
+  `stage3_outreach.py` hardened to `… or 0` so an unscored `None` can't `int(None)`-crash the
+  digest. No behavior change in practice (`MIN_ATS_SCORE=30` already drops any 0-score job before
+  write); future-proofs the read path. Tests: new cases in `tests/test_utils.py`.
 - Stage 2 sponsorship gate (`RESTRICTED_SPONSORSHIP_COMPANIES`, `_sponsorship_gate()` in
   `scripts/stage2_tailor.py`) — holds jobs at companies known to sponsor only existing
   employees, moving them to `Human Review` instead of tailoring a resume.
@@ -191,3 +211,40 @@ gate. Landed in six phases (0-5), all independently shippable:
 
 Full spec (retired): `docs/backlog/step-9-evals-testing.md` and
 `docs/refinement-plans/testing/evals-strategy.md`.
+
+## Step 12 — Notion-managed restricted-sponsorship company list
+
+Replaced the plan to hold a specific posting via a per-job Notion Notes marker with a
+different fix for the same underlying problem (a hardcoded, committed
+`RESTRICTED_SPONSORSHIP_COMPANIES` list can't be edited without a redeploy, and silently
+blocks a company forever even after its policy changes): the restricted-company list itself
+moved into its own Notion database, parallel to the Jobs Tracker and Scratch Pad
+(`NOTION_RESTRICTED_COMPANIES_PAGE_ID`) — editable visually, no code change needed, and works
+identically from a future GitHub Actions run (unlike a git-ignored local file).
+`get_restricted_sponsorship_companies()` (`scripts/utils.py`) merges the Notion list with the
+hardcoded list as a fallback/escape hatch. Enforced at **stage 1** as a silent drop at scrape
+time, like `SKIP_COMPANIES` (`is_restricted_sponsorship_company()`, new
+`restricted-sponsorship` drop counter); stage 2's existing `_sponsorship_gate()` keeps
+checking the same merged list as defense-in-depth, for a job that reached `Reviewed` before
+its company was added.
+
+Full spec (retired): `docs/backlog/step-12-sponsorship-restriction-marker.md`.
+
+## Step 11 — Forkable setup (Phases 1 + 2)
+
+`scripts/provision_notion.py` + `run.py --init` provision the "Careerpilot-ai" page + all three
+databases and env-source `NOTION_DB_ID` (hardcoded literal removed); `--setup` validates the live
+schema. **Phase 2 (identity):** owner identity de-hardcoded in `config/settings.py`
+(`YOUR_NAME`/`EMAIL`/`BIO`, `TARGET_ROLES`/`COMPANIES`, `RESUME_PATH`/`RESUME_TEMPLATE_PATH` →
+`config/resume.docx`, `AI_PROVIDER` → `"claude"`) via a git-ignored `config/profile.json`
+overlay (`_load_profile()`); `--init` grew a skippable profile-wizard block + `_sync_ci_secrets()`
+(pushes `NOTION_DB_ID`/`APIFY_API_TOKEN`/provider key/`PROFILE_JSON` secrets via `gh`, or prints
+paste-ready commands); `config/ats_tokens.json` is untracked and git-ignored (identity in
+`config/profile.example.json`); `Achyuth`/`Iamkach`/DB-id references genericized across docs +
+`.claude/*`. Resume files (`config/resume.txt` / `config/resume.docx`) stay **tracked in git as
+usual** — an earlier draft that untracked them and shipped them to CI as base64-encoded secrets
+was reverted as unneeded complexity; keep them current locally and commit them like any other
+file. The nightly workflow wires `NOTION_DB_ID`/`APIFY_API_TOKEN` and materializes only
+`profile.json` from its secret.
+
+Full spec: `docs/backlog/step-11-forkable-setup.md`.

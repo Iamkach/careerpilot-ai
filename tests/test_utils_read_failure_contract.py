@@ -117,6 +117,52 @@ def test_db_find_job_by_url_short_circuits_on_blank_url(monkeypatch):
     assert utils.db_find_job_by_url("") is None
 
 
+# ── 2b. _query_db is the choke point: the unguarded readers raise NotionReadError ──
+# db_get_jobs() / db_get_ready_to_apply() never wrapped _query_db themselves, so a failed
+# read used to propagate the raw Notion client exception (a traceback out of run.py's
+# --retry-only / --evaluate / --stage 2-4 paths). Now every reader funnels through _query_db,
+# which raises the typed NotionReadError.
+
+def test_notion_read_error_is_a_runtime_error_subclass():
+    """Subclassing RuntimeError is what keeps every existing `except RuntimeError` handler and
+    `pytest.raises(RuntimeError, match='read failed')` test green after the retype."""
+    assert issubclass(utils.NotionReadError, RuntimeError)
+
+
+def test_query_db_wraps_a_read_failure_as_notion_read_error(monkeypatch):
+    monkeypatch.setattr(utils, "NOTION_DB_ID", "db")
+
+    class _Boom:
+        class databases:
+            @staticmethod
+            def query(**kwargs):
+                raise ConnectionError("notion unreachable")
+
+    monkeypatch.setattr(utils, "_notion", lambda: _Boom)
+    with pytest.raises(utils.NotionReadError, match="read failed"):
+        utils._query_db()
+
+
+def test_db_get_jobs_raises_notion_read_error_on_read_failure(monkeypatch):
+    """Backs --retry-only (db_get_jobs('Retry')), --stage 2/3, --evaluate."""
+    def boom(filter_=None, sorts=None):
+        raise utils.NotionReadError("Notion read failed: 503")
+
+    monkeypatch.setattr(utils, "_query_db", boom)
+    with pytest.raises(utils.NotionReadError):
+        utils.db_get_jobs("Reviewed")
+
+
+def test_db_get_ready_to_apply_raises_notion_read_error_on_read_failure(monkeypatch):
+    """Backs the --stage 4 ready digest."""
+    def boom(filter_=None, sorts=None):
+        raise utils.NotionReadError("Notion read failed: 503")
+
+    monkeypatch.setattr(utils, "_query_db", boom)
+    with pytest.raises(utils.NotionReadError):
+        utils.db_get_ready_to_apply()
+
+
 # ── 3. Scratch-note ingest tolerates the new raise ───────────────────────────
 
 def test_scratch_ingest_leaves_row_unarchived_when_dedup_check_fails(monkeypatch):
@@ -344,7 +390,7 @@ def test_ingest_routine_exits_nonzero_with_a_clean_message(monkeypatch, capsys):
     monkeypatch.setattr(stage1_scrape, "ingest_from_scratch_note", lambda: 0)
 
     def boom(resume):
-        raise RuntimeError("get_notion_jobs_by_status('Interested') read failed: 503")
+        raise utils.NotionReadError("get_notion_jobs_by_status('Interested') read failed: 503")
 
     monkeypatch.setattr(stage1_scrape, "ingest_interested_from_notion", boom)
     monkeypatch.setattr("scripts.utils.load_resume", lambda: "resume")
