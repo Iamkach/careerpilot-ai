@@ -235,12 +235,9 @@ the Apify path is cheaper than the code.
 
 ## Deferred (not in scope)
 
-- **Mirroring the registry to Notion.** `config/ats_tokens.json` is git-ignored, so harvested
-  tokens do not survive a fresh clone and are invisible from mobile. A small Notion database —
-  exactly the pattern of the restricted-sponsorship list (Step 12, `NOTION_RESTRICTED_COMPANIES_PAGE_ID`,
-  `get_restricted_sponsorship_companies()` in `scripts/utils.py`) — would fix both. Deferred
-  because it is a separate concern from harvesting, and worth doing only once the registry is
-  observably worth preserving. Revisit after Phase 1 has a hit rate.
+- **Mirroring the registry to Notion.** Split out into
+  `docs/backlog/step-14-target-companies-notion.md` (queued separately, scoped to the curated
+  target-company list rather than the full harvested registry) rather than tracked here.
 - **Careers-page crawling for companies with no observed URL** (fetch `{company}.com/careers`, look
   for ATS links). A real per-company network cost with a `max_new_probes`-style budget; only worth
   it if Phases 1–2 leave a large gap.
