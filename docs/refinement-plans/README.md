@@ -33,13 +33,23 @@ implemented and retired; their content is summarized in [`../CHANGELOG.md`](../C
   an added `--metered-provider` flag and a new `openrouter` provider beyond the original spec.
   Deleted.
 
-Three more plans were finalized and queued (Step 7, Step 11, Step 15) — folded into their backlog
-stories and deleted:
+Four more plans were finalized and queued (Step 7, Step 11, Step 15 x2) — folded into their
+backlog stories and deleted:
 
 - **Application pre-fill browser extension** (`auto-apply/browser-extension-prefill.md`) —
   finalized, content merged into
   [`../backlog/step-15-application-prefill-extension.md`](../backlog/step-15-application-prefill-extension.md).
   Deleted.
+- **Interactive split-window launcher** (`auto-apply/step-15-interactive-launcher.md`) —
+  finalized 2026-07-31 once its 4 open questions were answered (side panel over positioned
+  windows; soft concurrency cap; no general `POST /status` route; ATS token write-back deferred
+  to Step 13). Content merged into the Step 15 epic and sub-stories
+  [`step-15b`](../backlog/step-15b-plan-endpoint-identify-job.md) (identify rung 0),
+  [`step-15c`](../backlog/step-15c-extension-readonly-overlay.md) (retitled to side-panel shell),
+  [`step-15f`](../backlog/step-15f-essay-drafts.md) (retitled to interactive draft panel), and two
+  new stories,
+  [`step-15h`](../backlog/step-15h-job-list-launcher.md) and
+  [`step-15i`](../backlog/step-15i-multi-session-state.md). Deleted.
 
 - **Communications subsystem** (`communications/communications-subsystem.md`) — finalized,
   content merged into [`../backlog/step-7-communications-subsystem.md`](../backlog/step-7-communications-subsystem.md).
