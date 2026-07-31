@@ -14,11 +14,18 @@ implementation checklist — and **delete** the refinement-plan doc; don't leave
 
 ---
 
-Steps 0-1, 2-6, 8, 9, 11, 12 (plus both quick-fixes' first item) are implemented and retired — see
-[`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and [`../TODO.md`](../TODO.md) for the
-small, standalone gaps each left behind (a missing `encoding="utf-8"`, an unlogged bare `except`,
-two unrun manual QA checks — the handful of gaps Step 9's test suite had characterized as
-not-yet-fixed are now fixed, see `../TODO.md`).
+Steps 0-1, 2-6, 8, 9, 12 (plus both quick-fixes' first item) are implemented **and on GitHub's
+`main`** — see [`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and
+[`../TODO.md`](../TODO.md) for the small, standalone gaps each left behind (a missing
+`encoding="utf-8"`, an unlogged bare `except`, two unrun manual QA checks — the handful of gaps
+Step 9's test suite had characterized as not-yet-fixed are now fixed, see `../TODO.md`).
+
+Step 11 is also implemented and retired (backlog doc removed), but **not yet on `main`** — it
+merged via PR #19 into `feature/step-10-auto-apply`, which is itself 36 commits ahead of `main`
+and unmerged (along with Steps 7/10/12-in-progress/13/14/15, which share that same branch stack).
+"Retired" here means the design work is done and tracked in `../CHANGELOG.md` instead, not that
+the code has shipped to users yet — that's a separate, still-open sequencing question for the
+whole stack.
 
 Open stories:
 
