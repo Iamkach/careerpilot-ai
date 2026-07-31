@@ -212,6 +212,27 @@ gate. Landed in six phases (0-5), all independently shippable:
 Full spec (retired): `docs/backlog/step-9-evals-testing.md` and
 `docs/refinement-plans/testing/evals-strategy.md`.
 
+## Step 14 — Notion-managed target-companies list + persistent ATS-token store
+
+Same shape of problem Step 12 already solved, applied to a second local-only file:
+`config/profile.json`'s `target_companies` array can't be edited from a phone or a fresh CI
+checkout, and `config/ats_tokens.json` (the `discover_tokens()` cache) is git-ignored, so every
+GitHub Actions run started it empty and re-probed from zero instead of compounding across runs.
+A new "Target Companies" Notion database (`NOTION_TARGET_COMPANIES_PAGE_ID`) holds the curated
+subset worth adding by hand — not the full `discover_tokens()` seed union (`TARGET_COMPANIES` ∪
+every company ever scraped) — with `Company` (title) plus `Greenhouse`/`Lever`/`Ashby` rich_text
+and a `Last Checked` date. `get_target_companies_from_notion()` / `get_ats_tokens_from_notion()`
+/ `upsert_ats_token_to_notion()` (`scripts/utils.py`) back the read/read/create-or-update paths;
+`discover_tokens()` (`scripts/sources.py`) seeds in the Notion company list alongside its
+`companies` argument, overlays the Notion tokens onto the local JSON cache before probing
+(Notion wins on conflict for rows that exist there), and writes a fresh probe result for a
+Notion-seeded company back to Notion, not just the local cache — so a discovered token survives
+a from-scratch checkout. `scripts/provision_notion.py` provisions the database automatically
+alongside the other three under the "Careerpilot-ai" page; fully optional/no-op if unset, same
+as every other side database.
+
+Full spec (retired): `docs/backlog/step-14-target-companies-notion.md`.
+
 ## Step 12 — Notion-managed restricted-sponsorship company list
 
 Replaced the plan to hold a specific posting via a per-job Notion Notes marker with a
