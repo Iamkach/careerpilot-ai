@@ -726,6 +726,110 @@ def get_restricted_sponsorship_companies() -> list[str]:
     return list(RESTRICTED_SPONSORSHIP_COMPANIES) + get_restricted_companies_from_notion()
 
 
+def get_target_companies_from_notion() -> list[str]:
+    """Return every row's title text from the curated target-companies Notion database
+    (NOTION_TARGET_COMPANIES_PAGE_ID) — one company name per row, found by title-property
+    type, same as get_restricted_companies_from_notion(). Returns [] if the setting is unset
+    (feature disabled, no-op) or on any read failure."""
+    if not NOTION_TARGET_COMPANIES_PAGE_ID:
+        return []
+    try:
+        names, cursor = [], None
+        while True:
+            kwargs = {"database_id": NOTION_TARGET_COMPANIES_PAGE_ID}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().databases.query(**kwargs)
+            for page in res.get("results", []):
+                title_prop = next(
+                    (p for p in page.get("properties", {}).values() if p.get("type") == "title"),
+                    None,
+                )
+                name = _notion_plain_text(title_prop).strip() if title_prop else ""
+                if name:
+                    names.append(name)
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return names
+    except Exception as e:
+        log(f"[get_target_companies_from_notion] warning: {e}")
+        return []
+
+
+def get_ats_tokens_from_notion() -> dict:
+    """Return every row of the target-companies Notion database in the same
+    {company: {greenhouse, lever, ashby, checked}} shape discover_tokens()'s local JSON cache
+    (config/ats_tokens.json) already uses. Notion is the source of truth for these rows — the
+    caller overlays this onto the local cache, so Notion wins on conflict. Returns {} if the
+    setting is unset or on any read failure."""
+    if not NOTION_TARGET_COMPANIES_PAGE_ID:
+        return {}
+    try:
+        tokens, cursor = {}, None
+        while True:
+            kwargs = {"database_id": NOTION_TARGET_COMPANIES_PAGE_ID}
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            res = _notion().databases.query(**kwargs)
+            for page in res.get("results", []):
+                props = page.get("properties", {})
+                title_prop = next(
+                    (p for p in props.values() if p.get("type") == "title"), None,
+                )
+                company = _notion_plain_text(title_prop).strip() if title_prop else ""
+                if not company:
+                    continue
+                checked = ((props.get("Last Checked") or {}).get("date") or {}).get("start")
+                tokens[company] = {
+                    "greenhouse": _notion_plain_text(props.get("Greenhouse")).strip() or None,
+                    "lever": _notion_plain_text(props.get("Lever")).strip() or None,
+                    "ashby": _notion_plain_text(props.get("Ashby")).strip() or None,
+                    "checked": checked,
+                }
+            if res.get("has_more"):
+                cursor = res.get("next_cursor")
+            else:
+                break
+        return tokens
+    except Exception as e:
+        log(f"[get_ats_tokens_from_notion] warning: {e}")
+        return {}
+
+
+def upsert_ats_token_to_notion(company: str, gh: str | None, lv: str | None, ab: str | None,
+                                checked: str) -> None:
+    """Create-or-update one row of the target-companies Notion database by title match on
+    `company`, writing the discovered (or still-null) token result so it survives a fresh
+    checkout / a from-scratch GitHub Actions run with no local config/ats_tokens.json. No-op if
+    NOTION_TARGET_COMPANIES_PAGE_ID is unset; any failure is logged and swallowed, matching
+    every other Notion writer in this module."""
+    if not NOTION_TARGET_COMPANIES_PAGE_ID:
+        return
+    try:
+        props = {
+            "Greenhouse": {"rich_text": [{"text": {"content": gh or ""}}]},
+            "Lever": {"rich_text": [{"text": {"content": lv or ""}}]},
+            "Ashby": {"rich_text": [{"text": {"content": ab or ""}}]},
+            "Last Checked": {"date": {"start": checked}},
+        }
+        res = _notion().databases.query(
+            database_id=NOTION_TARGET_COMPANIES_PAGE_ID,
+            filter={"property": "Company", "title": {"equals": company}},
+        )
+        existing = res.get("results") or []
+        if existing:
+            _notion().pages.update(page_id=existing[0]["id"], properties=props)
+        else:
+            props["Company"] = {"title": [{"text": {"content": company}}]}
+            _notion().pages.create(
+                parent={"database_id": NOTION_TARGET_COMPANIES_PAGE_ID}, properties=props,
+            )
+    except Exception as e:
+        log(f"[upsert_ats_token_to_notion] warning: {e}")
+
+
 def db_add_interested_url(url: str) -> str | None:
     """Create a minimal Status='Interested' Notion row for a URL dropped in the scratch
     note (Job Title left as a placeholder — the existing ingest_interested_from_notion()

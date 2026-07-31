@@ -4,21 +4,23 @@ provision_notion.py — create a fork's Notion workspace from scratch.
 
 WHY THIS EXISTS
     The pipeline is Notion-first: every stage reads/writes a "Job Search Tracker" database, the
-    optional mobile intake reads a "Job Link Scratch Pad" database, and the optional
-    restricted-sponsorship company filter reads a "Restricted Sponsorship Companies" database.
-    The author's databases already exist; a *fork* has nothing. `setup_notion_schema.py` can
-    only *patch* an existing DB (databases.update) — it cannot create one. This module does the
-    create half:
+    optional mobile intake reads a "Job Link Scratch Pad" database, the optional
+    restricted-sponsorship company filter reads a "Restricted Sponsorship Companies" database,
+    and the optional curated target-companies + ATS-token store reads a "Target Companies"
+    database. The author's databases already exist; a *fork* has nothing.
+    `setup_notion_schema.py` can only *patch* an existing DB (databases.update) — it cannot
+    create one. This module does the create half:
 
         parent page you shared with your integration
           └── "Careerpilot-ai"                        (a page we create under it)
                 ├── "Job Search Tracker"                (databases.create — full schema, all Status options)
                 ├── "Job Link Scratch Pad"               (databases.create — a single URL/title column)
-                └── "Restricted Sponsorship Companies"   (databases.create — a single company-name/title column)
+                ├── "Restricted Sponsorship Companies"   (databases.create — a single company-name/title column)
+                └── "Target Companies"                   (databases.create — company name + Greenhouse/Lever/Ashby/Last Checked)
 
     Defining every Status select option at *create* time sidesteps the API quirk that
     `pages.update` silently ignores a Status the select doesn't already offer — `databases.create`
-    has no such limit. This mirrors the reorganized live workspace (one parent page, two DBs).
+    has no such limit. This mirrors the reorganized live workspace (one parent page, four DBs).
 
 SINGLE SOURCE OF TRUTH
     STATUS_OPTIONS / TRACKER_PROPERTIES here are the canonical tracker schema. setup_notion_schema
@@ -115,6 +117,18 @@ SCRATCH_PROPERTIES: dict = {"Job URL": {"title": {}}}
 # cosmetic here too.
 RESTRICTED_COMPANIES_PROPERTIES: dict = {"Company": {"title": {}}}
 
+# Curated target-companies list + persistent ATS-token store (Step 14). "Company" is the title;
+# the three ATS columns hold the discovered board token (blank = not found there), and
+# "Last Checked" backs discover_tokens()'s 30-day re-probe-if-stale check the same way the
+# local config/ats_tokens.json cache's "checked" field does.
+TARGET_COMPANIES_PROPERTIES: dict = {
+    "Company":      {"title": {}},
+    "Greenhouse":   {"rich_text": {}},
+    "Lever":        {"rich_text": {}},
+    "Ashby":        {"rich_text": {}},
+    "Last Checked": {"date": {}},
+}
+
 
 def _stage7_properties() -> dict:
     """The Stage-7 property specs, sliced from the canonical tracker schema (no drift)."""
@@ -210,13 +224,13 @@ def _create_database(notion, page_id: str, title: str, properties: dict) -> str:
     return db["id"]
 
 
-def provision(parent_page_id: str, notion=None) -> tuple[str, str, str]:
-    """Create the 'Careerpilot-ai' page + all three databases under `parent_page_id`.
+def provision(parent_page_id: str, notion=None) -> tuple[str, str, str, str]:
+    """Create the 'Careerpilot-ai' page + all four databases under `parent_page_id`.
 
     `parent_page_id` is a page the forker has shared with their integration — either a raw id or
     a full Notion share link (a "Copy link" URL), which is normalized here. Returns
-    (tracker_db_id, scratch_db_id, restricted_companies_db_id). All new DBs inherit access from
-    that shared parent.
+    (tracker_db_id, scratch_db_id, restricted_companies_db_id, target_companies_db_id). All new
+    DBs inherit access from that shared parent.
     """
     notion = notion or _client()
     parent_page_id = normalize_page_id(parent_page_id)
@@ -239,16 +253,21 @@ def provision(parent_page_id: str, notion=None) -> tuple[str, str, str]:
         notion, page_id, "Restricted Sponsorship Companies", RESTRICTED_COMPANIES_PROPERTIES
     )
 
+    log("Creating the 'Target Companies' database…")
+    target_companies_id = _create_database(
+        notion, page_id, "Target Companies", TARGET_COMPANIES_PROPERTIES
+    )
+
     log(f"✓ Provisioned. Tracker DB: {tracker_id}  |  Scratch DB: {scratch_id}  |  "
-        f"Restricted Companies DB: {restricted_id}")
-    return tracker_id, scratch_id, restricted_id
+        f"Restricted Companies DB: {restricted_id}  |  Target Companies DB: {target_companies_id}")
+    return tracker_id, scratch_id, restricted_id, target_companies_id
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Create the Careerpilot-ai Notion page + Job Search Tracker + Job Link "
-                    "Scratch Pad + Restricted Sponsorship Companies databases under a page "
-                    "you've shared with your integration.")
+                    "Scratch Pad + Restricted Sponsorship Companies + Target Companies "
+                    "databases under a page you've shared with your integration.")
     ap.add_argument("--parent-page", required=True, dest="parent_page",
                     help="Notion page share link (or raw id) you've shared with your integration; "
                          "the new 'Careerpilot-ai' page + databases are created under it.")
@@ -258,7 +277,7 @@ def main(argv=None) -> int:
         log("✗ NOTION_API_KEY is not set. Add it to your .env and re-run.")
         return 1
     try:
-        tracker_id, scratch_id, restricted_id = provision(args.parent_page)
+        tracker_id, scratch_id, restricted_id, target_companies_id = provision(args.parent_page)
     except Exception as e:
         log(f"✗ Provisioning failed ({e}).")
         log("  Check NOTION_API_KEY and that the parent page is shared with the integration.")
@@ -268,6 +287,7 @@ def main(argv=None) -> int:
     log(f"  NOTION_DB_ID={tracker_id}")
     log(f"  NOTION_SCRATCH_PAGE_ID={scratch_id}")
     log(f"  NOTION_RESTRICTED_COMPANIES_PAGE_ID={restricted_id}")
+    log(f"  NOTION_TARGET_COMPANIES_PAGE_ID={target_companies_id}")
     return 0
 
 
