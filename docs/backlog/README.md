@@ -14,19 +14,19 @@ implementation checklist — and **delete** the refinement-plan doc; don't leave
 
 ---
 
-Steps 0-1, 2-6, 8, 9, 12, 14 (plus both quick-fixes' first item) are implemented and retired — see
-[`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and [`../TODO.md`](../TODO.md) for the
-small, standalone gaps each left behind (a missing `encoding="utf-8"`, an unlogged bare `except`,
-two unrun manual QA checks — the handful of gaps Step 9's test suite had characterized as
-not-yet-fixed are now fixed, see `../TODO.md`).
+Steps 0-1, 2-6, 8, 9, 10, 11, 12, 14 (plus both quick-fixes' first item) are implemented **and on
+GitHub's `main`** — see [`../CHANGELOG.md`](../CHANGELOG.md) for what shipped and
+[`../TODO.md`](../TODO.md) for the small, standalone gaps each left behind (a missing
+`encoding="utf-8"`, an unlogged bare `except`, two unrun manual QA checks — the handful of gaps
+Step 9's test suite had characterized as not-yet-fixed are now fixed, see `../TODO.md`). Step 10
+and Step 11 landed together via PR #19 (Step 11 into `feature/step-10-auto-apply`) then PR #20
+(that branch into `main`, 2026-07-30). Step 14 lands via this branch.
 
 Open stories:
 
 | Story | What it does | Depends on | Size |
 |---|---|---|---|
 | [step-7-communications-subsystem.md](step-7-communications-subsystem.md) | Stages 7-8: LinkedIn leads + Hunter-verified cold email, new Leads DB, GitHub Actions | Step 6 (done) | XL |
-| [step-10-auto-apply-subsystem.md](step-10-auto-apply-subsystem.md) | Proposed Stage 7: browser-automation capability router to submit applications, semi-auto by default. `scripts/autoapply.py` is the Phase 1 read-only-plan PoC (Greenhouse only, no submit) | Stage 2 (done), Notion status pipeline | L-XL (phaseable; Phase 1 PoC is S) |
-| [step-11-forkable-setup.md](step-11-forkable-setup.md) | ✅ Phase 1 landed (`--init`, `scripts/provision_notion.py` page + all three DBs, env-sourced `NOTION_DB_ID`, hardened `--setup`; ⚠ CI `NOTION_DB_ID` secret follow-up). ⏳ Phase 2: profile.json, de-personalize tracked files | current setup surface | S (remaining) |
 | [step-13-board-token-harvesting.md](step-13-board-token-harvesting.md) | Harvest the employer ATS board URL that LinkedIn/Indeed listings already carry (and we discard), so `config/ats_tokens.json` is built by **observation** instead of slug-guessing — today 23/100 companies resolve to a board | Step 6 (done) | S (Phase 1 = the whole value) |
 | [step-15-application-prefill-extension.md](step-15-application-prefill-extension.md) | Stage 7 **Layer 3**: MV3 extension + localhost bridge that pre-fills the application form open in your own authenticated browser — live DOM is the schema, so Ashby/Workday/custom career sites are one code path. Attaches the tailored resume, surfaces essay drafts for review, and confirms `Applied` to Notion from the popup | Step 10 Phases 1-2 (done) | L |
 
