@@ -42,7 +42,10 @@ from config.settings import (
     APIFY_API_TOKEN, TARGET_ROLES, MAX_JOB_AGE_DAYS, DROP_UNDATED_JOBS,
     ENABLE_ATS_TOKEN_SEARCH_FALLBACK,
 )
-from scripts.utils import log
+from scripts.utils import (
+    log, get_target_companies_from_notion, get_ats_tokens_from_notion,
+    upsert_ats_token_to_notion,
+)
 
 ROOT = Path(__file__).parent.parent
 APIFY_BASE = "https://api.apify.com/v2"
@@ -857,10 +860,24 @@ def discover_tokens(companies: list[str], max_new_probes: int = 20) -> dict:
     """Probe Greenhouse/Lever/Ashby for each company, caching hits AND misses to
     config/ats_tokens.json. Re-probes an all-null entry only if its `checked` date is
     >=30 days old. Caps new-company probes per call at `max_new_probes` and sleeps
-    between probes to amortize discovery load."""
+    between probes to amortize discovery load.
+
+    The curated Notion target-companies database (NOTION_TARGET_COMPANIES_PAGE_ID), when
+    configured, is additionally seeded in as companies, and is the source of truth for token
+    results on its own rows: its cached tokens overlay the local JSON cache before probing, and
+    a fresh probe result for one of its companies is written back to Notion (not just the local
+    cache), so the discovered token survives a fresh checkout / a from-scratch CI run. See
+    docs/backlog/step-14-target-companies-notion.md."""
     tokens = _load_tokens()
+    notion_companies = get_target_companies_from_notion()
+    tokens.update(get_ats_tokens_from_notion())  # Notion wins on conflict for its own rows
+    notion_set = set(notion_companies)
+
+    already_seeded = set(companies)
+    all_companies = list(companies) + [c for c in notion_companies if c not in already_seeded]
+
     probed = 0
-    for company in companies:
+    for company in all_companies:
         entry = tokens.get(company)
         if entry:
             all_null = not entry.get("greenhouse") and not entry.get("lever") and not entry.get("ashby")
@@ -903,10 +920,10 @@ def discover_tokens(companies: list[str], max_new_probes: int = 20) -> dict:
                         break
             gh, lv, ab = results["greenhouse"], results["lever"], results["ashby"]
 
-        tokens[company] = {
-            "greenhouse": gh, "lever": lv, "ashby": ab,
-            "checked": datetime.date.today().isoformat(),
-        }
+        checked_date = datetime.date.today().isoformat()
+        tokens[company] = {"greenhouse": gh, "lever": lv, "ashby": ab, "checked": checked_date}
+        if company in notion_set:
+            upsert_ats_token_to_notion(company, gh, lv, ab, checked_date)
         probed += 1
 
     _save_tokens(tokens)

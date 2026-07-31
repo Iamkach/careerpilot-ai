@@ -81,7 +81,7 @@ def _upsert_env(path: Path, key: str, value: str) -> None:
 
 def init_wizard():
     """Interactive fork onboarding: capture Notion connection details, provision the Notion
-    page + all three databases, and persist the new ids to a git-ignored .env.
+    page + all four databases, and persist the new ids to a git-ignored .env.
 
     Idempotent and re-runnable. Non-interactive fallback: hand-edit .env and run
     `python scripts/provision_notion.py --parent-page <id>` directly.
@@ -127,7 +127,7 @@ def init_wizard():
             check_setup()
             return 0
 
-    print("\nProvisioning creates a 'Careerpilot-ai' page with three databases under a page you")
+    print("\nProvisioning creates a 'Careerpilot-ai' page with four databases under a page you")
     print("choose. First share that page with your integration (open the page → ••• →")
     print("'Connections' → add your integration), then paste its share link below")
     print("(open the page → ••• → 'Copy link'). A raw page id works too.")
@@ -138,7 +138,7 @@ def init_wizard():
 
     try:
         from scripts.provision_notion import provision
-        tracker_id, scratch_id, restricted_id = provision(parent)
+        tracker_id, scratch_id, restricted_id, target_companies_id = provision(parent)
     except Exception as e:
         print(f"\n✗ Provisioning failed ({e}).")
         print("  Check the token and that the parent page is shared with the integration, then re-run.")
@@ -147,8 +147,9 @@ def init_wizard():
     _upsert_env(env_path, "NOTION_DB_ID", tracker_id)
     _upsert_env(env_path, "NOTION_SCRATCH_PAGE_ID", scratch_id)
     _upsert_env(env_path, "NOTION_RESTRICTED_COMPANIES_PAGE_ID", restricted_id)
-    print(f"\n✓ Wrote NOTION_DB_ID, NOTION_SCRATCH_PAGE_ID, and "
-          f"NOTION_RESTRICTED_COMPANIES_PAGE_ID to {env_path.name}")
+    _upsert_env(env_path, "NOTION_TARGET_COMPANIES_PAGE_ID", target_companies_id)
+    print(f"\n✓ Wrote NOTION_DB_ID, NOTION_SCRATCH_PAGE_ID, NOTION_RESTRICTED_COMPANIES_PAGE_ID, "
+          f"and NOTION_TARGET_COMPANIES_PAGE_ID to {env_path.name}")
 
     _profile_wizard(env_path)
     _sync_ci_secrets()
@@ -231,7 +232,10 @@ def _profile_wizard(env_path: Path):
 def _sync_ci_secrets():
     """Skippable final block of `--init`: push the CI-relevant, non-empty secrets to GitHub
     Actions via the `gh` CLI so the nightly workflow can materialize the git-ignored
-    config/profile.json the fork just set up.
+    config/profile.json the fork just set up. Includes the three optional Notion side-database
+    ids (scratch-note intake, restricted-sponsorship companies, target companies) alongside the
+    required tracker/API secrets — each is skipped individually if unset, same no-op pattern as
+    everywhere else these ids are consumed.
 
     Shells out to `gh` (no new pip dependency, no PyNaCl-encrypted REST path). If `gh` is
     missing or unauthenticated it never raises — it prints the exact `gh secret set …` commands
@@ -251,7 +255,9 @@ def _sync_ci_secrets():
     # Text secrets sourced from the environment (already loaded from .env by config.settings).
     secrets: dict[str, str] = {}
     for name in ("NOTION_API_KEY", "NOTION_DB_ID", "APIFY_API_TOKEN",
-                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+                 "NOTION_SCRATCH_PAGE_ID", "NOTION_RESTRICTED_COMPANIES_PAGE_ID",
+                 "NOTION_TARGET_COMPANIES_PAGE_ID"):
         val = os.environ.get(name, "")
         if val:
             secrets[name] = val
