@@ -232,7 +232,10 @@ def _profile_wizard(env_path: Path):
 def _sync_ci_secrets():
     """Skippable final block of `--init`: push the CI-relevant, non-empty secrets to GitHub
     Actions via the `gh` CLI so the nightly workflow can materialize the git-ignored
-    config/profile.json the fork just set up.
+    config/profile.json the fork just set up. Includes the three optional Notion side-database
+    ids (scratch-note intake, restricted-sponsorship companies, target companies) alongside the
+    required tracker/API secrets — each is skipped individually if unset, same no-op pattern as
+    everywhere else these ids are consumed.
 
     Shells out to `gh` (no new pip dependency, no PyNaCl-encrypted REST path). If `gh` is
     missing or unauthenticated it never raises — it prints the exact `gh secret set …` commands
@@ -252,7 +255,9 @@ def _sync_ci_secrets():
     # Text secrets sourced from the environment (already loaded from .env by config.settings).
     secrets: dict[str, str] = {}
     for name in ("NOTION_API_KEY", "NOTION_DB_ID", "APIFY_API_TOKEN",
-                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+                 "NOTION_SCRATCH_PAGE_ID", "NOTION_RESTRICTED_COMPANIES_PAGE_ID",
+                 "NOTION_TARGET_COMPANIES_PAGE_ID"):
         val = os.environ.get(name, "")
         if val:
             secrets[name] = val
