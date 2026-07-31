@@ -518,6 +518,19 @@ NOTION_SCRATCH_PAGE_ID = os.environ.get("NOTION_SCRATCH_PAGE_ID", "")
 # paste its id here.
 NOTION_RESTRICTED_COMPANIES_PAGE_ID = os.environ.get("NOTION_RESTRICTED_COMPANIES_PAGE_ID", "")
 
+# --- Notion target-companies list (optional) ------------------
+# Database id of a small Notion database (a "list" view works well) where each row's title is
+# one curated target company, with Greenhouse/Lever/Ashby rich_text columns and a Last Checked
+# date -- add/remove companies visually in Notion, and let discovered ATS board tokens for them
+# persist there instead of only in the git-ignored config/ats_tokens.json (which starts empty on
+# every GitHub Actions run). Seeds into discover_tokens() (scripts/sources.py) alongside
+# TARGET_COMPANIES, and is the source of truth for token results on its own rows -- see
+# docs/backlog/step-14-target-companies-notion.md. Optional -- if unset,
+# get_target_companies_from_notion()/get_ats_tokens_from_notion() return []/{} and behavior is
+# unchanged from before this feature existed. Create the database once, share it with the
+# integration, paste its id here.
+NOTION_TARGET_COMPANIES_PAGE_ID = os.environ.get("NOTION_TARGET_COMPANIES_PAGE_ID", "")
+
 # --- Gmail (optional — for digest emails) -------------------
 # Set up via Google Cloud OAuth credentials
 GMAIL_CREDENTIALS_PATH = "config/gmail_credentials.json"

@@ -40,6 +40,11 @@ env:
   APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+  # Optional Notion side databases (scratch-note intake, restricted-sponsorship companies,
+  # target companies) — each feature no-ops if its secret is unset, same as locally.
+  NOTION_SCRATCH_PAGE_ID: ${{ secrets.NOTION_SCRATCH_PAGE_ID }}
+  NOTION_RESTRICTED_COMPANIES_PAGE_ID: ${{ secrets.NOTION_RESTRICTED_COMPANIES_PAGE_ID }}
+  NOTION_TARGET_COMPANIES_PAGE_ID: ${{ secrets.NOTION_TARGET_COMPANIES_PAGE_ID }}
   FAST_PROVIDER: claude
   QUALITY_PROVIDER: claude_code
 

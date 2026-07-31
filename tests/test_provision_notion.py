@@ -61,21 +61,25 @@ def _full_schema(drop_props=(), drop_status=()):
 
 # ── provision() ───────────────────────────────────────────────────────────────
 
-def test_provision_creates_page_then_all_three_databases_under_it():
+def test_provision_creates_page_then_all_four_databases_under_it():
     fake = FakeNotion()
-    tracker_id, scratch_id, restricted_id = pn.provision(PARENT_RAW, notion=fake)
+    tracker_id, scratch_id, restricted_id, target_companies_id = pn.provision(PARENT_RAW, notion=fake)
 
     assert len(fake.pages.created) == 1
     # The raw id was normalized to a dashed UUID before hitting the API.
     assert fake.pages.created[0]["parent"]["page_id"] == PARENT_DASHED
 
     titles = [c["title"] for c in fake.databases.created]
-    assert titles == ["Job Search Tracker", "Job Link Scratch Pad", "Restricted Sponsorship Companies"]
+    assert titles == [
+        "Job Search Tracker", "Job Link Scratch Pad",
+        "Restricted Sponsorship Companies", "Target Companies",
+    ]
     # All DBs are created under the new "Careerpilot-ai" page, not the shared parent.
     assert all(c["parent"]["page_id"] == "page-careerpilot" for c in fake.databases.created)
     assert tracker_id == "db-job-search-tracker"
     assert scratch_id == "db-job-link-scratch-pad"
     assert restricted_id == "db-restricted-sponsorship-companies"
+    assert target_companies_id == "db-target-companies"
 
 
 def test_tracker_is_born_with_every_property_and_all_status_options():
@@ -107,16 +111,28 @@ def test_restricted_companies_db_is_a_single_clean_name_column():
     assert fake.databases.created[2]["properties"] == {"Company": {"title": {}}}
 
 
+def test_target_companies_db_has_company_title_and_ats_columns():
+    fake = FakeNotion()
+    pn.provision(PARENT_RAW, notion=fake)
+    assert fake.databases.created[3]["properties"] == {
+        "Company":      {"title": {}},
+        "Greenhouse":   {"rich_text": {}},
+        "Lever":        {"rich_text": {}},
+        "Ashby":        {"rich_text": {}},
+        "Last Checked": {"date": {}},
+    }
+
+
 def test_unique_id_rejection_falls_back_without_job_id():
     """A pinned API that rejects the newer unique_id type must not sink the whole provision."""
     fake = FakeNotion()
     fake.databases.fail_unique_id = True
-    tracker_id, scratch_id, restricted_id = pn.provision(PARENT_RAW, notion=fake)
+    tracker_id, scratch_id, restricted_id, target_companies_id = pn.provision(PARENT_RAW, notion=fake)
 
     tracker_props = fake.databases.created[0]["properties"]
     assert "Job ID" not in tracker_props
     assert "Status" in tracker_props  # everything else still landed
-    assert tracker_id and scratch_id and restricted_id
+    assert tracker_id and scratch_id and restricted_id and target_companies_id
 
 
 # ── normalize_page_id() — accept a share link or a raw id ─────────────────────
@@ -214,7 +230,7 @@ def test_init_wizard_reuses_existing_db_when_declined(tmp_path, monkeypatch, cle
 
     provision_calls = []
     monkeypatch.setattr("scripts.provision_notion.provision",
-                        lambda parent: provision_calls.append(parent) or ("x", "y", "z"))
+                        lambda parent: provision_calls.append(parent) or ("x", "y", "z", "w"))
 
     assert run.init_wizard() == 0
     assert provision_calls == []  # never provisioned — existing DB was reused
@@ -230,7 +246,7 @@ def test_init_wizard_provisions_and_persists_ids(tmp_path, monkeypatch, cleanup_
     answers = iter(["tok-123", "parent-xyz", "n", "n"])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
     monkeypatch.setattr("scripts.provision_notion.provision",
-                        lambda parent: ("trk-id", "scr-id", "res-id"))
+                        lambda parent: ("trk-id", "scr-id", "res-id", "tc-id"))
 
     assert run.init_wizard() == 0
 
@@ -239,6 +255,7 @@ def test_init_wizard_provisions_and_persists_ids(tmp_path, monkeypatch, cleanup_
     assert "NOTION_DB_ID=trk-id" in env_text
     assert "NOTION_SCRATCH_PAGE_ID=scr-id" in env_text
     assert "NOTION_RESTRICTED_COMPANIES_PAGE_ID=res-id" in env_text
+    assert "NOTION_TARGET_COMPANIES_PAGE_ID=tc-id" in env_text
     # The declined profile block wrote no config/profile.json.
     assert not (tmp_path / "config" / "profile.json").exists()
 
@@ -272,7 +289,7 @@ def test_init_wizard_profile_section_writes_profile_json(tmp_path, monkeypatch, 
     ])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
     monkeypatch.setattr("scripts.provision_notion.provision",
-                        lambda parent: ("trk-id", "scr-id", "res-id"))
+                        lambda parent: ("trk-id", "scr-id", "res-id", "tc-id"))
 
     assert run.init_wizard() == 0
 
