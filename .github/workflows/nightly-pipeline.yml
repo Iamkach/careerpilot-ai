@@ -8,11 +8,11 @@ name: Nightly job search pipeline
 # sense off-hours: at midnight the subscription's 5-hour usage window isn't competing with any
 # interactive Claude Code session, so it costs no marginal $ instead of contending with daytime use.
 #
-# NOTE: cron below is UTC and has no timezone concept — 07:00 UTC ≈ midnight US Central (CST,
-# UTC-6) / 1am CDT (UTC-5). Adjust the hour to match your local off-hours window and DST offset.
+# NOTE: cron below is UTC and has no timezone concept — 08:30 UTC ≈ 2:30am US Central (CST,
+# UTC-6) / 3:30am CDT (UTC-5). Adjust the hour to match your local off-hours window and DST offset.
 on:
   schedule:
-    - cron: "0 7 * * *"
+    - cron: "30 8 * * *"
   workflow_dispatch:
     inputs:
       mode:
