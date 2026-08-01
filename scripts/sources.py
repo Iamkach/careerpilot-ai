@@ -54,8 +54,11 @@ ATS_TOKENS_PATH = ROOT / "config" / "ats_tokens.json"
 # docs/refinement-plans/sourcing/scraping-sources.md). Replaces bebity's $29.99/mo
 # rental, whose payload never matched its schema (see git history for the bug).
 LINKEDIN_ACTOR = "valig~linkedin-jobs-scraper"
-# misceres~indeed-scraper: maintained successor to the deprecated bebity Indeed actor.
-INDEED_ACTOR   = "misceres~indeed-scraper"
+# valig~indeed-jobs-scraper: same publisher as LINKEDIN_ACTOR, pay-per-event at
+# ~$0.07-0.10/1K jobs — misceres~indeed-scraper (the prior default) is pay-per-event at
+# $3.00/1K, ~30x more expensive for the same "keyword -> US listings" job. Swapped 2026-07
+# once Apify cost became a concern; see scrape_indeed() for the schema differences.
+INDEED_ACTOR   = "valig~indeed-jobs-scraper"
 
 LINKEDIN_MAX = 25
 INDEED_MAX   = 25
@@ -111,7 +114,7 @@ def _apify_run(actor: str, payload: dict, poll: int = 40) -> list[dict]:
 
 def _parse_salary(job: dict) -> str:
     """Extract a human-readable salary string from any field the actor returns."""
-    for key in ("salaryRange", "salary", "compensationRange", "pay"):
+    for key in ("salaryRange", "salary", "compensationRange", "pay", "baseSalary"):
         val = job.get(key)
         if val:
             if isinstance(val, dict):
@@ -220,19 +223,17 @@ def scrape_linkedin(role: str, max_results: int = LINKEDIN_MAX) -> list[dict]:
     return results
 
 
-# ── 1b. Indeed (misceres~indeed-scraper) ─────────────────────
+# ── 1b. Indeed (valig~indeed-jobs-scraper) ────────────────────
 
 def scrape_indeed(role: str, max_results: int = INDEED_MAX) -> list[dict]:
     """Scrape Indeed for `role` in the US posted in the last day."""
     log(f"  [Indeed] Scraping: '{role}'")
     payload = {
-        "position":            role,
-        "country":             "US",  # misceres validates a strict uppercase enum
-        "location":            "",          # blank = nationwide
-        "maxItemsPerSearch":   max_results,
-        "parseCompanyDetails": False,
-        "saveOnlyUniqueItems": True,
-        "followApplyRedirects": False,
+        "title":      role,
+        "country":    "us",           # lowercase ISO 3166-1 alpha-2, per this actor's schema
+        "location":   "",             # blank = nationwide
+        "limit":      max_results,
+        "datePosted": "1",            # past 24 hours
     }
     try:
         items = _apify_run(INDEED_ACTOR, payload)
@@ -248,17 +249,33 @@ def scrape_indeed(role: str, max_results: int = INDEED_MAX) -> list[dict]:
         )
         if not url:
             continue
-        posted_raw = job.get("postingDateParsed") or job.get("date")
+
+        employer = job.get("employer") or {}
+        location = job.get("location") or {}
+        if isinstance(location, dict):
+            location_str = (
+                location.get("formatted") or location.get("city")
+                or location.get("countryName") or ""
+            )
+        else:
+            location_str = location or ""
+
+        description = job.get("description")
+        if isinstance(description, dict):
+            description = description.get("text") or ""
+
+        posted_raw = job.get("datePublished") or job.get("dateOnIndeed") or job.get("date")
+
         results.append({
             "url":         url,
-            "title":       job.get("positionName") or job.get("title") or role,
-            "company":     job.get("company") or "",
-            "location":    job.get("location") or "",
-            "description": job.get("description") or "",
+            "title":       job.get("title") or job.get("positionName") or role,
+            "company":     employer.get("name") if isinstance(employer, dict) else (job.get("company") or ""),
+            "location":    location_str,
+            "description": description or "",
             "source":      "indeed",
             "posted_date": _to_iso_date(posted_raw),
             "applicant_count": None,
-            "salary_range":    "",
+            "salary_range":    _parse_salary(job),
         })
     log(f"  [Indeed] Got {len(results)} listings for '{role}'")
     return results

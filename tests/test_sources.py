@@ -107,6 +107,48 @@ def test_collapse_by_fingerprint_keeps_distinct_jobs_separate():
     assert len(sources.collapse_by_fingerprint(jobs)) == 2
 
 
+# ── scrape_indeed (valig~indeed-jobs-scraper output shape) ─────────────────
+
+def test_scrape_indeed_parses_nested_employer_location_and_salary(monkeypatch):
+    fake_item = {
+        "url": "https://www.indeed.com/viewjob?jk=abc123",
+        "title": "Senior Software Engineer",
+        "employer": {"name": "Stripe"},
+        "location": {"formatted": "San Francisco, CA", "city": "San Francisco"},
+        "description": {"text": "Build things."},
+        "datePublished": "2026-07-30T00:00:00.000Z",
+        "baseSalary": {"min": 175000, "max": 250000},
+    }
+    monkeypatch.setattr(sources, "_apify_run", lambda actor, payload, **k: [fake_item])
+
+    results = sources.scrape_indeed("Senior Software Engineer", max_results=5)
+
+    assert len(results) == 1
+    job = results[0]
+    assert job["url"] == "https://www.indeed.com/viewjob?jk=abc123"
+    assert job["company"] == "Stripe"
+    assert job["location"] == "San Francisco, CA"
+    assert job["description"] == "Build things."
+    assert job["posted_date"] == "2026-07-30"
+    assert job["salary_range"] == "175000–250000"
+    assert job["source"] == "indeed"
+
+
+def test_scrape_indeed_skips_items_with_no_url(monkeypatch):
+    monkeypatch.setattr(
+        sources, "_apify_run",
+        lambda actor, payload, **k: [{"title": "No URL Job"}],
+    )
+    assert sources.scrape_indeed("Role", max_results=5) == []
+
+
+def test_scrape_indeed_returns_empty_list_on_actor_failure(monkeypatch):
+    def _raise(*a, **k):
+        raise RuntimeError("actor run failed")
+    monkeypatch.setattr(sources, "_apify_run", _raise)
+    assert sources.scrape_indeed("Role", max_results=5) == []
+
+
 # ── title_matches_targets ──────────────────────────────────────────────────
 
 def test_title_matches_targets_all_tokens_present(monkeypatch):
