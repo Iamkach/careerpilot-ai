@@ -70,9 +70,19 @@ def test_long_pattern_words_allow_prefix_match():
                                   "open to relocation")
 
 
-def test_preset_bank_never_fabricates_a_history_answer():
+def test_preset_bank_never_fabricates_a_history_answer(monkeypatch):
     """Questions of fact about the candidate's history ship blank on purpose: a fabricated
-    "No" is a false statement on a real application."""
+    "No" is a false statement on a real application.
+
+    This asserts the checked-in default contract, not whatever a given machine's git-ignored
+    config/application_profile.json happens to hold — `_apply_saved_profile()` overlays that
+    file into COMMON_QUESTION_PRESETS in place (config/settings.py), so on a machine where
+    `run.py --setup-profile` has actually been run with real (non-blank) history answers, this
+    dict no longer matches the shipped defaults. Force the three history patterns back to blank
+    for the duration of the test so it verifies the code's contract, not local machine state.
+    """
+    for pattern in ("ever interviewed", "referred to this position", "previously been employed"):
+        monkeypatch.setitem(autoapply.COMMON_QUESTION_PRESETS, pattern, "")
     for label in ("Have you ever interviewed at Acme before?",
                   "Were you referred to this position by a current employee?",
                   "Have you previously been employed with Acme?"):
