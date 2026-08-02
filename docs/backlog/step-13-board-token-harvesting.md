@@ -1,6 +1,8 @@
 # Step 13 — Board-token harvesting (observe ATS boards instead of guessing them)
 
-**Status:** finalized, queued, **not started.**
+**Status:** finalized, queued — **re-scoped 2026-07-31.** Phase 1 is now scrape-time
+self-confirmation only (`job["url"]`, no `apply_url`, no redirect flip, no LinkedIn touch). See
+"Verification spike result (2026-07-30)" and "Re-scope decision (2026-07-31)" below.
 **Priority:** P2 — nothing is broken, but ATS-board coverage is stuck at ~23% and cannot improve
 on its own. Every run pays LinkedIn/Indeed actor cost for jobs whose employer board we could be
 crawling for free.
@@ -89,27 +91,99 @@ Notion. Step 13 grows the *token* the same way the seed list already grows.
 
 ---
 
-## Phase 1 — harvest from data already fetched (the whole value; S)
+## Verification spike result (2026-07-30)
 
-### 1a. Carry the apply URL on the job dict
+Ran the "Before writing 1b" check the doc requires — `scripts/spike_step13_apply_url_fields.py`,
+one live call per actor, `role="Software Engineer"`, `n=10`. Full raw items in
+`output/spike_step13_raw_items.json` (git-ignored, local only).
 
-`scripts/sources.py` — `scrape_linkedin()` (`:205`) and `scrape_indeed()` (`:251`) each add one key
-to the emitted dict:
+**LinkedIn (`valig~linkedin-jobs-scraper`)** — dead end. `applyType: "EXTERNAL"` on all 10 items
+confirms these are externally-hosted jobs (the exact population this feature targets), but
+`applyUrl` is present in the schema and **empty on all 10**. `jobUrl`/`companyApplyUrl` also
+empty; `companyUrl` only reaches the LinkedIn company page, not a board. No field in this actor's
+payload carries a board URL. §1a's assumption for LinkedIn is falsified — not "unlikely", falsified.
 
-```python
-"apply_url": job.get("externalApplyLink") or job.get("applyUrl")
-             or job.get("companyApplyUrl") or "",
-```
+**Indeed (`misceres~indeed-scraper`) with the doc's assumed default, `followApplyRedirects:
+False`** — also a dead end, for a subtler reason. `externalApplyLink` populated 4/10, so the field
+name in §1a was right, but the *content* is wrong: values are Indeed's own
+`indeed.com/applystart?jk=...` tracking redirect, not the employer's board URL
+(`parse_board_url()` would return `None` on all of them — not a Greenhouse/Lever/Ashby host).
 
-Purely additive. Every downstream consumer (`collapse_by_fingerprint`, `_pre_filter`,
-`_notion_write_job`) reads named keys, so an extra key is inert — **no other call site changes.**
+**Indeed with `followApplyRedirects: True` (Phase 2's escape hatch, decision 4)** — this is the one
+that works. `externalApplyLink` populated only 1/10 at this sample size, but that one resolved to
+`https://jobs.lever.co/BlueMatrix/105b45d9-a5ac-45c2-8acc-f38b10b8afda?lever-source=Indeed` — a
+real, harvestable Lever token. Wall time was statistically indistinguishable from the no-redirect
+run (43.6s vs 43.4s at n=10) — but that's too small a sample to trust for the actor-time-cost
+question §5 of Phase 2 asks; re-check at `max_results=25` across a few roles before deciding it's
+free.
 
-> **Unverified assumption — check first.** The exact field names each actor returns are inferred
-> from the existing `url`-fallback chains (`:184`–`:187`, `:245`–`:247`), not from a captured
-> payload. Before writing 1b, dump one real `_apify_run()` response per actor and confirm which of
-> `externalApplyLink` / `applyUrl` / `companyApplyUrl` is actually populated and how often. **If
-> the harvest rate is near zero, stop — Phase 1's premise is wrong** and the fallback is Phase 2's
-> `followApplyRedirects`, not more parsing.
+**Consequence — Phase 1 is re-scoped, not just deferred.** §1a's "carry the apply URL on the job
+dict" step as originally written (parse whichever of `externalApplyLink`/`applyUrl`/
+`companyApplyUrl` the *default* payloads happen to populate) harvests nothing from either actor.
+The only path with a real signal is Indeed + `followApplyRedirects: True`, which the original doc
+filed under **Phase 2** on cost grounds alone. That gate is now evidence-based, not speculative:
+flip it and Phase 1's real yield is "Indeed only, ~10% hit rate at n=10, `Lever`/`Greenhouse`/
+`Ashby` hosts only." Before writing 1b/1c for real:
+
+1. Drop LinkedIn from Phase 1's scope entirely — `scrape_linkedin()`'s §1a edit is not worth
+   making; nothing populates it. Re-open only if a future actor version or a different LinkedIn
+   payload shape is confirmed to carry a board link.
+2. Fold Phase 2's redirect flip into Phase 1: `scrape_indeed()` (`scripts/sources.py:234`) sets
+   `followApplyRedirects: True` and reads `externalApplyLink` for real, gated behind a setting per
+   the original Phase 2 text (so it can be flipped off if the actor-time cost turns out non-trivial
+   at production volume).
+3. Re-run this spike at `max_results=25` across 3–4 `TARGET_ROLES` before committing to "no
+   measurable cost" — n=10/one role is not enough to size the wall-time delta the doc's Phase 2
+   text explicitly asks to measure.
+4. §1b/§1c (`parse_board_url()`, `harvest_board_tokens()`) are unaffected by this finding — they
+   still do useful work once fed a real `apply_url`, which after this re-scope means an Indeed
+   `externalApplyLink` (redirect-following) rather than the originally-assumed
+   LinkedIn/Indeed pair.
+
+---
+
+## Re-scope decision (2026-07-31)
+
+Before writing 1b/1c for real, a second data point surfaced: `docs/refinement-plans/auto-apply/
+sourcing-bottleneck-analysis.md` — a doc `docs/backlog/step-15-application-prefill-extension.md`
+explicitly marks "do not re-derive" — ran the *same* `followApplyRedirects: True` measurement one
+day earlier, at n=20, and got a materially different answer than this doc's own 2026-07-30 spike
+(n=10, one role):
+
+| | sourcing-bottleneck-analysis (2026-07-29, n=20) | this doc's spike (2026-07-30, n=10) |
+|---|---|---|
+| Wall-clock cost | **+64%** (33.0s → 54.1s / 20 items) against `_apify_run()`'s 400s poll budget | statistically indistinguishable (43.6s vs 43.4s) |
+| What the recovered links point to | 4/4 custom career sites — **zero** Greenhouse/Lever/Ashby/Workday | 1/1 real Lever token |
+
+Both samples are too small to trust on their own, and they disagree on both axes (cost and hit
+composition). Rather than run a third spike to break the tie, the redirect-following path is
+**parked, not resolved** — see "Deferred" below. Consequence for Phase 1:
+
+1. **§1a (carrying `apply_url` from LinkedIn/Indeed) is dropped entirely**, not just re-scoped —
+   LinkedIn confirmed empty (2026-07-30 spike, corroborated by the 2026-07-29 analysis's 0/20), and
+   Indeed's only populated path (`followApplyRedirects: True`) is the contested one above.
+2. **Phase 1's harvest source becomes `job["url"]` only** — a job already sourced via
+   `greenhouse`/`lever`/`ashby` (`BOARD_SOURCES`) carries its own board URL as `url`. Parsing it
+   back through `parse_board_url()` doesn't discover a *new* company, but it **upgrades an already-
+   correct guessed token to `provenance: "observed"`**, permanently exempting it from the 30-day
+   re-probe. This is real but smaller than the doc originally promised: it does not touch any of
+   the 77 all-null companies, since none of them have a board-sourced job to self-confirm from by
+   definition. Growing past that 77 is Step 14 (`TARGET_COMPANIES`) and, later, Step 15's live-page
+   feed below — not this phase.
+3. **A second, independent harvest feed will exist once Step 15 ships.** Step 15's browser
+   extension bridge reads the *live apply-page URL* on every `/plan` request (already required for
+   `identify_job()` and the `_READONLY_CHANNELS` check) — a human standing on a real apply form is a
+   stronger signal than anything Apify returns, confirmed by definition, no second-guessing needed.
+   That feed should call the same `parse_board_url()` this doc defines and write through the same
+   cache contract (§1c), just from `scripts/autoapply_server.py` instead of `scripts/stage1_scrape.py`.
+   Not built here — Step 15 isn't started — but the schema (`provenance`, `observed_from`, `checked`)
+   is designed to take that second writer without change. See the cross-reference in Step 15's doc.
+
+### 1a. (dropped)
+
+LinkedIn/Indeed apply-URL harvesting is out of scope — see "Re-scope decision" above. Re-open only
+if a future Apify actor version, a different LinkedIn payload shape, or a resolved
+`followApplyRedirects` cost question changes the evidence.
 
 ### 1b. `parse_board_url(url) -> tuple[str, str] | None`
 
@@ -126,18 +200,21 @@ return `(ats_name, token)` or `None`.
   | greenhouse | `boards.greenhouse.io/{t}/jobs/{id}`, `job-boards.greenhouse.io/{t}/…`, `boards.greenhouse.io/embed/job_app?for={t}` | `{t}` |
   | lever | `jobs.lever.co/{t}/{id}` | `{t}` |
   | ashby | `jobs.ashbyhq.com/{t}/{id}` | `{t}` |
-- **Reuse, don't duplicate:** `parse_greenhouse_url()` (`scripts/autoapply.py:125`) already handles
-  all three Greenhouse shapes including the `embed/job_app` variant. Either import it or lift the
-  shared parsing into `sources.py` and have `autoapply` import from there — do **not** write a
-  second Greenhouse URL parser that can drift from the first.
+- **Canonical location: `sources.py`, not `autoapply.py`.** `parse_greenhouse_url()`
+  (`scripts/autoapply.py:125`) already handles all three Greenhouse shapes including the
+  `embed/job_app` variant. `sources.py` already owns `BOARD_SOURCES`/`host_matches()`/token
+  parsing, so its logic moves into `parse_board_url()` here and `autoapply.py` imports the shared
+  function instead of keeping its own — do **not** write a second Greenhouse URL parser that can
+  drift from the first. No call-site signature changes in `autoapply.py`.
 - Pure function, no I/O → unit-testable with a table of real URLs and lookalikes.
 
 ### 1c. `harvest_board_tokens(jobs) -> dict`
 
 New function in `scripts/sources.py`, next to `discover_tokens()`. For each job, run
-`parse_board_url()` over its `apply_url` **and** its `url` (an ATS-sourced job's own `url` is
-already a board URL — free confirmation of a token we may only have guessed). On a hit, merge into
-the loaded token cache under the job's `company`:
+`parse_board_url()` over its `url` (an ATS-sourced job's own `url` **is** its board URL — free
+confirmation of a token we may only have guessed; see "Re-scope decision" above for why this is the
+only field fed in, not `apply_url`). On a hit, merge into the loaded token cache under the job's
+`company`:
 
 ```json
 "Abridge": {
@@ -185,9 +262,9 @@ no network, monkeypatch `ATS_TOKENS_PATH` to a `tmp_path`.
   token; **lookalike hosts** (`evilgreenhouse.io`, `notlever.co`, `acme.com/?x=jobs.lever.co`) must
   return `None` — this is the security-relevant case and mirrors the assertion
   `tests/test_autoapply_plan.py` already makes for `detect_apply_channel()`.
-- `harvest_board_tokens()`: observed beats guessed; guessed never overwrites observed; a job with
-  no `apply_url` and a non-board `url` is a no-op; a Greenhouse observation whose probe fails is
-  **not** written.
+- `harvest_board_tokens()`: observed beats guessed; guessed never overwrites observed; a job with a
+  non-board `url` (e.g. a LinkedIn/Indeed listing) is a no-op; a Greenhouse observation whose probe
+  fails is **not** written.
 - `discover_tokens()` skips an `"observed"` entry even when `checked` is >30 days old.
 - Cache entries lacking `provenance` still behave exactly as today (back-compat).
 
@@ -200,10 +277,6 @@ Extend `parse_board_url()` to recognize, and `harvest_board_tokens()` to record 
 
 `{tenant}.wd{N}.myworkdayjobs.com` · `jobs.smartrecruiters.com/{token}` ·
 `apply.workable.com/{token}` · `careers.icims.com` · `{co}.recruitee.com` · `{co}.bamboohr.com/careers`
-
-Also in scope if Phase 1's harvest rate proves thin: flip Indeed's `followApplyRedirects` to `True`
-(`scripts/sources.py:234`) so Indeed resolves the redirect for us. Gate it behind a setting and
-measure the actor-time cost — this is the *only* sanctioned redirect-following path (decision 4).
 
 **Output of this phase is data, not capability**: after a few nightly runs the registry answers
 "which ATS does each of my target companies use", which is what makes the Phase 3 build/skip call
@@ -242,29 +315,40 @@ the Apify path is cheaper than the code.
   for ATS links). A real per-company network cost with a `max_new_probes`-style budget; only worth
   it if Phases 1–2 leave a large gap.
 - **Following LinkedIn apply redirects** — excluded by rule, see decision 4. Not deferred; rejected.
+- **Flipping Indeed's `followApplyRedirects` to harvest `externalApplyLink`.** Parked, not
+  rejected — see "Re-scope decision" above. Two spikes disagree on both cost (+64% vs. no measurable
+  delta) and yield composition (0/4 vs. 1/1 ATS hosts) at samples too small to trust either way.
+  Revisit only with a properly sized measurement (`max_results=25`+ across several `TARGET_ROLES`),
+  and only if Step 15's live-page feed (see below) turns out not to cover enough volume on its own.
+- **Step 15's live-apply-page harvest feed.** The stronger, confirmed-not-guessed signal described
+  in "Re-scope decision" point 3 — belongs to `docs/backlog/step-15-application-prefill-extension.md`
+  once that story is implemented, not to this one. This doc only commits to keeping
+  `parse_board_url()` / the cache schema stable enough for that feed to plug in without rework.
 
 ---
 
 ## Verification
 
-1. **Before writing 1b:** dump one real `_apify_run()` response per actor; confirm which apply-URL
-   field is populated and estimate the harvest rate. Near-zero ⇒ stop and reconsider (see 1a).
-2. `pytest -v` green, including `tests/test_sources_board_harvest.py`. No API keys, no network.
-3. Back up `config/ats_tokens.json`, run `python run.py --stage 1`, then diff: new/changed entries
+1. `pytest -v` green, including `tests/test_sources_board_harvest.py`. No API keys, no network.
+2. Back up `config/ats_tokens.json`, run `python run.py --stage 1`, then diff: new/changed entries
    should carry `provenance: "observed"`, and no existing token should be downgraded to a guess.
-4. Confirm the log line reports a non-zero harvest count, and that a company newly given an
-   observed token is crawled via `BOARD_SOURCES` on the **next** run (per 1d's ordering note).
-5. Re-measure the cache after ~5 nightly runs. The number that decides Phase 2/3 is the
-   observed-token count versus today's baseline of **23 / 100**.
+3. Confirm the log line reports a non-zero harvest count (expected: small — self-confirmation of
+   already-successful guesses among board-sourced jobs, not new companies), and that a
+   newly-observed company's token is skipped on the next `discover_tokens()` re-probe pass.
+4. Re-measure the cache after ~5 nightly runs. This phase does **not** move the 23/100 baseline by
+   itself — track `provenance: "observed"` count as its own number, separate from total hit count.
 
 ## Files
 
-- **Modify:** `scripts/sources.py` — `scrape_linkedin()`, `scrape_indeed()` (1a); new
-  `parse_board_url()`, `harvest_board_tokens()` (1b/1c); `discover_tokens()` provenance skip (1e)
+- **Modify:** `scripts/sources.py` — new `parse_board_url()` (absorbs `autoapply.py`'s
+  `parse_greenhouse_url()`), `harvest_board_tokens()` (1b/1c); `discover_tokens()` provenance
+  skip (1e)
 - **Modify:** `scripts/stage1_scrape.py` — `_scrape_pass()` harvest call + import (1d)
-- **Modify (maybe):** `scripts/autoapply.py` — if `parse_greenhouse_url()` moves to `sources.py`
-  rather than being imported (1b)
+- **Modify:** `scripts/autoapply.py` — `parse_greenhouse_url()` removed, imports the shared
+  function from `scripts.sources` instead (1b)
 - **New:** `tests/test_sources_board_harvest.py` (1f)
 - **Modify:** `CLAUDE.md` — the "Multi-source sourcing" section's `discover_tokens()` paragraph
-  gains the observe-vs-guess distinction and the `provenance` field
-- **No change:** Notion schema, `config/settings.py` (Phase 1 introduces no new setting)
+  gains the observe-vs-guess distinction and the `provenance` field, described honestly as
+  self-confirmation of board-sourced jobs' own URLs, not a new-coverage mechanism
+- **No change:** Notion schema, `config/settings.py` (Phase 1 introduces no new setting),
+  `scripts/sources.py`'s `scrape_linkedin()` / `scrape_indeed()` (apply-URL harvesting dropped)
