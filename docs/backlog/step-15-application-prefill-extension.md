@@ -179,6 +179,15 @@ new page-side JSON-LD/`og:title` scraping, and its value comes from a stale back
 out of scope. Keep the *rule*: ≥2 matches → fall through to ask, never guess whose resume to
 attach. Revisit only if a popup counter shows rung 3 firing often.
 
+**Board-token harvest, piggybacked on the same URL read (cross-ref: `docs/backlog/
+step-13-board-token-harvesting.md`).** `identify_job()` already has to read the live page URL for
+rung 1 and the `_READONLY_CHANNELS` check — a human standing on a real apply form is a stronger,
+already-confirmed signal than anything Stage 1 scrapes or guesses. On each `/plan` request, also
+call `sources.parse_board_url(live_page_url)` and, on a hit, write through Step 13's same
+`harvest_board_tokens()` cache contract (`provenance: "observed"`, `observed_from`, `checked`) —
+one added call, not a new registry or schema. Not required for 3a's go/no-go checkpoint; land it
+whenever convenient once the bridge exists.
+
 ### Resume attach — the highest-frequency friction
 
 Measured pain: locating the tailored resume path in Notion, then hunting the file in the OS
