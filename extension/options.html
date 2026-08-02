@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CareerPilot Auto-Apply — Settings</title>
+<style>
+  body { font: 14px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 480px; margin: 2rem; }
+  label { display: block; margin-bottom: 10px; }
+  input { width: 100%; padding: 4px 6px; box-sizing: border-box; }
+  code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+  #status { color: #0a7a34; }
+</style>
+</head>
+<body>
+  <h1>Bridge connection</h1>
+  <p>Run <code>python run.py --serve</code>, then paste the token printed on start (also saved
+  to <code>config/extension_token.txt</code>) below.</p>
+  <label>Port
+    <input id="port" type="number" min="1" max="65535" value="8765">
+  </label>
+  <label>Token
+    <input id="token" type="text" autocomplete="off">
+  </label>
+  <button id="save" type="button">Save</button>
+  <p id="status"></p>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -3,11 +3,13 @@
 **Status:** finalized, queued, not started (2026-07-30). Size **L** overall, split
 2026-07-30 into seven small stories (`step-15a`…`step-15g`) so each ships and is verifiable on
 its own, then extended 2026-07-31 with two more (`step-15h`, `step-15i`) folding in a docked
-side-panel job launcher — see "Sub-stories" below. This doc is now the **epic**: shared
-why/architecture/decisions that don't belong to any one increment. Depends on Step 10 Phases 1–2
-(done). Folded from `docs/refinement-plans/auto-apply/browser-extension-prefill.md`, which is
-deleted per the one-doc-per-queued-story rule (the split below is a deliberate, noted exception to
-that rule — each sub-story is still one doc per *increment*, not a duplicate spec).
+side-panel job launcher, and extended again 2026-08-01 with a tenth (`step-15j`) so the bridge
+auto-launches instead of requiring a manually-run terminal command — see "Sub-stories" below.
+This doc is now the **epic**: shared why/architecture/decisions that don't belong to any one
+increment. Depends on Step 10 Phases 1–2 (done). Folded from
+`docs/refinement-plans/auto-apply/browser-extension-prefill.md`, which is deleted per the
+one-doc-per-queued-story rule (the split below is a deliberate, noted exception to that rule —
+each sub-story is still one doc per *increment*, not a duplicate spec).
 
 ## Goal
 
@@ -145,12 +147,16 @@ security/`Applied`-invariant context above rather than repeating it.
 | [step-15g-confirm-applied.md](step-15g-confirm-applied.md) | 5 | `POST /confirm-applied` + panel button | Removes the Notion round-trip | S |
 | [step-15h-job-list-launcher.md](step-15h-job-list-launcher.md) | 6 | `GET /jobs/ready` + side-panel job list + extension-initiated navigation (`identify_job()` rung 0) | Extension picks the job instead of the human navigating first | S |
 | [step-15i-multi-session-state.md](step-15i-multi-session-state.md) | 7 | Per-tab session state (`Map<tabId, {...}>`) in `background.js`, soft cap on concurrent sessions | N parallel job/panel sessions instead of one at a time | S |
+| [step-15j-standalone-native-launch.md](step-15j-standalone-native-launch.md) | 8 | Native-messaging host that auto-launches `python run.py --serve` and auto-populates the token, so the extension never requires a manually-run terminal command | Removes the standing setup/launch step for every session, not just the first | M |
 
 Order matters: `a`→`b`→`c` are sequential (each needs the previous endpoint/scaffold). `d` (resume
 attach) is the **go/no-go checkpoint** — see Risk 2 below — decide there before investing in `e`/`f`/`g`,
 which are independent of each other and of `d` once `c` exists. `h` (job list + launcher) depends
 on `b` (needs the rung-0 identify path) and `c` (needs the panel shell to render into), and is
-independent of `d`/`e`/`f`/`g`. `i` (multi-session state) depends only on `h`. The docs closeout
+independent of `d`/`e`/`f`/`g`. `i` (multi-session state) depends only on `h`. `j` (standalone
+native launch) depends only on `a` (the `--serve`/token-file/`--health` contract it wraps) and `c`
+(the panel/options surfaces it edits) — independent of `d` through `i`, since it changes how the
+bridge process starts, not anything it serves once started. The docs closeout
 (`CLAUDE.md`/`CHANGELOG.md`) is not its own numbered story; each sub-story updates its own slice as
 it ships (see "Testing a Change" in the root `CLAUDE.md`), and "Docs lifecycle" below tracks the
 one-time doc moves already done plus what's left at final close-out.
@@ -230,7 +236,13 @@ instruction (`:207-210`) and `refinement-plans/README.md:55-60`; this paragraph 
   makes — and ATS token/board write-back was **deferred to Step 13**, not built here. Source doc
   **deleted**; both `README.md` index files updated.
 
-**Remaining, at final close-out (after `step-15i`):** `CLAUDE.md` gets a "Layer 3 — browser
+**Done 2026-08-01, still before implementation started:** `step-15j` (standalone native launch)
+added: a native-messaging host that auto-starts the bridge and auto-populates the token, removing
+the manual `python run.py --serve` + copy-paste-token step on the happy path. No source doc to
+delete (designed directly as a queued story, not folded from a refinement-plan). `README.md`
+backlog index updated.
+
+**Remaining, at final close-out (after `step-15j`):** `CLAUDE.md` gets a "Layer 3 — browser
 extension" subsection under Stage 7 and the reformulated `Never Applied` paragraph
 (`:339-343`); `docs/CHANGELOG.md` gets a Step 15 entry, and a backfilled Step 10 entry if cheap —
 it currently has **none**.

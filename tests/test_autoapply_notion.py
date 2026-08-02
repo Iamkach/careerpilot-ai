@@ -63,14 +63,31 @@ def test_run_never_writes_applied(stage7, tmp_path, monkeypatch):
     assert all(p["status"] != "Applied" for p in stage7._pages.values())
 
 
-def test_source_has_no_submit_click():
-    """Layer 2 must contain no submit code path at all — not behind a flag, not behind config.
-    A grep-level assertion is crude but it is the one check that cannot be satisfied by a
-    subtly-wrong implementation."""
-    src = (Path(__file__).parent.parent / "scripts" / "autoapply_browser.py").read_text(
-        encoding="utf-8").lower()
-    for banned in ('click("submit', "click('submit", '.click()', "submit_button", "press(\"enter\")"):
-        assert banned not in src, f"browser layer must not submit: found {banned!r}"
+_SUBMIT_CLICK_BANNED = (
+    'click("submit', "click('submit", '.click()', "submit_button", 'press("enter")',
+)
+
+# The browser extension (step-15c on) gets the same submit-click ban as Layer 2, plus a
+# forward-looking scope check: confirm-applied/draft functionality doesn't exist until
+# step-15d/f/g, so its absence here catches scope creep landing early rather than on schedule.
+_EXTENSION_SCOPE_BANNED = _SUBMIT_CLICK_BANNED + (
+    "confirm-applied", '"applied"', "'applied'", "draft",
+)
+
+
+@pytest.mark.parametrize("relpath,banned", [
+    ("scripts/autoapply_browser.py", _SUBMIT_CLICK_BANNED),
+    ("extension/content.js", _EXTENSION_SCOPE_BANNED),
+    ("extension/panel.js", _EXTENSION_SCOPE_BANNED),
+])
+def test_source_has_no_submit_click(relpath, banned):
+    """Layer 2 (Playwright) must contain no submit code path at all — not behind a flag, not
+    behind config. The browser extension's content/panel scripts are held to the same bar plus
+    the scope check above. A grep-level assertion is crude but it is the one check that cannot
+    be satisfied by a subtly-wrong implementation."""
+    src = (Path(__file__).parent.parent / relpath).read_text(encoding="utf-8").lower()
+    for token in banned:
+        assert token not in src, f"{relpath} must not contain: {token!r}"
 
 
 # ── Invariant 2: unverified status writes don't silently re-queue work ────────
