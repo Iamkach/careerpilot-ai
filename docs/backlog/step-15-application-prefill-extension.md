@@ -1,8 +1,15 @@
 # Step 15 — Application pre-fill browser extension (Stage 7 Layer 3)
 
-**Status:** finalized, queued, not started (2026-07-30). Size **L**. Depends on Step 10 Phases 1–2
-(done). Folded from `docs/refinement-plans/auto-apply/browser-extension-prefill.md`, which is
-deleted per the one-doc-per-queued-story rule.
+**Status:** finalized, queued, not started (2026-07-30). Size **L** overall, split
+2026-07-30 into seven small stories (`step-15a`…`step-15g`) so each ships and is verifiable on
+its own, then extended 2026-07-31 with two more (`step-15h`, `step-15i`) folding in a docked
+side-panel job launcher, and extended again 2026-08-01 with a tenth (`step-15j`) so the bridge
+auto-launches instead of requiring a manually-run terminal command — see "Sub-stories" below.
+This doc is now the **epic**: shared why/architecture/decisions that don't belong to any one
+increment. Depends on Step 10 Phases 1–2 (done). Folded from
+`docs/refinement-plans/auto-apply/browser-extension-prefill.md`, which is deleted per the
+one-doc-per-queued-story rule (the split below is a deliberate, noted exception to that rule —
+each sub-story is still one doc per *increment*, not a duplicate spec).
 
 ## Goal
 
@@ -70,8 +77,14 @@ Chrome                                   127.0.0.1:8765 (python run.py --serve)
               fill status=="ready"       ◀──plan JSON───  readiness_report()         [unchanged]
  drafts.js    per-field Insert           ──POST /drafts─▶ draft_free_text_answers()  [unchanged]
  background.js  holds token, fetches     ──GET /resume──▶ resolve_tailored_resume()  [unchanged]
- popup.js     match display, Applied     ──POST /confirm-applied──▶ db_update_status_verified()
+ panel.js     match display, Applied     ──POST /confirm-applied──▶ db_update_status_verified()
 ```
+
+**Front door (`step-15h`):** the docked side panel lists jobs at `Status = Resume Tailored` via
+`GET /jobs/ready` (wraps `db_get_ready_to_apply()`, no new query logic), the user picks one, the
+extension opens that job's apply URL itself (`chrome.tabs.create`), and the panel switches to the
+plan view for that tab using the `page_id` it already knows — the rest of the flow above is
+unchanged. `step-15i` extends this to N such job/panel pairs running at once, one per tab.
 
 **Routing is off the live page URL, never the Notion row's URL** — those routinely differ, and that
 difference is the entire premise. `plan_for_job()` (`autoapply.py:669`) is therefore **not reused**;
@@ -113,38 +126,42 @@ Submit." It only assumed that hand was in Notion's UI.
 **What genuinely weakens:** today the guarantee is *physical* — no code path exists. After this,
 one process holds both a credential and a path to the write. The threat model shifts from "the tool
 lies" to "a bug or a future refactor reaches the write without a human keystroke." Compensating
-controls ship in v1, not later:
+controls ship in v1 (in `step-15g`, not later) — see that story for the control table.
 
-| # | Control |
-|---|---|
-| 1 | `WRITABLE_STATUSES` stays byte-identical. New `HUMAN_CONFIRMED_STATUS` / `CONFIRMABLE_STATUSES` live in `autoapply_server.py`; a test asserts the sets are disjoint |
-| 2 | Route is **`POST /confirm-applied`**, not a generic `POST /status`. The status literal is hard-coded in the handler body and the route **accepts no status field** — no data path from a computed value to the write |
-| 3 | Body requires `confirmed_by == "human"`, else 400 |
-| 4 | `page_id` (string) only; a list is explicitly rejected. "Mark the backlog applied" is structurally never one call away |
-| 5 | The confirm button lives in `popup.js`. `content.js` must contain no reference to `confirm-applied` or `applied` — enforced by extending the existing grep test |
-| 6 | Write via `db_update_status_verified()` (`utils.py:876`), setting `Date Applied` and `Application Log = "<date> Applied — human-confirmed via extension"`. Every tool-mediated `Applied` is labelled and auditable — this is what replaces the lost "cannot happen" proof |
+## Sub-stories
 
-Existing tests are **kept verbatim** (both still true, and now more load-bearing);
-`test_source_has_no_submit_click` (`:66`) is *parametrized* over more files rather than replaced.
-No Notion schema change needed — `Applied` is already a status.
+Split 2026-07-30 from the original monolithic checklist so each increment is independently
+plannable, testable, and shippable — a partial-progress state (e.g. stopping after `step-15d`'s
+go/no-go) is a coherent place to pause, not a half-finished feature. Each sub-story is
+self-contained (own scope, checklist, verification, files) but leans on the architecture/decisions/
+security/`Applied`-invariant context above rather than repeating it.
 
-## Implementation checklist
+| Story | Increment | What it delivers | Standalone value | Size |
+|---|---|---|---|---|
+| [step-15a-serve-bridge-scaffold.md](step-15a-serve-bridge-scaffold.md) | 0 | `run.py --serve`, token file, `GET /health`, loopback bind, `ThreadingHTTPServer` | Foundation only | S |
+| [step-15b-plan-endpoint-identify-job.md](step-15b-plan-endpoint-identify-job.md) | 1 | `POST /plan` + `identify_job()` (3 rungs) + `GET /resume/meta` | Machine-readable planner; `/resume/meta` alone kills the Notion round-trip | M |
+| [step-15c-extension-readonly-overlay.md](step-15c-extension-readonly-overlay.md) | 2 | Side-panel shell: scrape → badge/overlay, panel shows match + resume filename + Copy path | Already beats the HTML answer sheet; works on every site | S |
+| [step-15d-resume-attach.md](step-15d-resume-attach.md) | 3a | `GET /resume` bytes + DataTransfer attach only | **The headline win — go/no-go checkpoint** | M |
+| [step-15e-field-fill.md](step-15e-field-fill.md) | 3b | Fill text/select fields where `status == "ready"` | Removes repetitive typing | S |
+| [step-15f-essay-drafts.md](step-15f-essay-drafts.md) | 4 | Interactive draft panel + `POST /drafts` | Removes essay retyping | S |
+| [step-15g-confirm-applied.md](step-15g-confirm-applied.md) | 5 | `POST /confirm-applied` + panel button | Removes the Notion round-trip | S |
+| [step-15h-job-list-launcher.md](step-15h-job-list-launcher.md) | 6 | `GET /jobs/ready` + side-panel job list + extension-initiated navigation (`identify_job()` rung 0) | Extension picks the job instead of the human navigating first | S |
+| [step-15i-multi-session-state.md](step-15i-multi-session-state.md) | 7 | Per-tab session state (`Map<tabId, {...}>`) in `background.js`, soft cap on concurrent sessions | N parallel job/panel sessions instead of one at a time | S |
+| [step-15j-standalone-native-launch.md](step-15j-standalone-native-launch.md) | 8 | Native-messaging host that auto-launches `python run.py --serve` and auto-populates the token, so the extension never requires a manually-run terminal command | Removes the standing setup/launch step for every session, not just the first | M |
 
-| # | Increment | Standalone value |
-|---|---|---|
-| 0 | `run.py --serve [--port]`, token file, `GET /health`, loopback bind, `ThreadingHTTPServer` | — |
-| 1 | `POST /plan` + `identify_job()` (3 rungs) + `GET /resume/meta` | machine-readable planner; `/resume/meta` alone kills the Notion round-trip |
-| 2 | Extension read-only: scrape → badge/overlay, popup match + resume filename + **Copy path** | already beats the HTML answer sheet; works on every site |
-| **3a** | `GET /resume` bytes + **DataTransfer attach only** | **the headline win — go/no-go checkpoint** |
-| 3b | Fill text/select fields where `status == "ready"` | removes repetitive typing |
-| 4 | Draft panel + `POST /drafts` | removes essay retyping |
-| 5 | `POST /confirm-applied` + popup button | removes the Notion round-trip |
-| 6 | Docs (see bottom) | — |
+Order matters: `a`→`b`→`c` are sequential (each needs the previous endpoint/scaffold). `d` (resume
+attach) is the **go/no-go checkpoint** — see Risk 2 below — decide there before investing in `e`/`f`/`g`,
+which are independent of each other and of `d` once `c` exists. `h` (job list + launcher) depends
+on `b` (needs the rung-0 identify path) and `c` (needs the panel shell to render into), and is
+independent of `d`/`e`/`f`/`g`. `i` (multi-session state) depends only on `h`. `j` (standalone
+native launch) depends only on `a` (the `--serve`/token-file/`--health` contract it wraps) and `c`
+(the panel/options surfaces it edits) — independent of `d` through `i`, since it changes how the
+bridge process starts, not anything it serves once started. The docs closeout
+(`CLAUDE.md`/`CHANGELOG.md`) is not its own numbered story; each sub-story updates its own slice as
+it ships (see "Testing a Change" in the root `CLAUDE.md`), and "Docs lifecycle" below tracks the
+one-time doc moves already done plus what's left at final close-out.
 
-3a precedes 3b deliberately: the file attach carries **zero eligibility risk** (it fills no answer
-content), and it is the mechanism most likely to vary per site — measure it before investing in 3b.
-
-### Reused verbatim — this is the architectural claim, and it holds
+### Reused verbatim across every sub-story — this is the architectural claim, and it holds
 
 `build_application_plan()` `autoapply.py:401` · `readiness_report()` `:434` · `_resolve_field()`
 `:340` (incl. the `resume-missing` branch at `:347-350`, which makes "no Notion match" a supported
@@ -153,187 +170,32 @@ state with **no new code**) · `detect_apply_channel()` `:111` · `parse_greenho
 `resolve_tailored_resume()` `:465` (already handles `file://` and CI `raw.githubusercontent.com`) ·
 `draft_free_text_answers()` `:607` (already leaves `status`/`value` untouched at `:642`) ·
 `_resume_text_for()` `:647` · `db_get_jobs()` / `db_get_job_description()` /
-`db_update_status_verified()` at `utils.py:941` / `:919` / `:876`.
+`db_update_status_verified()` at `utils.py:941` / `:919` / `:876` · `db_get_ready_to_apply()`
+`utils.py:907` — backs `step-15h`'s `GET /jobs/ready`, no new Notion query logic.
 
-**The only genuinely new logic is `_dom_to_schema()`** — keep it a pure function so it unit-diffs
-against `SAMPLE_QUESTIONS`. Plus one extraction: `accepts_docx(accept_attr)` pulled out of
-`autoapply_browser.py:102-112` so the bridge and Layer 2 share one rule.
-
-### `identify_job()` — 3 rungs, not the originally-specced 5
-
-Candidate pool fetched once at boot and matched in-process. Pool is
-`WRITABLE_STATUSES | {"Resume Tailored"}` — **not** `Resume Tailored` alone, since Stage 7's `run()`
-moves rows off it (`autoapply.py:753`); a naive pool would miss exactly the jobs Stage 7 planned.
-
-1. **Normalized URL** — drop query/fragment, strip trailing `/apply`, fold `job-boards.`→`boards.`,
-   lowercase host, strip trailing slash. The workhorse. Exact-URL match is its degenerate case:
-   report the higher confidence, but skip the `db_find_job_by_url()` round-trip (it returns only a
-   page id, and no `db_get_job_by_page_id()` exists — rung 1 as originally specced forces a new
-   helper plus a second read).
-2. **Greenhouse `(board_token, job_id)`** via `parse_greenhouse_url()` — handles the `?gh_jid=` and
-   `embed/job_app` shapes that normalization alone misses (`autoapply.py:147-160`).
-3. **Ask** — popup lists candidates. With a pool near `AUTOAPPLY_DAILY_CAP`, a 2-second click.
-
-**Cut for v1: fingerprint matching.** It is the only rung that can produce a *wrong* match, needs
-new page-side JSON-LD/`og:title` scraping, and its value comes from a stale backlog — explicitly
-out of scope. Keep the *rule*: ≥2 matches → fall through to ask, never guess whose resume to
-attach. Revisit only if a popup counter shows rung 3 firing often.
-
-**Board-token harvest, piggybacked on the same URL read (cross-ref: `docs/backlog/
-step-13-board-token-harvesting.md`).** `identify_job()` already has to read the live page URL for
-rung 1 and the `_READONLY_CHANNELS` check — a human standing on a real apply form is a stronger,
-already-confirmed signal than anything Stage 1 scrapes or guesses. On each `/plan` request, also
-call `sources.parse_board_url(live_page_url)` and, on a hit, write through Step 13's same
-`harvest_board_tokens()` cache contract (`provenance: "observed"`, `observed_from`, `checked`) —
-one added call, not a new registry or schema. Not required for 3a's go/no-go checkpoint; land it
-whenever convenient once the bridge exists.
-
-### Resume attach — the highest-frequency friction
-
-Measured pain: locating the tailored resume path in Notion, then hunting the file in the OS
-attachment dialog, on every application.
-
-**Server.** `GET /resume/meta?page_id=` → `{filename, size, mime, abs_path}`, no bytes, so the popup
-shows *"will attach: X.docx"* before you click. `GET /resume?page_id=&accept=<input's accept attr>`
-→ bytes, with: a hard containment check (`Path(p).resolve()` must be under `RESUMES_DIR`, else 403 —
-the Notion DB is user-editable and the browser is the caller); the shared `accepts_docx()` rule,
-falling back to `render_docx.convert_docx_to_pdf()` for PDF-only forms (reusing Layer 2's decision
-at `autoapply_browser.py:115-123`); `Content-Disposition` filename.
-
-**Client.**
-
-```js
-const dt = new DataTransfer();
-dt.items.add(new File([bytes], filename, {type: mime, lastModified: Date.now()}));
-input.files = dt.files;
-input.dispatchEvent(new Event('input',  {bubbles: true}));
-input.dispatchEvent(new Event('change', {bubbles: true}));
-```
-
-**Dropzone strategy, three tiers:**
-1. **Find the hidden input.** Greenhouse, Ashby, Workday, Dropzone.js, react-dropzone, Uppy and
-   Filestack all still render a real `<input type=file>`, hidden via `display:none`/`opacity:0`/1px.
-   Query across the document **including open shadow roots**, do **not** filter on visibility, and
-   prefer the one nearest the labelled question container. Covers the large majority.
-2. **Synthesize a drop** — `dragenter`→`dragover`→`drop` carrying the same `DataTransfer`.
-   react-dropzone reads `event.dataTransfer.files` and accepts this.
-3. **Fail loudly, usefully** — badge the field and surface the resolved absolute path with a *Copy
-   path* button. Even this floor removes both the Notion lookup and the file hunt: paste into the
-   OS dialog's filename box.
-
-Do **not** attempt `input.click()` to open the OS dialog — user-gesture-gated and not scriptable.
-Do not imply otherwise in the UI.
-
-**Verify, never claim.** Read back `input.files[0]?.name` and report *"attached (verified)"* or
-*"not attached"* — `autoapply_browser.py`'s rule #2 applied to Layer 3.
-
-### Essays — review-and-insert, never auto-fill
-
-`draft_free_text_answers()` already has the right contract; the work is entirely in surfacing.
-
-- **Separate route `POST /drafts`**, not part of `/plan`: one AI call per question is 10–30s and
-  would block the fill, and drafting should be its own gesture. Gated on `AUTOAPPLY_DRAFT_ESSAYS`
-  (`settings.py:395`) and on `identify_job()` having matched (drafting needs the JD + resume text).
-  Unmatched → no draft; the field stays plain `review_required`.
-- **Enforcement is structural, not special-cased.** The filler iterates
-  `fields.filter(f => f.status === "ready")` — the same predicate shape as
-  `autoapply_browser.py:155`. A drafted field is `review_required`, so it is excluded by the *same*
-  predicate that already excludes it. **Add no `draft` branch to the fill path.**
-- **File separation makes that greppable:** fill loop in `content.js`, the entire draft panel and
-  per-field Insert in `drafts.js`. Assert `draft` never appears in `content.js`.
-- Insert is a separate gesture per field, never triggered by the main Fill button. After insert,
-  re-badge *"inserted — edit before submitting."*
-
-### LinkedIn / Indeed — server-side, keyed on the live URL
-
-`_READONLY_CHANNELS = {"linkedin", "indeed"}` from `detect_apply_channel(live_page_url)`. Enforced
-**in the bridge, not JS**, so a bug or a hand-edited content script cannot bypass it.
-`FILLABLE_CHANNELS` stays untouched — it governs the Playwright layer and should keep meaning
-exactly that.
-
-One post-pass after `build_application_plan()` rewrites every entry to `review_required` /
-`value: None` / `source: "channel read-only (linkedin/indeed) — never filled"`, independent of
-profile completeness.
-
-**Critical:** key on the **live page** URL, never the matched row's. A LinkedIn *posting* whose
-Apply button bounced you to a Greenhouse or Cisco form is a page that *should* be filled.
-
-**Line on `/resume`:** bytes are 403 on a read-only channel, but `/resume/meta` (filename + path) is
-allowed and Copy-path works. Displaying and copying a file path is not automated applying — it is
-the answer-sheet rule applied to a path. This is what makes the extension useful even on an Easy
-Apply form, and it materially de-risks the volume question.
-
-## Files
-
-**New:** `scripts/autoapply_server.py` (handler + `_dom_to_schema` + `identify_job` +
-`_READONLY_CHANNELS` + `HUMAN_CONFIRMED_STATUS`; **zero answer logic**) · `extension/`
-(`manifest.json`, `background.js`, `content.js`, `drafts.js`, `overlay.css`, `popup.*`,
-`options.*`) · `tests/test_autoapply_server.py` · `tests/test_autoapply_job_match.py` ·
-`tests/test_autoapply_applied_confirmation.py` · `tests/test_run_serve_wiring.py`.
-
-**Modified:** `run.py` (`--serve`/`--port`, mirroring the `--setup-profile` pattern at `:564` and
-`:625`) · `tests/test_autoapply_notion.py` (parametrize the grep at `:66`; add the disjointness
-test) · `scripts/autoapply_browser.py` (extract `accepts_docx()`) · `.gitignore`
-(`config/extension_token.txt`) · `CLAUDE.md` (a "Layer 3 — browser extension" subsection under
-Stage 7; reformulate the `Never Applied` paragraph at `:339-343`).
-
-## Verification
-
-Structure the server as a thin `BaseHTTPRequestHandler` over **pure functions** — `handle_plan`,
-`handle_drafts`, `handle_confirm_applied`, `identify_job`, `_dom_to_schema` — so
-`patch_notion_db(autoapply_server)` works like every existing stage test and only the token/CORS
-tests need a real socket (bind port 0 in a thread). **Conftest gotcha:** drafting calls into
-`scripts.autoapply`, whose `ai_chat` is bound at import (`conftest.py:11-17`) — patch
-`patch_ai_chat(autoapply)`, not `(autoapply_server)`.
-
-**Automated** (`pytest -v` green; `pytest -m browser` unaffected):
-1. A DOM payload equivalent to `SAMPLE_QUESTIONS` (`autoapply.py:191`) yields a field-for-field
-   identical plan — **this is the proof the bridge adds no logic.**
-2. LinkedIn and Indeed page URLs → every field `review_required`, with a fully populated profile.
-3. `/resume` bytes 403 on a read-only channel; `/resume/meta` allowed.
-4. `/resume` refuses a `file://` path outside `RESUMES_DIR`; bad token rejected *before* any Notion
-   read; bind literal is `"127.0.0.1"`; PDF-only form gets a converted PDF.
-5. Match, one case per rung: exact · normalized (`?gh_src=`, trailing `/apply`, `job-boards.`) ·
-   `?gh_jid=` · **two matches → `ambiguous`, picks neither** · no match → resume `review_required`
-   (source `resume-missing`) while everything else resolves · **a row at `Application Queued` still
-   matches** (catches a naive `Resume Tailored`-only pool).
-6. Drafted field is never `ready`; drafts require a matched `page_id`.
-7. Confirm: sets disjoint · missing `confirmed_by` → 400 with no write · happy path sets `Applied`
-   + `Date Applied` on exactly one page · batch payload rejected · Notion-dropped status reported as
-   failure (`db.known_statuses`, pattern at `test_autoapply_notion.py:84`) · `/plan` writes no
-   status to any page.
-8. Parametrized grep: `autoapply_browser.py` (tokens unchanged) + `content.js` (submit tokens,
-   `confirm-applied`, `applied`, `draft`).
-
-**Live, on forms you do not intend to submit** — Greenhouse (must match the CLI plan) → Ashby → one
-custom careers page reached *through* a LinkedIn posting → Workday (expect partial):
-9. Popup names the right role and the right `.docx`; re-open with `?gh_src=test` and via the
-   `job-boards.` host — both still match. Open an untracked job: everything else fills, the resume
-   is badged, and no other job's resume is attached.
-10. **Attach readback on all four sites.** Where it fails, confirm the Copy-path fallback appears.
-11. LinkedIn Easy Apply: nothing filled, `/resume` 403s, but filename + Copy path still work.
-12. Submit untouched; DevTools Network shows no POST leaving the page until you click it.
-13. Confirm button on a job you actually submitted → Notion shows `Applied`, `Date Applied`, and an
-    `Application Log` containing `human-confirmed via extension`.
+**The only genuinely new logic is `_dom_to_schema()`** (in `step-15b`) — keep it a pure function so
+it unit-diffs against `SAMPLE_QUESTIONS`. Plus one extraction: `accepts_docx(accept_attr)` pulled
+out of `autoapply_browser.py:102-112` (in `step-15d`) so the bridge and Layer 2 share one rule.
 
 ## Risks
 
 1. **`isTrusted: false`** — some ATS validators and dropzones reject synthetic events; nothing a
    content script can do. Expect a nonzero per-site failure rate. Mitigated by the tier-3 copy-path
-   fallback and verify-don't-claim.
-2. **Step 3a is the go/no-go.** If attach readback fails broadly across Ashby and a custom career
+   fallback and verify-don't-claim (`step-15d`).
+2. **`step-15d` is the go/no-go.** If attach readback fails broadly across Ashby and a custom career
    site, the headline win is gone, and what remains (path display, Applied confirm, read-only
-   overlay) may not justify a second UI surface. Decide there, not at the end.
+   overlay) may not justify a second UI surface. Decide there, not at the end — don't start
+   `step-15e`/`f`/`g` until `step-15d`'s live verification (its own checklist item 10) passes.
 3. **Workday stays largely unsolved** — see "Honestly not solved" above.
 4. **The Applied button is a habit risk**, not just a code risk: it is right there and easy to click
-   before you have actually submitted. The audit line is the mitigation; residual risk accepted
-   knowingly.
+   before you have actually submitted. The audit line (`step-15g`) is the mitigation; residual risk
+   accepted knowingly.
 5. **Maintenance** — a second UI in a language with no test runner here. Keep the JS thin, rely on
    grep + Python contract tests, and **do not** add a JS test runner in v1. If `content.js` starts
    needing unit tests, logic has leaked out of Python; push it back.
 6. **Mild SSRF shape** in `_download_tailored_resume()` (`autoapply.py:493`) now that a browser
    request can trigger it. The URL comes from the user's own Notion DB, so risk is low — constrain
-   the fetch host to `raw.githubusercontent.com` while in there.
+   the fetch host to `raw.githubusercontent.com` (handled in `step-15d`).
 
 ## Considered and dropped
 
@@ -361,7 +223,26 @@ instruction (`:207-210`) and `refinement-plans/README.md:55-60`; this paragraph 
   **Nothing was deleted from it.** Note it still names the two deleted docs in prose — historical
   record, left as-is.
 - Both `README.md` index files updated.
+- This monolithic doc split into the epic + seven `step-15a`…`step-15g` stories above.
 
-**Remaining, at step 6:** `CLAUDE.md` gets a "Layer 3 — browser extension" subsection under Stage 7
-and the reformulated `Never Applied` paragraph (`:339-343`); `docs/CHANGELOG.md` gets a Step 15
-entry, and a backfilled Step 10 entry if cheap — it currently has **none**.
+**Done 2026-07-31, still before implementation started:**
+- `refinement-plans/auto-apply/step-15-interactive-launcher.md` (docked side-panel job launcher:
+  job list, extension-initiated navigation, multi-session panes) finalized against its 4 open
+  questions and folded in: `step-15c` retitled/rescoped from "popup + overlay" to "side-panel
+  shell"; `step-15b` gains `identify_job()`'s rung 0 (known `page_id`); `step-15f` retitled to
+  "interactive draft panel" (same contract, panel container); new `step-15h` (job list + launcher)
+  and `step-15i` (multi-session state) added. The proposal's general `POST /status` route was
+  **not** adopted — `step-15g`'s `/confirm-applied` remains the only status write the extension
+  makes — and ATS token/board write-back was **deferred to Step 13**, not built here. Source doc
+  **deleted**; both `README.md` index files updated.
+
+**Done 2026-08-01, still before implementation started:** `step-15j` (standalone native launch)
+added: a native-messaging host that auto-starts the bridge and auto-populates the token, removing
+the manual `python run.py --serve` + copy-paste-token step on the happy path. No source doc to
+delete (designed directly as a queued story, not folded from a refinement-plan). `README.md`
+backlog index updated.
+
+**Remaining, at final close-out (after `step-15j`):** `CLAUDE.md` gets a "Layer 3 — browser
+extension" subsection under Stage 7 and the reformulated `Never Applied` paragraph
+(`:339-343`); `docs/CHANGELOG.md` gets a Step 15 entry, and a backfilled Step 10 entry if cheap —
+it currently has **none**.
