@@ -1,12 +1,16 @@
 # Auto-apply: the real bottleneck is sourcing, not fill automation
 
-*See [`../README.md`](../README.md) for how this relates to the other auto-apply plans.*
+*Relocated from `docs/refinement-plans/auto-apply/sourcing-bottleneck-analysis.md` as part of the
+docs restructure into `spec/` — this is a measurement record, not a plan, so it lives in
+`docs/research/` rather than `spec/`. See
+[`../../spec/application-prefill-extension/problem.md`](../../spec/application-prefill-extension/problem.md)
+for how its findings are used.*
 
 > ## ⚠ Correction (2026-07-30) — the recommendation below is superseded; the findings are not
 >
 > **Superseded:** the "Don't build the extension now… ~20% of 90 Indeed rows, roughly 18 jobs" line
 > and everything resting on it. The extension is queued as
-> [`../../backlog/step-15-application-prefill-extension.md`](../../backlog/step-15-application-prefill-extension.md).
+> [`../../spec/application-prefill-extension/`](../../spec/application-prefill-extension/).
 >
 > **Why:** the sizing used the wrong denominator. It counted *rows the pipeline can auto-route to a
 > fillable apply URL* — but an extension **routes nothing**. The human navigates, and it fills
@@ -23,9 +27,9 @@
 > URL in the tracker for an *unattended* run.
 
 **Status (2026-07-29): analysis only, no action taken.** Written to capture a conversation that
-re-evaluated whether to build `ashby-workday-custom-fill.md` and/or `browser-extension-prefill.md`
-next. Nothing below has been applied to config, code, or the other two docs — this is a snapshot
-for the user to re-look at and decide from.
+re-evaluated whether to build per-ATS Playwright adapters and/or a browser extension next. Nothing
+below has been applied to config or code — this is a snapshot for the user to re-look at and
+decide from.
 
 ## The question asked
 
@@ -79,19 +83,20 @@ No source is disabled; the pipeline simply isn't being told which companies to l
 
 ## Is the intent achievable?
 
-Yes, for a meaningful slice of the pipeline — but not through the auto-apply subsystem, and not
-through either of the two parked refinement plans. Once real Greenhouse/Lever/Ashby rows exist,
-`scripts/autoapply_browser.py` (already shipped, Phases 1–2) fills them; nothing new needs to be
-built for that path. The unachievable part stays unachievable regardless of what gets built next:
-LinkedIn Easy Apply is both ToS-prohibited to automate and, now confirmed, technically opaque even
-for read-only purposes — no amount of engineering recovers an apply URL that was never returned.
+Yes, for a meaningful slice of the pipeline — but not through the auto-apply subsystem alone.
+Once real Greenhouse/Lever/Ashby rows exist, `scripts/autoapply_browser.py` (already shipped,
+Phases 1-2) fills them; nothing new needs to be built for that path. The unachievable part stays
+unachievable regardless of what gets built next: LinkedIn Easy Apply is both ToS-prohibited to
+automate and, now confirmed, technically opaque even for read-only purposes — no amount of
+engineering recovers an apply URL that was never returned.
 
 ## Recommendation reached (not yet applied)
 
-**Don't build the extension now.** Its one architecturally-suited case — custom career sites — is
-real but thin: ~20% of 90 Indeed rows, roughly 18 jobs, ever, under today's sourcing mix. Building
-a new HTTP bridge + Chrome extension (new language, new local server, new token-auth surface) to
-serve ~18 jobs is a poor trade against the alternative below.
+**Don't build the extension now [superseded — see the correction banner above].** Its one
+architecturally-suited case — custom career sites — is real but thin: ~20% of 90 Indeed rows,
+roughly 18 jobs, ever, under today's sourcing mix. Building a new HTTP bridge + Chrome extension
+(new language, new local server, new token-auth surface) to serve ~18 jobs is a poor trade against
+the alternative below.
 
 **Build instead, in order:**
 
@@ -106,17 +111,6 @@ serve ~18 jobs is a poor trade against the alternative below.
    stays material *relative to it*, the extension's case gets stronger on real numbers instead of
    a guess.
 
-**Recommendation on the two existing plans (not applied):**
-
-- `docs/refinement-plans/auto-apply/ashby-workday-custom-fill.md` — candidate for deletion, not
-  just parking. Nothing measured supports an Ashby or Workday adapter specifically; both Options A
-  and B are bets on volume that isn't there and isn't likely to appear from today's sourcing mix
-  either. Keeping it filed as "not started, not queued" invites picking it up later just because
-  it's already spec'd.
-- `docs/refinement-plans/auto-apply/browser-extension-prefill.md` — keep, but its trigger should
-  be rewritten once more: re-gated on custom-career-site volume *after* step 1 above, not on the
-  raw posting-host split it currently cites.
-
 ## Addendum (2026-07-29): can the external apply URL be recovered at all, by any method?
 
 Follow-up research question: is the "structurally unobtainable" conclusion above really final, or
@@ -129,7 +123,7 @@ is no public/keyless path that has it — this matches, and explains, the earlie
 | Option | Returns external apply URL? | Mechanism | Cost/risk |
 |---|---|---|---|
 | Public "guest" endpoint (today's approach, both Apify keyword actors) | **No** — field absent from the payload entirely | Unauthenticated fetch | n/a |
-| Other Apify LinkedIn actors checked (`apimaestro/linkedin-job-detail`, `curious_coder`, others) | Unverified/no — the one with documented output (`apimaestro`) only exposes `is_easy_apply`, no destination URL; others advertise an `applyUrl` field but their own sample output ships it blank | Same guest-endpoint scraping under the hood | $3–5/1k, but buys nothing new |
+| Other Apify LinkedIn actors checked (`apimaestro/linkedin-job-detail`, `curious_coder`, others) | Unverified/no — the one with documented output (`apimaestro`) only exposes `is_easy_apply`, no destination URL; others advertise an `applyUrl` field but their own sample output ships it blank | Same guest-endpoint scraping under the hood | $3-5/1k, but buys nothing new |
 | "Job Scraper for LinkedIn" Chrome extension | Claims yes (Greenhouse/Lever/Workday + ATS name) | Undocumented — likely reads the *logged-in* member-facing DOM per page you manually visit, not a bulk/API call | Manual, one job page at a time; no batch/automation path found in its own docs |
 | Authenticated Voyager API (e.g. `linkedin-api` PyPI package, formerly `tomquirk/linkedin-api` — that GitHub repo now 404s, name apparently reused/removed) | **Yes, confirmed in source** | `Linkedin(username, password)` logs in with a real account, gets a session cookie, then `get_job(job_id)` calls `/jobs/jobPostings/{job_id}`. LinkedIn's own Voyager/Apply-Connect schema names the offsite-apply destination `companyApplyUrl` under `applyMethod` — present for authenticated requests, absent for guest ones. This is exactly the extra data an authenticated session unlocks. | Package's own README: *"might violate LinkedIn's Terms of Service. Use it at your own risk."* Needs a real account's credentials in the pipeline, and account ban is the downside if detected — not a form-fill ToS violation like Easy Apply automation, but still a ToS-adjacent scraping violation, and losing the account is worse than a blocked scrape. |
 | Vendor-run authenticated scraping (Bright Data, Unipile, linkedapi.io's "account-based" method) | Yes, same mechanism | Same authenticated-session trick, outsourced — the vendor supplies/rotates the LinkedIn account and eats the ban risk instead of you | $/request or subscription; still indirectly ToS-adjacent, just insulated behind a vendor |
@@ -178,4 +172,4 @@ stands as the other lever for growing ATS-native volume.
 ## What was NOT done
 
 No authenticated LinkedIn session was ever set up or tested — that path was researched and
-rejected. No changes to the other two refinement-plan docs.
+rejected. No changes to the sourcing config were made as a direct result of this analysis.

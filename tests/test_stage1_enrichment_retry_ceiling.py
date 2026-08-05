@@ -1,6 +1,6 @@
 """
-Closes the "residual gap" #3 flagged in docs/refinement-plans/sourcing/
-career-site-enrichment-fallback.md: before this, a hand-added "Interested" job whose URL
+Closes the "residual gap" #3 flagged in spec/career-site-enrichment-fallback/:
+before this, a hand-added "Interested" job whose URL
 enrichment kept failing (e.g. a JS-rendered career page generic_url_fetch() can't extract
 text from) was retried identically on every --ingest run forever, with no ceiling.
 

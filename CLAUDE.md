@@ -361,11 +361,17 @@ checked order-independently) and mirrors the attachment field's resolution onto 
 instead of treating it as an unresolved free-text question — otherwise a fully-answered upload
 question would still block on its own redundant textarea sibling.
 
-**Never `Applied`.** `WRITABLE_STATUSES` excludes it on purpose. Comparable open-source
-auto-appliers are widely reported to mark jobs applied that were never submitted (captcha stalls,
-silent form errors), which corrupts the tracker in the unrecoverable direction — you stop
-re-applying to jobs you never actually applied to. This stage doesn't submit, so it must not
-claim success.
+**`Applied` is never inferred — reformulated by Layer 3, not broken.** `WRITABLE_STATUSES`
+excludes it on purpose. Comparable open-source auto-appliers are widely reported to mark jobs
+applied that were never submitted (captcha stalls, silent form errors), which corrupts the
+tracker in the unrecoverable direction — you stop re-applying to jobs you never actually applied
+to. Neither Layer 1 (planning) nor Layer 2 (Playwright fill) can write it — this stage doesn't
+submit, so it must not claim success. Layer 3 (the browser extension, below) adds the *only*
+other path that can ever set it: `POST /confirm-applied`, reachable solely from an explicit human
+click on a matched job, never from planning or fill logic, and always audited in `Application
+Log` as `"<date> Applied — human-confirmed via extension"`. The invariant that matters is
+unchanged — `Applied` is set by a human, by hand, after they click Submit — only the hand's
+location grew from "Notion's UI only" to "Notion's UI, or one gated extension button."
 
 **LinkedIn/Indeed are never filled.** `FILLABLE_CHANNELS` is `{greenhouse, lever}` by rule, not
 configuration: automated applying there violates ToS and is behaviorally detected. They get an
@@ -414,6 +420,86 @@ Before the first real (non-dry) run, add the new Notion schema once:
 `python scripts/setup_notion_schema.py --apply` (idempotent, dry-run by default) creates the six
 new `Status` options and four new properties Stage 7 writes. Skipping it isn't silent —
 `db_update_status_verified()` fails loudly on the first write rather than corrupting the tracker.
+
+### Layer 3 — browser extension (Step 15)
+
+Layer 1/2 above only ever reach 15/450 tracker rows (`FILLABLE_CHANNELS = {greenhouse, lever}`),
+run anonymous (no login, so anything behind auth is unreachable), and rarely fill even where
+they route (a job with any unresolved *required* field is left for a human before the browser
+even opens). Layer 3 removes all three at once for **new inbound jobs, interactively** — not
+backlog drainage — by putting a human in the loop instead of a headless browser: an MV3 Chrome
+extension (`extension/`) plus a local, loopback-only HTTP bridge (`python run.py --serve`, →
+`scripts/autoapply_server.py`) that a human standing on a live application form talks to.
+
+```
+Chrome                                   127.0.0.1:8765 (python run.py --serve)
+ content.js   scrape form → questions[]  ──POST /plan──▶  build_application_plan()   [unchanged]
+              fill status=="ready"       ◀──plan JSON───  readiness_report()         [unchanged]
+ drafts.js    per-field Insert           ──POST /drafts─▶ draft_free_text_answers()  [unchanged]
+ panel.js     job list, Confirm Applied  ──POST /confirm-applied──▶ db_update_status_verified()
+```
+
+Routing is off the **live page URL**, never the Notion row's URL (a LinkedIn posting and the
+Greenhouse/Ashby/Workday page it redirects a human to routinely differ) — `autoapply_server.py`
+therefore does not reuse `plan_for_job()`; it composes `resolve_tailored_resume()` +
+`build_application_plan()` + `readiness_report()` itself against the DOM-scraped schema.
+`identify_job()` resolves which Notion row a live page belongs to via a known `page_id` (rung 0,
+when the side panel's own job list opened the tab), a normalized-URL match (rung 1), Greenhouse
+`(board_token, job_id)` (rung 2), or asks the human to pick from the candidate pool (rung 3) — two
+or more matches at any rung is `ambiguous` and picks neither, since a wrong guess would attach the
+wrong resume.
+
+**Fill is a human gesture, not automatic.** `content.js` paints a read-only badge next to every
+field and, since a real fill loop exists, a single **Fill N ready fields** button that writes
+`status == "ready"` values into the page **only on that explicit click** — never on load, never
+on plan-fetch. Attach-resume is verify-don't-claim: it reads the file input back after assigning
+it and reports only what actually landed. LinkedIn/Indeed are enforced read-only **server-side**
+(every field on those channels arrives pre-rewritten to `review_required`), so a bug or a
+hand-edited extension can't bypass the same permanent rule Layer 2 follows.
+
+**Essay drafting is its own gesture, not part of Fill.** The side panel's draft list
+(`extension/drafts.js`) calls `POST /drafts` (gated on `AUTOAPPLY_DRAFT_ESSAYS`, one AI call per
+question — deliberately not folded into `/plan`, which would block every fill on a 10–30s AI
+round-trip) and reuses `draft_free_text_answers()`/`_resume_text_for()` verbatim. A drafted field
+gains a `draft` key; `status`/`value` stay untouched, so the Fill button's `status == "ready"`
+predicate excludes it with no special-casing. Insert is a separate per-field click that writes
+the (possibly human-edited) text and re-badges it *"inserted — edit before submitting"* — never
+"done." `content.js` is asserted (grep test) to contain no `draft` token at all — that logic lives
+only in `drafts.js` and `panel.js`.
+
+**`POST /confirm-applied` is the only status write this bridge makes**, and the only new way
+`Applied` can land in Notion outside Notion's own UI — see the reformulated invariant above. Its
+guards: the status literal is hard-coded in the handler (never a request field); the body must
+carry `confirmed_by == "human"`; `page_id` must be a single string (a list is rejected outright);
+the write goes through `db_update_status_verified()` so a Notion-dropped status is reported as a
+failure, not a silent success; every write's `Application Log` line is labelled
+`"human-confirmed via extension"` for audit. `HUMAN_CONFIRMED_STATUS`/`CONFIRMABLE_STATUSES`
+(`autoapply_server.py`) are asserted disjoint from `WRITABLE_STATUSES` by
+`tests/test_autoapply_applied_confirmation.py`.
+
+**The side panel doubles as a launcher.** `GET /jobs/ready` wraps `db_get_ready_to_apply()`
+verbatim; clicking a row opens that job's URL in a new tab and switches that tab's panel straight
+to the plan view via the known `page_id` (`identify_job()`'s rung 0) — no candidate-list step.
+Each tracked tab gets its own session (`Map<tabId, {page_id, plan, lastFetchedAt}>` in
+`background.js`), so N jobs can be open at once with independent state; a soft cap (default 5,
+configurable in the extension's Settings page) blocks opening another past the limit with a
+message rather than silently evicting an in-progress session.
+
+**Standalone launch.** A native-messaging host (`extension/native_host/host.py`, installed once
+via `python scripts/install_native_host.py --extension-id <id>`) lets the extension auto-start
+the bridge on demand instead of requiring a manually-run `python run.py --serve` + copy-pasted
+token every session. This does not relitigate "never a daemon": Chrome only ever launches the
+host in response to an explicit extension call, itself only ever fired from an explicit human
+gesture (opening the panel, a failed bridge call mid-use) — never a timer, never on browser/OS
+startup. The manual paste flow in the extension's Settings page remains a fully-working fallback
+for anyone who skips the install step or is on a platform the installer doesn't register on.
+
+**Security (non-negotiable, unchanged since the bridge's first line of code):** binds literal
+`("127.0.0.1", port)`, never all interfaces; a random token regenerates on every `--serve` start,
+written to git-ignored `config/extension_token.txt`, checked on every authed request; CORS echoes
+the request's own `Origin`, never an extension-id allowlist (an unpacked extension's id changes
+on reload); runs only under an explicit `python run.py --serve` invocation, never a background
+daemon.
 
 ## Switching AI Provider
 
@@ -505,26 +591,50 @@ including the nightly workflow, which never passes it and keeps its own env vars
 - **Nightly run output (GitHub Actions):** the runner's filesystem is discarded when the job ends, so `.github/workflows/nightly-pipeline.yml` ends with an `actions/upload-artifact@v4` step publishing all of `output/` as a single per-run bundle — download it from the run's summary page (GitHub zips it for you; no manual zip step). `if: always()` so a crashed run's partial output and stage 7 screenshots are still retrievable, `if-no-files-found: warn` so a failure before `output/` exists doesn't turn the run red, 30-day retention. This lives **only** in the workflow YAML — no `run.py` flag, no bundling code in the pipeline — so local runs never trigger it and keep writing to `output/` as before. Guarded by `tests/test_nightly_workflow_artifact.py`. A separate "Publish tailored resumes to tailored-resumes branch" step (gated by a workflow-level `permissions: contents: write`) pushes `output/resumes/*.docx` to a dedicated `tailored-resumes` orphan branch — self-bootstrapped on first run, additive only (never wipes earlier runs' files, since an older Notion row may still point at one) — so Notion's `Tailored Resume Link` can carry a stable `raw.githubusercontent.com` URL instead of a dead `file://` path. `scripts/stage2_tailor.py`'s `_tailored_resume_link()` picks the scheme via the `GITHUB_ACTIONS` env var, same guard pattern as `_load_local_env()`; local runs keep writing `file://` unchanged. Guarded by `tests/test_nightly_workflow_publish_resumes.py` and `tests/test_stage2_resume_link.py`.
 - **Gmail optional:** Stage 4 `--send` requires `config/gmail_credentials.json` (Google Cloud OAuth)
 - **All secrets are env-sourced:** every key in `config/settings.py` (`NOTION_API_KEY`, `APIFY_API_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `HUNTER_API_KEY`) is read via `os.environ.get(...)` — never hardcode a live value into that file, even locally. Locally, `config/settings.py`'s `_load_local_env()` auto-loads a git-ignored `.env` in the repo root (copy `.env.example` → `.env`) before any of those `os.environ.get(...)` calls run; it's a no-op under `GITHUB_ACTIONS`, where the same keys come from repo secrets (`.github/workflows/nightly-pipeline.yml`) instead. `NOTION_SCRATCH_PAGE_ID`, `NOTION_RESTRICTED_COMPANIES_PAGE_ID`, and `NOTION_TARGET_COMPANIES_PAGE_ID` follow the same env-sourced pattern but are **optional** — see "Scratch-note intake", "Restricted-sponsorship company list", and "Target companies list" above — the features they back no-op when unset, unlike the required keys in this list. `NOTION_DB_ID` is env-sourced with **no hardcoded default** (`os.environ.get("NOTION_DB_ID", "")`) — a fork provisions its own tracker via `python run.py --init` (which writes the id to `.env`), or sets it by hand; `python run.py --setup` validates the live schema (via `provision_notion.validate_schema()`) and flags an unset/broken id. Existing owners must add their id to `.env` once (the literal was removed). `NOTION_SCRATCH_PAGE_ID` is set the same way by `--init` but stays optional.
-- **`HUNTER_API_KEY` / `LEAD_ACTOR`:** only consumed by `scripts/spike_phase0_leads.py`, the Step 7 (communications subsystem) Phase 0 spike — not part of the 6-stage pipeline above. See `docs/backlog/step-7-communications-subsystem.md`.
-- **`scripts/autoapply.py` / `scripts/autoapply_browser.py`:** Stage 7, the Step 10 Auto-Apply subsystem (Phases 1–2 landed; deliberate submit deferred to Phase 3). Wired into `run.py` as `--stage 7` / `--stage 7 --fill` (plus `--dry-run` / `--limit` for sampling). See the "Stage 7 Auto-Apply" section above and `docs/backlog/step-10-auto-apply-subsystem.md`.
+- **`HUNTER_API_KEY` / `LEAD_ACTOR`:** only consumed by `scripts/spike_phase0_leads.py`, the communications-subsystem Phase 0 spike — not part of the 6-stage pipeline above. See `spec/communications-subsystem/`.
+- **`scripts/autoapply.py` / `scripts/autoapply_browser.py`:** Stage 7, the auto-apply subsystem (Phases 1–2 landed; deliberate submit deferred to Phase 3). Wired into `run.py` as `--stage 7` / `--stage 7 --fill` (plus `--dry-run` / `--limit` for sampling). See the "Stage 7 Auto-Apply" section above and `spec/auto-apply-subsystem/`.
 - **`scripts/autoapply_profile.py`:** Stage 7's one-time answer wizard (`run.py --setup-profile`, or `--show`). Writes the git-ignored `config/application_profile.json` that `config/settings.py` overlays over the `APPLICATION_PROFILE` / `APPLICATION_ADDRESS` / `EEO_RESPONSES` / `COMMON_QUESTION_PRESETS` defaults — so personal application answers stay out of version control and aren't edited into a checked-in file. Missing/corrupt file = defaults stand. See the "Stage 7 Auto-Apply" section above.
 - **`scripts/provision_notion.py`:** fork onboarding — creates the "Careerpilot-ai" page + **all four** databases (Job Search Tracker with the full schema/all 21 Status options, a clean single-URL-column Job Link Scratch Pad, a clean single-company-name-column Restricted Sponsorship Companies, and Target Companies with Company/Greenhouse/Lever/Ashby/Last Checked columns) under a page the forker shared with their integration; returns the new ids. Owns the canonical `STATUS_OPTIONS` / `TRACKER_PROPERTIES` (single source of truth — `setup_notion_schema.py` imports the Stage-7 subset from it so create/patch can't drift) and exposes `validate_schema()` used by `run.py --setup`. Invoked by `python run.py --init`; also runnable standalone (`--parent-page <id>`) as the file-fallback path. Tolerates an API that rejects the `unique_id` `Job ID` column (retries without it — no stage reads it).
 - **`scripts/setup_notion_schema.py`:** one-time, idempotent Notion schema migration for Stage 7 on a **pre-existing** DB — `--apply` adds the six new `Status` options and four new properties; dry-run by default, resends existing Status options with their ids so none are dropped, and reads back to verify. Run once before the first real (non-dry) Stage 7 run. (A DB freshly made by `provision_notion.py` already has all of these — this script is for older/hand-built trackers.)
 - **DOCX resumes:** Stage 2 copies the base resume `.docx` (`RESUME_TEMPLATE_PATH`, default `config/resume.docx`) and applies targeted `{old → new}` keyword edits **in-place** via `extract_docx_text()` / `apply_docx_edits()` in `scripts/render_docx.py`, preserving formatting (also writes a `.txt` mirror). `render_docx.convert_docx_to_pdf()` (headless LibreOffice) produces the PDF fallback Stage 7's browser fill uses when a live form's upload field rejects `.docx` — see "Stage 7 Auto-Apply" above. The legacy Jinja2/`docxtpl` render path (`render_docx.render()` + `config/resume_template.docx`, scaffolded by `scripts/make_resume_template.py`) is no longer used by the default flow.
 
-## docs/ directory scope: refinement-plans vs. backlog
+## spec/ directory: one folder per feature
 
-`docs/refinement-plans/` holds a plan **while it's still at idea/discussion level** — design not
-finalized, or finalized but deliberately deferred pending a trigger. `docs/backlog/` holds a story
-**once it's finalized and lined up to be implemented**.
+`spec/<feature-name>/` is where every feature's design lives, from first idea through
+implementation. There is no separate idea-stage vs. queued-stage directory — lifecycle stage is
+data, not location: each feature's `meta.md` carries a `Status` field (`idea` → `finalized` →
+`in-progress` → `done`, with `deferred` and `superseded` as side states), `Priority`, `Size`, and
+`Depends-on` (a list of other feature-folder names).
 
-A plan moves in exactly one direction: refinement-plans → backlog, never the reverse. When a plan
-is finalized and queued: fold its content into a `docs/backlog/step-N-*.md` story — condense the
-"why" (sources considered/rejected, binding decisions, risks) alongside the implementation
-checklist — then **delete** the refinement-plan doc. Don't leave the backlog story as a thin
-summary pointing back at a "full spec" refinement doc; that's the duplication this rule exists to
-avoid. One doc per story once it's queued. See `docs/backlog/README.md` and
-`docs/refinement-plans/README.md` for the same rule stated from each side.
+Every feature folder holds the same eight files, split by concern so each can be read, updated, or
+reviewed independently:
+
+- `meta.md` — status/priority/size/depends-on, the one file to read first
+- `problem.md` — current pain, root cause, measured evidence
+- `end-goal.md` — plain-language target state, written before any "how" — the piece that was
+  missing when this convention didn't exist: a backlog story could describe its approach in detail
+  and never state what the world looks like once it ships, which is exactly how an implementation
+  drifts off-target without anyone noticing until review
+- `non-goals.md` — explicit out-of-scope
+- `constraints.md` — hard limits any valid implementation must respect
+- `acceptance-criteria.md` — a checkable "done when" list, distinct from verification (the list is
+  *what* to prove; verification.md is *how* to prove it)
+- `plan.md` — file-by-file implementation breakdown
+- `verification.md` — automated + manual steps proving each acceptance criterion
+
+`spec/_template/` holds an empty copy of all eight files with prompts — copy it to start a new
+feature. `spec/INDEX.md` is the rollup table (feature, status, priority, size, depends-on) for
+browsing everything at a glance; each feature's `meta.md` is still the source of truth if the two
+ever disagree.
+
+This replaced the older `docs/refinement-plans/` (idea-stage) → `docs/backlog/` (queued,
+step-numbered) two-directory split. The 5 stories open at the time of that migration
+(2026-08-04) were split into this shape; ~14 already-shipped steps have not yet been
+retrofitted — that's a deliberate, separate later pass (see `spec/INDEX.md`'s note on why), so
+`docs/CHANGELOG.md` remains their record until it happens. A non-spec measurement/analysis record
+(data, not a plan) belongs in `docs/research/`, not `spec/` — see
+`docs/research/sourcing-bottleneck-analysis.md` for an example, referenced from the feature
+folder whose `problem.md` it informs.
 
 ## Testing a Change
 
@@ -552,9 +662,52 @@ avoid. One doc per story once it's queued. See `docs/backlog/README.md` and
 5. Check output files in `output/` (resumes, emails, guides are human-readable)
 6. Verify the Notion jobs database rows updated (status/score/links)
 
+## Definition of Done
+
+Every session — human or agent, on any branch — ends by running `python scripts/dev_check.py`
+(or `--quick` to skip pytest for a fast pre-flight before starting work). This exists because
+this repo has, more than once, had a session end with untracked files nobody committed, a
+branch that quietly diverged from another agent's work on the same story, or a "done" claim
+nothing had actually re-verified — see `docs/CHANGELOG.md`'s Step 15 entry and
+`code-changes-management/pr-11-review.md` for what that cost in practice. A story is not done
+until:
+
+- `python scripts/dev_check.py` passes clean, or every warning it prints has a stated reason
+  (e.g. "these 3 files are mid-edit, committing next"). It checks: you're in a real git repo,
+  your branch's relationship to `origin` (ahead/behind/diverged), no untracked files, no
+  uncommitted changes, and no line-ending drift (see `.gitattributes` — a Windows checkout that
+  skips this is exactly what produced the 116-file, zero-real-content diff this check now
+  catches) — then runs the full `pytest` suite.
+- The relevant `spec/<feature>/meta.md` doc's `Status` field reflects reality — "in-progress,
+  not yet committed" is a real and useful status; don't let the doc claim more than
+  `dev_check.py` can currently verify.
+- Nothing is left untracked that isn't deliberately still in progress. `git add`/commit before
+  ending the session, even if the PR/push comes later — an uncommitted file is invisible to the
+  next session, agent or human.
+- If the change touches a documented architecture decision (a `##`-level section in this file),
+  update it in the same change — a stale CLAUDE.md is worse than none, because the next agent
+  trusts it by default.
+
+This is a hygiene gate, not a correctness one — it cannot tell you a design decision was right,
+only that the repo is in a state the next session (or reviewer) can actually trust.
+
 ## Troubleshooting
 
 - **"Resume not found"** — Add file to `config/resume.txt`
 - **Notion errors / empty results** — Notion is the primary store: check `NOTION_API_KEY` is set, the integration is **shared with the database**, and the DB has the properties listed under "Notion database schema" with exactly those names/types (a missing or mistyped property silently breaks queries/writes)
 - **Apify timeouts** — Scraper polls 30×10s; network issues may need retry
 - **Gmail send fails** — Requires `config/gmail_credentials.json` OAuth setup
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`Iamkach/careerpilot-ai`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical defaults (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

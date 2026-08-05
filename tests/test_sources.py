@@ -213,7 +213,7 @@ def test_parse_salary_checks_fields_in_priority_order():
 
 
 # ── _extract_jobposting_jsonld ──────────────────────────────────────────────
-# Closes gap #1/#2 from docs/refinement-plans/sourcing/career-site-enrichment-fallback.md:
+# Closes gap #1/#2 from spec/career-site-enrichment-fallback/:
 # generic_url_fetch()'s raw-tag-stripping fallback returns blank company/location and can
 # come back near-empty on a JS-rendered SPA shell. JSON-LD JobPosting data is often present
 # in the server-rendered <head> even when the visible DOM is client-hydrated.
