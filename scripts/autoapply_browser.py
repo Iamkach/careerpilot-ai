@@ -99,26 +99,17 @@ def _find(page, field):
     return None
 
 
-def accepts_docx(accept: str) -> bool:
-    """Whether a file input's `accept` attribute string admits a .docx. Pure string rule, no
-    Playwright dependency, so Layer 3 (scripts/autoapply_server.py's /resume route) can apply
-    the identical rule against a client-reported `accept` value rather than re-deriving its own.
-    An empty/missing accept attribute imposes no restriction, so it accepts by default."""
-    accept = (accept or "").lower()
-    if not accept:
-        return True
-    return ".docx" in accept or ".doc" in accept or "word" in accept or "*" in accept
-
-
 def _accepts_docx(loc) -> bool:
     """Whether a file input will take a .docx. Stage 2 only produces .docx directly; a form
     that rejects it falls back to convert_docx_to_pdf() (see _resolve_upload_path) before
     this becomes a genuine stop."""
     try:
-        accept = loc.get_attribute("accept") or ""
+        accept = (loc.get_attribute("accept") or "").lower()
     except Exception:
         return True
-    return accepts_docx(accept)
+    if not accept:
+        return True
+    return ".docx" in accept or ".doc" in accept or "word" in accept or "*" in accept
 
 
 def _resolve_upload_path(loc, docx_path: str) -> str | None:

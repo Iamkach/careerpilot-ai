@@ -1,7 +1,0 @@
-{
-  "name": "com.careerpilot.bridge_host",
-  "description": "CareerPilot Auto-Apply — native host that auto-starts the local bridge (python run.py --serve) on request from the extension.",
-  "path": "__RUN_HOST_PATH__",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
-}

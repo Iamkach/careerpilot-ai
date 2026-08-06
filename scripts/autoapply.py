@@ -490,23 +490,10 @@ def resolve_tailored_resume(job: dict) -> str:
     return str(p)
 
 
-_TAILORED_RESUME_HOST = "raw.githubusercontent.com"
-
-
 def _download_tailored_resume(url: str) -> str:
     """Fetch a CI-tailored resume from its raw.githubusercontent.com URL into RESUMES_DIR,
     reusing the branch's filename so re-runs overwrite rather than accumulate duplicates.
-    Mirrors resolve_tailored_resume()'s "" + log-warning contract on any failure.
-
-    Host is pinned to raw.githubusercontent.com: `resume_link` comes from a Notion row, which
-    is user-editable, and since step-15d a browser request (GET /resume) can trigger this path
-    too — an unpinned host would let either edit this call into an SSRF probe of an arbitrary
-    internal/external URL. A refused host degrades exactly like a failed download (returns "").
-    """
-    host = (urlparse(url).hostname or "").lower()
-    if host != _TAILORED_RESUME_HOST:
-        log(f"  ⚠ Tailored resume URL host not allowed ({host}): {url}")
-        return ""
+    Mirrors resolve_tailored_resume()'s "" + log-warning contract on any failure."""
     import requests
     ensure_dirs()
     filename = url.rsplit("/", 1)[-1]

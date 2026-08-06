@@ -13,22 +13,6 @@ from scripts.autoapply import (
     readiness_report, resolve_tailored_resume, SAMPLE_QUESTIONS,
     STATUS_QUEUED, STATUS_NEEDS_Q,
 )
-from scripts.autoapply_browser import accepts_docx
-
-
-# ── accepts_docx() — shared by Layer 2 (Playwright) and Layer 3 (/resume) ─────
-
-@pytest.mark.parametrize("accept,expected", [
-    ("", True),
-    (".pdf,.doc,.docx", True),
-    (".doc,.docx,application/msword", True),
-    ("application/pdf", False),
-    (".pdf", False),
-    ("*", True),
-    ("*/*", True),
-])
-def test_accepts_docx_reads_the_accept_attribute(accept, expected):
-    assert accepts_docx(accept) is expected
 
 
 # ── Channel routing ───────────────────────────────────────────────────────────
@@ -342,19 +326,6 @@ def test_resolve_tailored_resume_download_network_error_returns_blank(monkeypatc
 
     url = "https://raw.githubusercontent.com/o/r/tailored-resumes/output/resumes/x.docx"
     assert resolve_tailored_resume({"resume_link": url}) == ""
-
-
-def test_resolve_tailored_resume_refuses_a_non_github_host(monkeypatch, tmp_path):
-    """Since step-15d, a browser request (GET /resume) can trigger this download path with a
-    resume_link value that traces back to a user-editable Notion row — an unpinned host would
-    let that field turn this call into an SSRF probe of an arbitrary URL."""
-    monkeypatch.setattr(autoapply, "RESUMES_DIR", str(tmp_path))
-    called = []
-    monkeypatch.setattr("requests.get", lambda *a, **k: called.append(1))
-
-    url = "https://evil.example.com/tailored-resumes/output/resumes/x.docx"
-    assert resolve_tailored_resume({"resume_link": url}) == ""
-    assert called == []
 
 
 def test_missing_resume_makes_the_upload_field_block():

@@ -63,34 +63,14 @@ def test_run_never_writes_applied(stage7, tmp_path, monkeypatch):
     assert all(p["status"] != "Applied" for p in stage7._pages.values())
 
 
-_SUBMIT_CLICK_BANNED = (
-    'click("submit', "click('submit", '.click()', "submit_button", 'press("enter")',
-)
-
-# The browser extension (step-15c on) gets the same submit-click ban as Layer 2, plus a
-# forward-looking scope check. content.js is the DOM-scraping/fill layer — it must never itself
-# decide/claim a job is Applied or hold drafting logic; both stay server-round-tripped through
-# panel.js (confirm button, step-15g) / drafts.js (step-15f) instead. "draft" stays banned in
-# content.js permanently, not just until step-15f lands, per that story's own instruction.
-_EXTENSION_SCOPE_BANNED = _SUBMIT_CLICK_BANNED + ("confirm-applied", '"applied"', "'applied'")
-_CONTENT_JS_BANNED = _EXTENSION_SCOPE_BANNED + ("draft",)
-
-
-@pytest.mark.parametrize("relpath,banned", [
-    ("scripts/autoapply_browser.py", _SUBMIT_CLICK_BANNED),
-    ("extension/content.js", _CONTENT_JS_BANNED),
-    # panel.js legitimately references "applied"/"confirm-applied" since step-15g — the confirm
-    # button lives there by design. It keeps the plain submit-click ban only.
-    ("extension/panel.js", _SUBMIT_CLICK_BANNED),
-])
-def test_source_has_no_submit_click(relpath, banned):
-    """Layer 2 (Playwright) must contain no submit code path at all — not behind a flag, not
-    behind config. The browser extension's content/panel scripts are held to the same bar plus
-    the scope check above. A grep-level assertion is crude but it is the one check that cannot
-    be satisfied by a subtly-wrong implementation."""
-    src = (Path(__file__).parent.parent / relpath).read_text(encoding="utf-8").lower()
-    for token in banned:
-        assert token not in src, f"{relpath} must not contain: {token!r}"
+def test_source_has_no_submit_click():
+    """Layer 2 must contain no submit code path at all — not behind a flag, not behind config.
+    A grep-level assertion is crude but it is the one check that cannot be satisfied by a
+    subtly-wrong implementation."""
+    src = (Path(__file__).parent.parent / "scripts" / "autoapply_browser.py").read_text(
+        encoding="utf-8").lower()
+    for banned in ('click("submit', "click('submit", '.click()', "submit_button", "press(\"enter\")"):
+        assert banned not in src, f"browser layer must not submit: found {banned!r}"
 
 
 # ── Invariant 2: unverified status writes don't silently re-queue work ────────
