@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "CareerPilot Auto-Apply Assistant",
+  "version": "0.1.0",
+  "description": "Reads live application forms and shows what CareerPilot's local bridge (python run.py --serve) would fill. Read-only in this build — it writes nothing to any page.",
+  "permissions": ["storage", "tabs", "sidePanel", "nativeMessaging"],
+  "host_permissions": ["http://127.0.0.1/*", "<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "css": ["overlay.css"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "action": {
+    "default_title": "CareerPilot Auto-Apply — open panel"
+  },
+  "options_page": "options.html"
+}

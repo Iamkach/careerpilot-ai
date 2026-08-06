@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CareerPilot Auto-Apply — Settings</title>
+<style>
+  body { font: 14px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 480px; margin: 2rem; }
+  label { display: block; margin-bottom: 10px; }
+  input { width: 100%; padding: 4px 6px; box-sizing: border-box; }
+  code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+  #status { color: #0a7a34; }
+</style>
+</head>
+<body>
+  <h1>Bridge connection</h1>
+  <p><strong>Automatic (recommended):</strong> one-time setup —
+  <code>python scripts/install_native_host.py --extension-id &lt;id from chrome://extensions&gt;</code>.
+  After that, opening the side panel starts the bridge and fills in the token below by itself;
+  nothing to do here on later sessions.</p>
+  <p><strong>Manual fallback:</strong> run <code>python run.py --serve</code> yourself, then
+  paste the token printed on start (also saved to <code>config/extension_token.txt</code>)
+  below. Always available, whether or not the native host is installed.</p>
+  <label>Port
+    <input id="port" type="number" min="1" max="65535" value="8765">
+  </label>
+  <label>Token
+    <input id="token" type="text" autocomplete="off">
+  </label>
+  <h1>Sessions</h1>
+  <p>Soft cap on how many jobs opened from the side panel's job list (step-15h) can be tracked
+  at once. Opening another past this cap is blocked with a message, not silently ignored —
+  close a tracked tab first.</p>
+  <label>Max concurrent sessions
+    <input id="session-cap" type="number" min="1" max="50" value="5">
+  </label>
+  <button id="save" type="button">Save</button>
+  <p id="status"></p>
+  <script src="options.js"></script>
+</body>
+</html>

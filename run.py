@@ -23,6 +23,7 @@ Two-step daily flow:
     python run.py --stage 7 --dry-run --limit 3   # Sample it: real sheets, no Notion writes
     python run.py --stage 7                # Auto-apply prep: answer sheets, never submits
     python run.py --stage 7 --fill         # ...and pre-fill the form in a browser
+    python run.py --serve [--port 8765]    # Start the Layer 3 browser-extension HTTP bridge
     python run.py --setup                  # Check config & install deps
 """
 
@@ -479,6 +480,12 @@ def setup_profile_routine(args):
     return profile_main([])
 
 
+def serve_routine(args):
+    """Start the Stage 7 Layer 3 local HTTP bridge (scaffold-only: GET /health)."""
+    from scripts.autoapply_server import run_forever
+    run_forever(port=args.port)
+
+
 # ── Full morning routine ──────────────────────────────────────
 
 def ingest_routine(args):
@@ -569,6 +576,10 @@ def main():
                         help="Stage 7: cap how many jobs to process this run (overrides AUTOAPPLY_DAILY_CAP)")
     parser.add_argument("--setup-profile", action="store_true", dest="setup_profile",
                         help="One-time interactive setup of your Stage 7 application answers")
+    parser.add_argument("--serve",        action="store_true",
+                        help="Start the Stage 7 Layer 3 local HTTP bridge for the browser extension")
+    parser.add_argument("--port",         type=int, default=8765,
+                        help="Port for --serve (default 8765)")
     parser.add_argument("--init",         action="store_true",
                         help="One-time fork onboarding: capture Notion details, provision the "
                              "page + databases, write ids to .env")
@@ -630,6 +641,9 @@ def main():
 
     if args.setup_profile:
         sys.exit(setup_profile_routine(args))
+
+    if args.serve:
+        sys.exit(serve_routine(args))
 
     stages = {1: stage1, 2: stage2, 3: stage3, 4: stage4, 5: stage5, 6: stage6, 7: stage7}
 

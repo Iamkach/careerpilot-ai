@@ -1,0 +1,88 @@
+/* overlay.css — badge styling injected alongside content.js. Display only: no page value is
+   ever written by this stylesheet or its script. */
+
+.cpai-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font: 11px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  vertical-align: middle;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.cpai-badge--ready {
+  background: #e6f7ec;
+  color: #0a7a34;
+  border: 1px solid #b6e6c6;
+}
+
+.cpai-badge--review {
+  background: #fff4e5;
+  color: #9a5b00;
+  border: 1px solid #ffd9a0;
+}
+
+.cpai-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  z-index: 2147483647;
+}
+
+/* The badge inside .cpai-attach must stay clickable-adjacent (the button next to it isn't
+   pointer-events:none), so it does not inherit .cpai-badge's pointer-events:none here. */
+.cpai-attach .cpai-badge {
+  margin-left: 0;
+}
+
+.cpai-attach-btn,
+.cpai-copy-btn {
+  font: 11px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 1px 8px;
+  border-radius: 3px;
+  border: 1px solid #9ec2ff;
+  background: #eef4ff;
+  color: #1a4fb4;
+  cursor: pointer;
+}
+
+.cpai-badge--filled {
+  background: #e6f0ff;
+  color: #1a4fb4;
+  border: 1px solid #9ec2ff;
+}
+
+/* step-15f: a per-field Insert from the side panel's draft list. Deliberately distinct from
+   --filled/--ready — "inserted" is never "done", the human still edits/submits by hand. */
+.cpai-badge--inserted {
+  background: #f3e8ff;
+  color: #6b21a8;
+  border: 1px solid #d8b4fe;
+}
+
+/* step-15e: the one explicit human gesture that writes values into the page. Fixed so it's
+   reachable regardless of scroll position; never auto-clicked, never rendered unless there's
+   at least one ready field. */
+.cpai-fill-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid #0a7a34;
+  background: #12a34a;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.cpai-fill-btn:hover {
+  background: #0a7a34;
+}
