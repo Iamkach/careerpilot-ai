@@ -204,7 +204,11 @@ def test_upsert_env_replaces_in_place_preserving_other_lines(tmp_path, cleanup_e
     assert "NOTION_API_KEY=new" in text
     assert "APIFY_API_TOKEN=keepme" in text  # unrelated line untouched
     assert "# a comment" in text             # comments preserved
-    assert text.count("NOTION_API_KEY="***REMOVED-SECRET***".env"
+    assert text.count("NOTION_API_KEY=") == 1  # no duplicate appended
+
+
+def test_upsert_env_appends_when_key_absent(tmp_path, cleanup_env):
+    p = tmp_path / ".env"
     p.write_text("APIFY_API_TOKEN=keepme\n", encoding="utf-8")
     run._upsert_env(p, "NOTION_DB_ID", "abc123")
     assert "NOTION_DB_ID=abc123" in p.read_text(encoding="utf-8")
