@@ -136,6 +136,22 @@ def test_tailor_resumes_batch_full_parse_failure_returns_empty_dict(patch_ai_cha
     assert results == {}
 
 
+def test_tailor_resumes_batch_ai_call_exception_returns_empty_dict(patch_ai_chat):
+    """The nightly-pipeline crash class: an exception raised BY the AI call itself (SDK
+    max_turns cap, transport error, AIChatError, ...), not just a malformed response, must be
+    caught the same way a parse failure already is — tailor_resumes_batch returns {} so every
+    job in the chunk falls back to the per-job single-call path, instead of the exception
+    propagating out of Stage 2 and aborting the whole run.py process."""
+    jobs = make_recorded_jobs(2)
+    jobs_and_jds = [(j, j["description"]) for j in jobs]
+    fake = patch_ai_chat(stage2_tailor)
+    fake.raises = RuntimeError("Claude Code returned an error result: Reached maximum number of turns (1)")
+
+    results = stage2_tailor.tailor_resumes_batch("resume text", jobs_and_jds)
+
+    assert results == {}
+
+
 def test_tailor_resumes_batch_chunks_large_job_lists(patch_ai_chat, monkeypatch):
     """More than _TAILOR_CHUNK_SIZE jobs must still cost multiple bounded calls (one per
     chunk), never one unbounded call — mirrors verify_tailored_scores_batch's chunking."""
@@ -197,20 +213,33 @@ def test_tailor_resume_single_non_dict_json_returns_empty_lists(patch_ai_chat):
     assert keywords == []
 
 
-def test_tailor_resume_single_unparseable_json_raises(patch_ai_chat):
-    """Characterization test, not a bug fix: unlike tailor_resumes_batch (which wraps its
-    parse in try/except and returns {} on failure), _tailor_resume_single has no such guard —
-    a response parse_json_response can't recover JSON from propagates a ValueError straight
-    up to the caller. Since run()'s batch-to-single fallback loop doesn't catch this either,
-    one malformed single-job fallback response currently aborts the rest of stage 2's run."""
+def test_tailor_resume_single_unparseable_json_returns_none_none(patch_ai_chat):
+    """_tailor_resume_single now wraps its AI call + parse in try/except, mirroring
+    tailor_resumes_batch's existing guard: a response parse_json_response can't recover JSON
+    from returns (None, None) — the sentinel run() reads as 'AI call/parse failed, leave the
+    job at Reviewed for the next scheduled run to retry' — rather than raising and aborting
+    the rest of stage 2's run, as it used to."""
     job = make_recorded_jobs(1)[0]
     patch_ai_chat(stage2_tailor, response="not json at all")
 
-    try:
-        stage2_tailor._tailor_resume_single("resume text", job["description"], job)
-        assert False, "expected parse_json_response's ValueError to propagate"
-    except ValueError:
-        pass
+    edits, keywords = stage2_tailor._tailor_resume_single("resume text", job["description"], job)
+
+    assert edits is None
+    assert keywords is None
+
+
+def test_tailor_resume_single_ai_call_exception_returns_none_none(patch_ai_chat):
+    """Same guard, but for an exception raised BY the AI call itself (e.g. the SDK's
+    max_turns cap) rather than a malformed response — the failure class behind the nightly
+    pipeline crash. Must also degrade to (None, None), not propagate."""
+    job = make_recorded_jobs(1)[0]
+    fake = patch_ai_chat(stage2_tailor)
+    fake.raises = RuntimeError("Claude Code returned an error result: Reached maximum number of turns (1)")
+
+    edits, keywords = stage2_tailor._tailor_resume_single("resume text", job["description"], job)
+
+    assert edits is None
+    assert keywords is None
 
 
 # ── verify_tailored_score empty-result synthesis ────────────────────────────
@@ -508,3 +537,47 @@ def test_run_logs_verification_failure_when_scoring_unscored(monkeypatch):
 
     joined = "\n".join(logs)
     assert "Post-tailor verification scoring failed" in joined
+
+
+# ── run()'s ai_call_failed path: one job's AI failure must not sink the run ──────────
+
+def test_run_leaves_ai_call_failed_job_at_reviewed_without_sinking_run(monkeypatch):
+    """The nightly-pipeline crash scenario end to end: one job's tailoring AI call fails
+    outright (batch miss + single-job fallback also raises/fails), while a sibling job in the
+    same run tailors normally. Before this fix, _tailor_resume_single's exception would
+    propagate out of run() and abort the whole stage-2 pass — including the sibling job, which
+    had already succeeded. Now the failing job is simply left untouched (no db_update_status
+    call at all, so it stays at 'Reviewed' in Notion for the next scheduled run to retry) and
+    the sibling job still reaches 'Resume Tailored'."""
+    job_ok = _verify_job(page_id="p_ok", company="Acme Corp")
+    job_fail = _verify_job(page_id="p_fail", company="Beta Inc")
+    updates = _stub_run_dependencies(monkeypatch, [job_ok, job_fail])
+
+    # p_ok comes back from the batch call normally; p_fail is missing (as if its chunk's AI
+    # call raised), forcing run() into the per-job fallback path for it.
+    monkeypatch.setattr(
+        stage2_tailor, "tailor_resumes_batch",
+        lambda resume_text, jobs_and_jds: {
+            "p_ok": ([{"old": "x", "new": "y", "reason": "r"}], []),
+        },
+    )
+
+    def _fake_single(resume_text, jd, job):
+        assert job["page_id"] == "p_fail"  # only the missing job should ever reach here
+        return None, None  # AI call/parse failed
+
+    monkeypatch.setattr(stage2_tailor, "_tailor_resume_single", _fake_single)
+    monkeypatch.setattr(stage2_tailor, "verify_tailored_scores_batch", lambda jobs_and_tailored: {
+        (j.get("page_id") or j.get("id")): {"url": j["url"], "score": 80, "scored": True,
+                                             "missing_keywords": [], "sponsorship": "unknown",
+                                             "company_type": "product"}
+        for j, _, _ in jobs_and_tailored
+    })
+
+    stage2_tailor.run(min_score=0)
+
+    updated_pids = {pid for pid, _, _ in updates}
+    assert "p_fail" not in updated_pids  # never written — stays 'Reviewed', retried next run
+    assert "p_ok" in updated_pids
+    ok_update = next(u for u in updates if u[0] == "p_ok")
+    assert ok_update[1] == "Resume Tailored"
