@@ -111,6 +111,50 @@ def test_label_only_field_is_reachable(resume):
     assert result["filled"] == 7
 
 
+def test_aria_label_field_is_reachable(resume):
+    """`<input aria-label="...">` with no <label> element at all — invisible to the old
+    name/id + descendant-XPath resolver. Only the accessibility-tree tier (get_by_label) can
+    see it."""
+    extra = [{"label": "LinkedIn Profile URL", "type": "input_text",
+              "value": "https://linkedin.com/in/x", "status": "ready", "required": False}]
+    result = fill_application(FORM_URL, _plan(resume, extra), headless=True)
+    assert result["filled"] == 7
+    assert result["resolved_by"].get("aria_exact") == 1
+
+
+def test_aria_labelledby_field_is_reachable(resume):
+    """`<input aria-labelledby="...">` referencing a separate text node — same blind spot as
+    aria-label, exercised separately since aria-labelledby resolves via a different attribute."""
+    extra = [{"label": "Portfolio URL", "type": "input_text",
+              "value": "https://example.com", "status": "ready", "required": False}]
+    result = fill_application(FORM_URL, _plan(resume, extra), headless=True)
+    assert result["filled"] == 7
+    assert result["resolved_by"].get("aria_exact") == 1
+
+
+def test_label_for_non_adjacent_input_is_reachable(resume):
+    """`<label for="x">` where the input is neither a descendant nor immediately following —
+    the exact shape that defeats both XPath fallbacks (`//label//input` and
+    `//label/following::input[1]`) but not Playwright's get_by_label, which resolves the
+    for/id link directly."""
+    extra = [{"label": "Were you referred by a current employee?",
+              "type": "multi_value_single_select",
+              "value": False, "status": "ready", "required": False}]
+    result = fill_application(FORM_URL, _plan(resume, extra), headless=True)
+    assert result["filled"] == 7
+    assert result["resolved_by"].get("aria_exact") == 1
+
+
+def test_resolved_by_tallies_the_winning_tier(resume):
+    """Telemetry: every plain named field resolves via the `name` tier, and the label-only
+    field resolves via a fallback tier — proving the histogram reflects reality, not just a
+    fixed count."""
+    result = fill_application(FORM_URL, _plan(resume), headless=True)
+    assert result["ok"] is True
+    assert result["resolved_by"].get("name", 0) >= 4
+    assert sum(result["resolved_by"].values()) == result["filled"]
+
+
 def test_drift_aborts_rather_than_half_filling(resume):
     """Most planned fields absent = the markup moved. Leaving a partly-filled form for the
     human to trust is worse than stopping, because they'd likely submit it."""

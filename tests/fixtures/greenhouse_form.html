@@ -49,6 +49,28 @@
     <input type="text">
   </label>
 
+  <!-- Three a11y-only markups the pre-Phase-1 selectors cannot see at all: an aria-label with no
+       <label> element, an aria-labelledby pointing at a separate text node, and a <label for>
+       input that is neither a descendant nor immediately followed by any <input> (only a
+       <select>, which the old `following::input[1]` fallback does not match at all — placed
+       last among the real fields on purpose, so there is no *other* <input> later in the DOM for
+       that fallback to mismatch onto). -->
+  <input type="text" name="question_linkedin" aria-label="LinkedIn Profile URL">
+
+  <span id="q_portfolio_title">Portfolio URL</span>
+  <input type="text" name="question_portfolio" aria-labelledby="q_portfolio_title">
+
+  <div class="field-row">
+    <label for="question_referral">Were you referred by a current employee?</label>
+  </div>
+  <div class="field-row">
+    <select id="question_referral" name="question_referral">
+      <option value=""></option>
+      <option value="1">Yes</option>
+      <option value="0">No</option>
+    </select>
+  </div>
+
   <label for="question_why">Why do you want to work here?</label>
   <textarea id="question_why" name="question_why"></textarea>
 

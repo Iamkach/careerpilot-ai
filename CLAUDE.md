@@ -279,6 +279,26 @@ human clicks Submit and then sets `Applied` by hand. Two deliberately decoupled 
   when the browser layer can't. **There is no submit code path in that module at all** — not
   behind a flag — and `tests/test_autoapply_notion.py` asserts it stays that way.
 
+**Field resolution order (`_find()`, `scripts/autoapply_browser.py`).** A planned field is
+resolved through three tiers, most precise first, each one a fallback for what the previous tier
+structurally cannot see: (1) `name`/`#id` — reliable on Greenhouse, whose public schema reports
+the real input `name`; (2) the accessibility tree (`_semantic_locators()` — Playwright
+`get_by_label(exact=True)`, then loose, then `get_by_role("textbox", name=...)`) — resolves
+`<label for>` where the input isn't a DOM descendant/sibling, `aria-label`, and
+`aria-labelledby`, none of which the old XPath-only resolver could see at all; (3) the XPath
+label fallbacks (`//label[...]//input`, `.../following::input[1]`), now genuinely last-resort.
+Exact-match is tried before loose on purpose — `get_by_label`'s default substring matching would
+reintroduce the same 40-char label-prefix collision the XPath tier already has, and a wrong match
+here is the one failure mode worse than an unfilled field (it fills the *wrong* field). Only the
+first candidate gets Playwright's full wait (the page may still be settling); later tiers use a
+short wait, since the DOM is already loaded by then — this keeps the added tiers from multiplying
+the per-unresolved-field cost that feeds `MIN_RESOLVE_RATIO`'s drift guard. `fill_application()`'s
+result dict carries `resolved_by: dict[tier, count]` so a `drift` verdict can be read as either
+"nothing resolved" or "resolved but concentrated on one tier" — different fixes. **Layer 3
+(`extension/content.js`) has its own independent DOM scraper by design and does not inherit any
+of this** — the two resolvers are deliberately allowed to diverge; see
+`spec/selector-resolution-hardening/` for why.
+
 **Why no API:** there is no candidate-usable submit endpoint. Greenhouse's
 `POST /v1/boards/{token}/jobs/{id}` authenticates as the *employer* (Basic Auth, the company's
 board key) and their docs warn a direct post "would reveal your secret key to anybody that views

@@ -59,44 +59,94 @@ _AUTH_HINTS = ("sign in", "log in", "create an account", "/login", "/signin")
 
 
 def _result(ok: bool, outcome: str, detail: str = "", filled: int = 0,
-            screenshot: str = "") -> dict:
+            screenshot: str = "", resolved_by: dict | None = None) -> dict:
     return {"ok": ok, "outcome": outcome, "detail": detail,
-            "filled": filled, "screenshot": screenshot}
+            "filled": filled, "screenshot": screenshot, "resolved_by": resolved_by or {}}
 
 
-def _candidate_selectors(field: dict) -> list[str]:
-    """Selectors to try for one planned field, most precise first.
+def _candidate_selectors(field: dict) -> list[tuple[str, str]]:
+    """(tier, selector) pairs to try for one planned field, most precise first.
 
     Greenhouse names its inputs exactly as the public schema reports (`first_name`,
     `question_12345`), so the name-based selectors are reliable *there*. The label-based
-    fallbacks are what carry boards with no public schema, and are also what survives a class
-    rename — matching on user-visible label text rather than styling hooks, since the visible
-    text is far more stable than the CSS classes that broke every comparable project.
+    XPath fallbacks are what carry boards with no public schema, and are also what survives a
+    class rename — matching on user-visible label text rather than styling hooks, since the
+    visible text is far more stable than the CSS classes that broke every comparable project.
+    A pure string function on purpose: it needs no `page`, so it's unit-testable without a
+    browser (see tests/test_autoapply_selector_tiers.py). `_find()` interleaves the
+    page-aware `_semantic_locators()` tier between the two tiers built here.
     """
     name = (field.get("name") or "").strip()
     label = (field.get("label") or "").strip()
-    sels: list[str] = []
+    sels: list[tuple[str, str]] = []
     if name:
-        sels += [f'[name="{name}"]', f'#{name}']
+        sels += [("name", f'[name="{name}"]'), ("name", f'#{name}')]
     if label:
         esc = label.replace('"', '\\"')
-        sels += [f'//label[contains(normalize-space(.), "{esc[:40]}")]//input',
-                 f'//label[contains(normalize-space(.), "{esc[:40]}")]//textarea',
-                 f'//label[contains(normalize-space(.), "{esc[:40]}")]/following::input[1]']
+        sels += [("xpath_label", f'//label[contains(normalize-space(.), "{esc[:40]}")]//input'),
+                 ("xpath_label", f'//label[contains(normalize-space(.), "{esc[:40]}")]//textarea'),
+                 ("xpath_label",
+                  f'//label[contains(normalize-space(.), "{esc[:40]}")]/following::input[1]')]
     return sels
 
 
+def _semantic_locators(page, field):
+    """(tier, locator) pairs from the accessibility tree, most precise first.
+
+    Separate from _candidate_selectors() on purpose: these need a live `page`, while the
+    string selectors stay pure and unit-testable. Exact-match first — get_by_label defaults
+    to substring matching, which reintroduces the same 40-char prefix collision the XPath
+    fallbacks already have.
+    """
+    label = (field.get("label") or "").strip()
+    if not label:
+        return
+    yield "aria_exact", page.get_by_label(label, exact=True)
+    yield "aria_loose", page.get_by_label(label)
+    yield "role_name", page.get_by_role("textbox", name=label)
+
+
+def _attempted_tiers(field: dict) -> list[str]:
+    """Static list of tier names _find() will walk for this field, without touching the page.
+    Used to annotate a miss with what was tried, since _find() itself only ever returns the
+    winning (locator, tier) pair — or (None, None) — not the full attempt history."""
+    name = (field.get("name") or "").strip()
+    label = (field.get("label") or "").strip()
+    tiers: list[str] = []
+    if name:
+        tiers.append("name")
+    if label:
+        tiers += ["aria_exact", "aria_loose", "role_name", "xpath_label"]
+    return tiers
+
+
+def _to_locator(page, sel: str):
+    return page.locator(f"xpath={sel}").first if sel.startswith("//") else page.locator(sel).first
+
+
 def _find(page, field):
-    """First locator matching this field that's actually attached, else None. Every wait is
-    bounded — an unbounded wait is how an invisible captcha turns into a hang."""
-    for sel in _candidate_selectors(field):
+    """(locator, tier) for the first candidate that's actually attached, else (None, None).
+
+    Resolution order: `name`/`#id` (most precise on Greenhouse) → the accessibility-tree tier
+    (`aria_exact`, `aria_loose`, `role_name` — robust across class renames and label-less
+    markup) → the XPath label fallbacks, now genuinely last-resort. Every wait is bounded — an
+    unbounded wait is how an invisible captcha turns into a hang. Only the first candidate gets
+    the full 1200ms wait (the page may still be settling); later tiers use 300ms, since the DOM
+    is already loaded by then — worst case ~3.3s across 8 candidates instead of ~9.6s.
+    """
+    csels = _candidate_selectors(field)
+    name_tier = [(t, _to_locator(page, s)) for t, s in csels if t == "name"]
+    xpath_tier = [(t, _to_locator(page, s)) for t, s in csels if t != "name"]
+    semantic_tier = [(t, loc.first) for t, loc in _semantic_locators(page, field)]
+    ordered = name_tier + semantic_tier + xpath_tier
+
+    for i, (tier, loc) in enumerate(ordered):
         try:
-            loc = page.locator(sel).first if not sel.startswith("//") else page.locator(f"xpath={sel}").first
-            loc.wait_for(state="attached", timeout=1200)
-            return loc
+            loc.wait_for(state="attached", timeout=1200 if i == 0 else 300)
+            return loc, tier
         except Exception:
             continue
-    return None
+    return None, None
 
 
 def accepts_docx(accept: str) -> bool:
@@ -151,8 +201,11 @@ def _classify_block(page) -> tuple[str, str] | None:
 def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
     """Open `url`, fill every `ready` field from `plan`, attach the resume, screenshot, stop.
 
-    Returns {ok, outcome, detail, filled, screenshot}. Outcomes: "filled" (ok=True),
-    "captcha", "auth", "drift", "pdf_only", "unavailable", "failed". Never raises.
+    Returns {ok, outcome, detail, filled, screenshot, resolved_by}. `resolved_by` counts filled
+    fields per resolution tier ("name", "aria_exact", "aria_loose", "role_name", "xpath_label"),
+    for diagnosing whether a miss is concentrated on one tier or spread across all of them.
+    Outcomes: "filled" (ok=True), "captcha", "auth", "drift", "pdf_only", "unavailable",
+    "failed". Never raises.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -182,10 +235,13 @@ def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
                     return _result(False, blocked[0], blocked[1])
 
                 filled, missed = 0, []
+                resolved_by: dict[str, int] = {}
                 for field in ready:
-                    loc = _find(page, field)
+                    loc, tier = _find(page, field)
                     if loc is None:
-                        missed.append(field.get("label") or field.get("name") or "?")
+                        tried = ",".join(_attempted_tiers(field)) or "none"
+                        missed.append(
+                            f"{field.get('label') or field.get('name') or '?'} (tried: {tried})")
                         continue
                     try:
                         if field["type"] in ("input_file", "attachment"):
@@ -196,7 +252,7 @@ def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
                                     "this form rejects .docx, and no PDF converter (LibreOffice) "
                                     "is installed to produce one — convert the resume by hand "
                                     "and apply from the answer sheet",
-                                    filled, "")
+                                    filled, "", resolved_by)
                             loc.set_input_files(upload_path)
                         elif field["type"] == "multi_value_single_select":
                             val = field["value"]
@@ -205,16 +261,19 @@ def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
                         else:
                             loc.fill(str(field["value"]))
                         filled += 1
+                        resolved_by[tier] = resolved_by.get(tier, 0) + 1
                     except Exception as e:
                         missed.append(f"{field.get('label','?')} ({type(e).__name__})")
 
                 # Drift guard: too few fields resolving means the markup moved under us.
                 if filled < MIN_RESOLVE_RATIO * len(ready):
+                    hist = ", ".join(f"{t}:{n}" for t, n in sorted(resolved_by.items())) or "none"
                     return _result(
                         False, "drift",
                         f"only {filled}/{len(ready)} planned fields resolved — the form's markup "
                         f"likely changed. Not leaving a half-filled form; apply from the answer "
-                        f"sheet. Unresolved: {', '.join(missed[:6])}", filled, "")
+                        f"sheet. Unresolved: {', '.join(missed[:6])}. Resolved by tier: {hist}",
+                        filled, "", resolved_by)
 
                 try:
                     page.screenshot(path=str(shot), full_page=True)
@@ -229,7 +288,7 @@ def fill_application(url: str, plan: dict, headless: bool = False) -> dict:
                     browser.close()
                 return _result(True, "filled",
                                f"{filled}/{len(ready)} fields filled; form NOT submitted",
-                               filled, str(shot))
+                               filled, str(shot), resolved_by)
             except Exception as e:
                 try:
                     browser.close()

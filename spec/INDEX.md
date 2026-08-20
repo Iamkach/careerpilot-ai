@@ -17,6 +17,10 @@ as side states.
 | [extension-ux-fixes](extension-ux-fixes/meta.md) | finalized | P1 | S | application-prefill-extension |
 | [career-site-enrichment-fallback](career-site-enrichment-fallback/meta.md) | deferred (mostly shipped; only Option C remains gated) | — | S | — |
 | [inbound-email-status-sync](inbound-email-status-sync/meta.md) | idea | — | — | — |
+| [wellfound-job-source](wellfound-job-source/meta.md) | idea | — | S–M | — |
+| [resume-tailoring-prose-quality](resume-tailoring-prose-quality/meta.md) | idea | — | M | — |
+| [selector-resolution-hardening](selector-resolution-hardening/meta.md) | superseded (Phase 1-2 implemented and reused; Phase 3 superseded) | P2 | S | — |
+| [auto-apply-agentic-submit](auto-apply-agentic-submit/meta.md) | finalized | P1 | L | selector-resolution-hardening |
 
 This table covers currently-open work only. ~14 already-shipped steps (0-1, 2-6, 8, 9, 11, 12, and
 `auto-apply-subsystem`'s Phases 1-2) are documented in [`../docs/CHANGELOG.md`](../docs/CHANGELOG.md)
