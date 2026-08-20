@@ -1,10 +1,10 @@
 # TODO — standalone fixes and reminders
 
 This file is scoped to **small, standalone** code/development-blocking items only — quick fixes
-and reminders for the next execution. It is not an index of open roadmap stories: every
-step-numbered story (its problem statement, design decisions, and open residual gaps) lives
-entirely in its own `docs/backlog/step-N-*.md` file — see `docs/backlog/README.md` for the current
-list. See `docs/CHANGELOG.md` for what's already landed.
+and reminders for the next execution. It is not an index of open roadmap stories: every feature's
+problem statement, design decisions, and open residual gaps lives in its own `spec/<feature>/`
+folder — see `spec/INDEX.md` for the current list. See `docs/CHANGELOG.md` for what's already
+landed.
 
 Outstanding runtime/ops issues (GitHub Actions secrets, CI gate, integrations — nothing that
 touches this repo's code) live in `docs/RUNTIME_NOTES.md` instead.
@@ -52,3 +52,23 @@ touches this repo's code) live in `docs/RUNTIME_NOTES.md` instead.
   `tests/test_nightly_workflow_publish_resumes.py`, `tests/test_stage2_resume_link.py`, and new
   cases in `tests/test_autoapply_plan.py`. Not exercised against a real nightly run/push yet — see
   the same caveat already noted for stage 7's fill path never having run live.
+
+- **`scripts/dev_check.py` doesn't exist (found 2026-08-20).** `CLAUDE.md`'s "Definition of Done"
+  section mandates running it every session as the hygiene gate (git status/branch checks, line
+  endings, then `pytest`), but the file was never created — every session has been trusting a doc
+  that describes a script that isn't there. Either write it (git status/branch-relationship/
+  line-ending checks + `pytest -v`, matching what `CLAUDE.md` already describes) or correct
+  `CLAUDE.md` to stop claiming it exists. Substituted manually this session:
+  `git status` + full `pytest -v`.
+
+- **Two local-environment-polluted test failures, not code bugs (found 2026-08-19/20).**
+  `tests/test_autoapply_answer_quality.py::test_preset_bank_never_fabricates_a_history_answer`
+  fails because a real `config/application_profile.json` (git-ignored, from a prior
+  `--setup-profile` run) overlays `"ever interviewed": "No"` onto `COMMON_QUESTION_PRESETS` at
+  import time, leaking into a test that assumes the *default* bank ships that preset blank.
+  `tests/test_sources_robustness.py::test_discover_tokens_stops_probing_at_budget` fails because
+  `discover_tokens()` seeds in a real `"Notion Seed Co"` from `get_target_companies_from_notion()`
+  that the test never mocked out, throwing off its exact probe-budget assertion. Both reproduce on
+  a clean `pytest -v` in this checkout and are unrelated to any in-flight code change — either
+  isolate `config/settings.py`'s profile overlay and the Notion seed call in these two tests, or
+  accept this as expected drift from running against a real local `.env`/profile.

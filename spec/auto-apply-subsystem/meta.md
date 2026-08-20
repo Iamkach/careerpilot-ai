@@ -13,6 +13,10 @@ ToS, per-site fragility). Ship the safe slice first.
 and `scripts/sources.py` (the `source`/URL-domain routing key this reuses); none of those are yet
 migrated into `spec/`.
 
+Phase 3/4's forward direction is one leg of an unresolved three-way conflict with
+`application-prefill-extension` and `auto-apply-agentic-submit` over which approach is Stage 7's
+path forward — see [docs/adr/0001-stage7-execution-strategy.md](../../docs/adr/0001-stage7-execution-strategy.md).
+
 Sections 1-8 below (problem.md, constraints.md, plan.md) are the original design analysis, kept
 as rationale for what shipped and what's still open. Section 11 of the original doc ("What shipped,
 and what the research changed") is folded into problem.md's background and plan.md's "Landed"

@@ -1,12 +1,24 @@
 # Application pre-fill browser extension (Stage 7 Layer 3)
 
-**Status:** in-progress — all ten increments below are coded, wired in, and covered by `pytest`
-(Python side) / grep contract tests (JS side). **Not yet closed out:** live verification in a real
-Chrome session (every increment's own checklist) and installing/testing the native-messaging host
-(increment 8) haven't been run yet, and nothing here is committed — see verification.md's
-"Remaining before this story can close."
+**Status:** in-progress — corrected 2026-08-20. Most of the extension (side panel, plan/fill flow,
+`extension/background.js`/`content.js`/`panel.js`/`options.*`, `scripts/autoapply_server.py`) is
+now on `main`. **Two increments are not**: essay drafting (`extension/drafts.js`) and the entire
+native-messaging host (`extension/native_host/`, `scripts/install_native_host.py`) exist only on
+the unmerged branch `feature/step-15-application-prefill-extension` — kept alive specifically
+because this content was found missing during the 2026-08-20 repo reorg. Land that branch's
+remaining files onto `main` before treating this feature as code-complete. Also still open: live
+verification in a real Chrome session (every increment's own checklist) and installing/testing the
+native-messaging host — see verification.md's "Remaining before this story can close."
 **Size:** L
 **Depends-on:** [] — depends on Step 10 Phases 1-2 (shipped, not yet migrated into `spec/`).
+
+One of four unreconciled directions for Stage 7's execution strategy — see
+[docs/adr/0001-stage7-execution-strategy.md](../../docs/adr/0001-stage7-execution-strategy.md).
+**Note:** GitHub issue [#27](https://github.com/Iamkach/careerpilot-ai/issues/27) already
+confirmed (2026-08-05) that a Claude-in-Chrome fill flow supersedes this extension outright —
+that decision was never reflected here or in this file's Status field; see the ADR before
+treating this as still the active plan. Only [#34](https://github.com/Iamkach/careerpilot-ai/issues/34)
+(decommission timing) remains genuinely open on that question.
 
 Cuts the ~20 min/application spent in the browser for new inbound jobs, via a docked Chrome side
 panel + local HTTP bridge that pre-fills whatever application form is on screen — Ashby, Workday,
