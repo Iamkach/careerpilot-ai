@@ -92,12 +92,7 @@ async def _sdk_text(prompt: str, system: str, model: str) -> str:
         allowed_tools=[],          # pure text generation — no tool use
         setting_sources=[],        # don't load project CLAUDE.md/settings into the prompt
         permission_mode="bypassPermissions",
-        # 1 was too tight: this path has no max_tokens knob (see _chat_claude_code's
-        # docstring), so a long batch response can need more than one internal turn just to
-        # finish generating — allowed_tools=[] means a "turn" here is never the model deciding
-        # to do something else, only more room to complete a long reply. 3 gives headroom for
-        # that without opening up a real agentic loop.
-        max_turns=3,
+        max_turns=1,
     )
     chunks, result = [], None
     async for msg in query(prompt=prompt, options=opts):

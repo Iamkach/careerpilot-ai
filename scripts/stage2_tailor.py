@@ -124,16 +124,12 @@ def fetch_jd(url: str) -> str:
 
 # ── Tailor resume using Claude ───────────────────────────────
 
-def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list | None, list | None]:
+def _tailor_resume_single(resume_text: str, jd: str, job: dict) -> tuple[list, list]:
     """Return a list of {old, new} text edits to apply to the base resume .docx.
 
     The resume_text is extracted verbatim from the base resume .docx
     (RESUME_TEMPLATE_PATH) so Claude can quote exact strings for the "old" fields.
-
-    Returns ([], []) when the AI validly determined there's nothing to add (not transient —
-    caller parks the job in Human Review). Returns (None, None) when the AI call itself failed
-    or its response couldn't be parsed at all (transient — caller leaves the job at 'Reviewed'
-    for the next scheduled run to retry, mirroring stage 1's Retry-queue philosophy)."""
+    """
     resume_block = {
         "type": "text",
         "text": f"Here is my current resume:\n\n<resume>\n{resume_text}\n</resume>",
@@ -184,12 +180,8 @@ Return ONLY this JSON (no markdown fences, no commentary):
   ]
 }}""",
     }
-    try:
-        raw = ai_chat_blocks([resume_block, jd_block], system=SYSTEM_PROMPT, max_tokens=4000, quality=True)
-        data = parse_json_response(raw)
-    except Exception as exc:
-        log(f"  ⚠ Single-job AI call/parse failed for {job['company']} ({exc})")
-        return None, None
+    raw = ai_chat_blocks([resume_block, jd_block], system=SYSTEM_PROMPT, max_tokens=4000, quality=True)
+    data = parse_json_response(raw)
     if isinstance(data, dict):
         keywords = data.get("keywords_injected", [])
         edits = data.get("edits", [])
@@ -281,10 +273,10 @@ Return ONLY a JSON array (no markdown fences, no commentary):
     }
 
     max_tok = min(4000 + 1500 * len(jobs_and_jds), 16000)
+    raw = ai_chat_blocks([resume_block, prompt_block], system=SYSTEM_PROMPT,
+                         max_tokens=max_tok, quality=True)
 
     try:
-        raw = ai_chat_blocks([resume_block, prompt_block], system=SYSTEM_PROMPT,
-                             max_tokens=max_tok, quality=True)
         data = parse_json_response(raw)
         if isinstance(data, dict):
             for key in ("results", "jobs", "edits"):
@@ -294,7 +286,7 @@ Return ONLY a JSON array (no markdown fences, no commentary):
         if not isinstance(data, list):
             raise ValueError(f"Expected JSON array, got {type(data)}")
     except Exception as exc:
-        log(f"  ⚠ Batch AI call/parse failed ({exc}) — will fall back per-job")
+        log(f"  ⚠ Batch parse failed ({exc}) — will fall back per-job")
         return {}
 
     by_index: dict[int, dict] = {}
@@ -579,25 +571,18 @@ def run(min_score: int = 0):
 
     missing = [(j, d) for j, d in jobs_and_jds
                if (j.get("page_id") or j.get("id")) not in batch_results]
-    ai_call_failed: set[str] = set()  # AI call itself failed — leave at 'Reviewed', retry next run
     if missing:
         log(f"  ↳ Batch missed {len(missing)} job(s) — falling back to per-job calls")
         for job, jd in missing:
             log(f"    → {job['company']} — single-job fallback")
             edits, keywords = _tailor_resume_single(resume_text, jd, job)
             pid = job.get("page_id") or job.get("id")
-            if edits is None:
-                log(f"    ⚠ AI call failed for {job['company']} — leaving as 'Reviewed' to retry next run")
-                ai_call_failed.add(pid)
-                continue
             batch_results[pid] = (edits, keywords)
 
     # Phase 3: Apply edits + save a tailored resume for every job (no AI calls)
     tailored: list[tuple[dict, str, str, str, list]] = []  # (job, tailored_text, jd, file_path, edits)
     for job, jd in jobs_and_jds:
         pid = job.get("page_id") or job.get("id")
-        if pid in ai_call_failed:
-            continue  # left at 'Reviewed' — no resume saved, no Notion write, retried next run
         log(f"\n→ {job['company']} — {job['title']} (ATS: {job['ats_score']})")
         edits, keywords = batch_results.get(pid, ([], []))
         log(f"  ↳ {len(edits)} edit(s) suggested")
