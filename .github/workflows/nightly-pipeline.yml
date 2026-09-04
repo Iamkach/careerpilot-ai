@@ -8,16 +8,20 @@ name: Nightly job search pipeline
 # sense off-hours: at midnight the subscription's 5-hour usage window isn't competing with any
 # interactive Claude Code session, so it costs no marginal $ instead of contending with daytime use.
 #
-# NOTE: cron below is UTC and has no timezone concept — 05:23 UTC ≈ 12:23 AM CDT (UTC-5) /
-# 11:23 PM CST (UTC-6). We use an off-peak minute (:23) instead of :00 to avoid GitHub Actions
-# top-of-the-hour queue congestion, which causes multi-hour delays.
+# NOTE: cron below is UTC and has no timezone concept — 06:17 UTC = 12:17am US Central (CST,
+# UTC-6); during Daylight Time (CDT, UTC-5) the same UTC time shows as 1:17am local. Adjust the
+# hour to match your local off-hours window and DST offset (cron itself won't shift with DST).
+# The :17 minute (not :00) is deliberate: GitHub queues scheduled workflows on a best-effort
+# basis and explicitly warns that top-of-the-hour crons across all of GitHub see the heaviest
+# queuing delay, sometimes an hour or more. Off the exact hour mark avoids that congestion —
+# actual start time still isn't guaranteed to the minute, but drift should be much smaller.
 #
 # SCHEDULED RUNS DISABLED (2026-09-03): the nightly cron was firing erratically (queue jitter).
 # The `schedule:` trigger is commented out until it is deliberately re-enabled. The workflow can
 # still be run on demand via `workflow_dispatch` in the Actions tab.
 on:
   # schedule:
-  #   - cron: "23 5 * * *"
+  #   - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       mode:

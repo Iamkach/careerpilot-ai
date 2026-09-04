@@ -64,7 +64,7 @@ The cron in `nightly-pipeline.yml` is UTC with no timezone/DST concept:
 ```yaml
 on:
   # schedule:
-  #   - cron: "23 5 * * *"   # 05:23 UTC ≈ 12:23 AM CDT (UTC-5) / 11:23 PM CST (UTC-6)
+  #   - cron: "17 6 * * *"   # 06:17 UTC = 12:17 AM CST (UTC-6) / 1:17 AM CDT (UTC-5)
 ```
 
 Edit the hour to match your own off-hours window, and remember to shift it again across DST
