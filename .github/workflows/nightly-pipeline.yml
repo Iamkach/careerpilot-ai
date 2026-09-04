@@ -15,9 +15,13 @@ name: Nightly job search pipeline
 # basis and explicitly warns that top-of-the-hour crons across all of GitHub see the heaviest
 # queuing delay, sometimes an hour or more. Off the exact hour mark avoids that congestion —
 # actual start time still isn't guaranteed to the minute, but drift should be much smaller.
+#
+# SCHEDULED RUNS DISABLED (2026-09-03): the nightly cron was firing erratically (queue jitter).
+# The `schedule:` trigger is commented out until it is deliberately re-enabled. The workflow can
+# still be run on demand via `workflow_dispatch` in the Actions tab.
 on:
-  schedule:
-    - cron: "17 6 * * *"
+  # schedule:
+  #   - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -52,12 +56,32 @@ env:
   NOTION_TARGET_COMPANIES_PAGE_ID: ${{ secrets.NOTION_TARGET_COMPANIES_PAGE_ID }}
   FAST_PROVIDER: claude
   QUALITY_PROVIDER: claude_code
+  # Off-hours guard: abort if GitHub Actions queue delayed the scheduled run into US business hours
+  # (11:00-23:00 UTC corresponds to approx 6:00 AM - 6:00 PM CDT / 5:00 AM - 5:00 PM CST).
+  ABORT_IF_AFTER_UTC_HOUR: 11
+  ABORT_IF_BEFORE_UTC_HOUR: 23
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # Safety guard: if runner queue delays push execution into business hours, abort immediately
+      # so it never exhausts Claude subscription rate limits during your workday.
+      # Only applies to scheduled runs (workflow_dispatch can still be triggered manually anytime).
+      - name: Guard against daytime queue delay
+        if: github.event_name == 'schedule'
+        run: |
+          CURRENT_HOUR_UTC=$(date -u +%-H)
+          START_DAYTIME=${ABORT_IF_AFTER_UTC_HOUR:-11}
+          END_DAYTIME=${ABORT_IF_BEFORE_UTC_HOUR:-23}
+          echo "Current UTC hour: $CURRENT_HOUR_UTC (Daytime block: $START_DAYTIME:00 - $END_DAYTIME:00 UTC)"
+          if [ "$CURRENT_HOUR_UTC" -ge "$START_DAYTIME" ] && [ "$CURRENT_HOUR_UTC" -lt "$END_DAYTIME" ]; then
+            echo "::error title=Aborted (Business Hours Overlap)::GitHub Actions queue delayed this scheduled run into business hours (UTC hour: $CURRENT_HOUR_UTC). Aborting run to protect daytime Claude quota and avoid colliding with interactive work."
+            exit 1
+          fi
+          echo "Run is within allowed off-hours window."
+
       - uses: actions/checkout@v4
 
       - name: Write profile.json from secrets

@@ -54,16 +54,28 @@ bulk calls (stage 1/3) stay on the cheap, cached, session-window-independent met
 
 ## 4. Adjust the schedule
 
+> **Scheduled runs are currently disabled** (2026-09-03). The `schedule:` trigger in
+> `nightly-pipeline.yml` is commented out because the nightly cron was firing erratically.
+> Re-enable it by uncommenting the two `schedule:`/`- cron:` lines. The workflow can still be
+> run on demand via `workflow_dispatch` in the meantime.
+
 The cron in `nightly-pipeline.yml` is UTC with no timezone/DST concept:
 
 ```yaml
 on:
-  schedule:
-    - cron: "0 7 * * *"   # 07:00 UTC ≈ midnight US Central (CST, UTC-6) / 1am CDT (UTC-5)
+  # schedule:
+  #   - cron: "17 6 * * *"   # 06:17 UTC = 12:17 AM CST (UTC-6) / 1:17 AM CDT (UTC-5)
 ```
 
 Edit the hour to match your own off-hours window, and remember to shift it again across DST
-changes if you care about exact local time.
+changes if you care about exact local time. Always use an off-peak minute (e.g. `:23`, `:37`)
+rather than `:00` to avoid GitHub Actions top-of-the-hour queue bottlenecks.
+
+The workflow also includes a safety guard (`Guard against daytime queue delay`) that aborts
+the job if GitHub Actions queue delays cause it to start during daytime/business hours (between
+11:00 UTC and 23:00 UTC, roughly 6 AM to 6 PM CDT). This prevents delayed scheduled runs from
+competing with interactive Claude Code sessions or exhausting your daytime rolling quota.
+Manual runs (`workflow_dispatch`) bypass this check.
 
 ---
 
