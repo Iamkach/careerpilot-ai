@@ -1,6 +1,10 @@
 # Inbound email → application status sync
 
-**Status:** idea — not queued.
+**Status:** superseded — 2026-09-27, see [triage map #61](https://github.com/Iamkach/careerpilot-ai/issues/61)
+and closed [#54](https://github.com/Iamkach/careerpilot-ai/issues/54). Merged into a lightweight,
+agentic browser-workflow fog item alongside `communications-subsystem` and `wellfound-job-source`
+on #61's "Not yet specified" — the design below (a dedicated read-inbox pipeline stage) is not
+being built as scoped; not yet reworked into a real ticket.
 **Depends-on:** []
 
 Written down at the user's request after noticing the pipeline is one-directional: every stage

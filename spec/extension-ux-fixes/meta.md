@@ -1,7 +1,10 @@
 # Extension UX fixes
 
-**Status:** finalized
-**Priority:** P1
+**Status:** superseded — dropped with `application-prefill-extension` 2026-09-27, see
+[triage map #61](https://github.com/Iamkach/careerpilot-ai/issues/61) and closed
+[#44](https://github.com/Iamkach/careerpilot-ai/issues/44): fixing UX bugs in a decommissioned
+extension is not worth doing.
+**Priority:** —
 **Size:** S — three targeted, independent fixes in existing files; no new architecture.
 **Depends-on:** [application-prefill-extension]
 

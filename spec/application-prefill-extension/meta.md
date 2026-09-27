@@ -1,14 +1,13 @@
 # Application pre-fill browser extension (Stage 7 Layer 3)
 
-**Status:** in-progress — corrected 2026-08-20. Most of the extension (side panel, plan/fill flow,
-`extension/background.js`/`content.js`/`panel.js`/`options.*`, `scripts/autoapply_server.py`) is
-now on `main`. **Two increments are not**: essay drafting (`extension/drafts.js`) and the entire
-native-messaging host (`extension/native_host/`, `scripts/install_native_host.py`) exist only on
-the unmerged branch `feature/step-15-application-prefill-extension` — kept alive specifically
-because this content was found missing during the 2026-08-20 repo reorg. Land that branch's
-remaining files onto `main` before treating this feature as code-complete. Also still open: live
-verification in a real Chrome session (every increment's own checklist) and installing/testing the
-native-messaging host — see verification.md's "Remaining before this story can close."
+**Status:** superseded — decommissioned outright 2026-09-27, see
+[triage map #61](https://github.com/Iamkach/careerpilot-ai/issues/61) and closed
+[#34](https://github.com/Iamkach/careerpilot-ai/issues/34): the extension's fill mechanism is
+unreliable in real Chrome use despite passing automated tests, and is not worth debugging back to
+reliable. The unmerged remainder (`extension/drafts.js`, native-messaging host) will **not** be
+landed — closed as [#42](https://github.com/Iamkach/careerpilot-ai/issues/42). Live-Chrome
+verification will **not** be run — closed as [#43](https://github.com/Iamkach/careerpilot-ai/issues/43).
+Superseded outright by the Claude-in-Chrome fill flow (#24's confirmed destination, folded into #61).
 **Size:** L
 **Depends-on:** [] — depends on Step 10 Phases 1-2 (shipped, not yet migrated into `spec/`).
 

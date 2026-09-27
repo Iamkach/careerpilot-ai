@@ -1,6 +1,8 @@
 # Selector resolution hardening (Stage 7 Layer 2)
 
-**Status:** superseded (Phase 1-2 implemented and reused; Phase 3 superseded)
+**Status:** superseded (Phase 1-2 implemented and reused; Phase 3 superseded) — close-out tracked
+as [#46](https://github.com/Iamkach/careerpilot-ai/issues/46), carried forward on
+[triage map #61](https://github.com/Iamkach/careerpilot-ai/issues/61)
 **Priority:** P2
 **Size:** S
 **Depends-on:** []
