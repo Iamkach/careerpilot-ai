@@ -228,8 +228,9 @@ def test_init_wizard_reuses_existing_db_when_declined(tmp_path, monkeypatch, cle
     monkeypatch.setenv("NOTION_DB_ID", "already-provisioned-db")
     monkeypatch.setattr(run, "check_setup", lambda: None)
 
-    # Token prompt (keep current) → decline reprovisioning → decline profile block → decline CI sync.
-    answers = iter(["", "n", "n", "n"])
+    # Token prompt (keep current) → decline reprovisioning → decline profile block →
+    # decline application-profile block → decline CI sync.
+    answers = iter(["", "n", "n", "n", "n"])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
 
     provision_calls = []
@@ -245,9 +246,9 @@ def test_init_wizard_provisions_and_persists_ids(tmp_path, monkeypatch, cleanup_
     monkeypatch.setenv("NOTION_DB_ID", "")  # simulate an un-provisioned fork
     monkeypatch.setattr(run, "check_setup", lambda: None)
 
-    # Decline the two trailing skippable blocks (profile + CI sync) so this test stays
-    # focused on the Notion-provisioning path.
-    answers = iter(["tok-123", "parent-xyz", "n", "n"])
+    # Decline the three trailing skippable blocks (identity profile, application profile,
+    # CI sync) so this test stays focused on the Notion-provisioning path.
+    answers = iter(["tok-123", "parent-xyz", "n", "n", "n"])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
     monkeypatch.setattr("scripts.provision_notion.provision",
                         lambda parent: ("trk-id", "scr-id", "res-id", "tc-id"))
@@ -289,6 +290,7 @@ def test_init_wizard_profile_section_writes_profile_json(tmp_path, monkeypatch, 
         "config/resume.txt",             # resume text path
         "config/resume.docx",            # resume .docx path
         "gemini",                        # AI provider
+        "n",                             # application-profile block: skip
         "n",                             # CI sync: skip
     ])
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
