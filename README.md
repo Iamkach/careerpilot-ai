@@ -101,8 +101,9 @@ careerpilot-ai/
 ├── config/
 │   ├── settings.py              # API keys (env-sourced), user profile, target roles, AI models, source/filter config
 │   ├── ats_tokens.json          # Cached Greenhouse/Lever/Ashby board-token discovery (auto-maintained)
-│   ├── resume.txt               # Your resume (plain text, required)
-│   ├── resume.docx              # Master resume template (RESUME_TEMPLATE_PATH; edited in-place by stage 2)
+│   ├── resume.example.txt       # Generic placeholder — copy to resume.txt to start
+│   ├── resume.txt               # Your resume (plain text, required, git-ignored)
+│   ├── resume.docx              # Master resume template (RESUME_TEMPLATE_PATH; edited in-place by stage 2; git-ignored)
 │   └── resume_template.docx     # DOCX scaffold for render_docx.py
 │
 ├── scripts/
@@ -156,7 +157,11 @@ dependencies (`notion-client`, `requests`, `docxtpl`). Swap in `google-generativ
 (Gemini) or `openai` (Codex / OpenRouter) only if you change `AI_PROVIDER`.
 
 ### 2. Add your resume
-Create `config/resume.txt` and paste your full resume as plain text.
+Create `config/resume.txt` and paste your full resume as plain text (or copy
+`config/resume.example.txt` as a starting point). Also add `config/resume.docx`
+— the master resume template stage 2 edits in-place (`RESUME_TEMPLATE_PATH`).
+Both are git-ignored: your resume is yours, and forks never inherit anyone
+else's.
 
 ### 3. Fill in config
 Open `config/settings.py` and fill in. **All API keys are read from the environment**
