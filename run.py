@@ -123,6 +123,7 @@ def init_wizard():
         if reuse != "y":
             print("• Keeping the existing tracker DB. Skipping provisioning.")
             _profile_wizard(env_path)
+            _application_profile_wizard()
             _sync_ci_secrets()
             print("\nRunning a setup check…\n")
             check_setup()
@@ -153,11 +154,38 @@ def init_wizard():
           f"and NOTION_TARGET_COMPANIES_PAGE_ID to {env_path.name}")
 
     _profile_wizard(env_path)
+    _application_profile_wizard()
     _sync_ci_secrets()
 
     print("\nRunning a setup check…\n")
     check_setup()
     return 0
+
+
+def _application_profile_wizard():
+    """Skippable Stage-7 block of `--init`: run the same interactive wizard as the standalone
+    `python run.py --setup-profile` command, so a fresh fork captures its work-authorization /
+    visa-sponsorship / EEO / address / salary-preset answers in the same onboarding sitting
+    instead of a forker having to know that second command exists at all.
+
+    Separate and skippable on purpose, mirroring `_profile_wizard` above — declining here still
+    leaves `apply` usable once `--setup-profile` is run by hand later.
+    """
+    resp = input("\nSet up your Stage 7 application answers now — work authorization, visa "
+                 "sponsorship, EEO, address, salary/notice-period presets? [Y/n]: ").strip().lower()
+    if resp == "n":
+        print("• Skipped application-profile setup — run `python run.py --setup-profile` "
+              "before using `--stage 7`.")
+        return
+
+    from scripts.autoapply_profile import run_wizard, save_profile
+    try:
+        profile = run_wizard()
+    except (KeyboardInterrupt, EOFError):
+        print("\n• Cancelled — nothing was saved. Run `python run.py --setup-profile` later.")
+        return
+    path = save_profile(profile)
+    print(f"✓ Wrote {path.relative_to(ROOT)} (git-ignored).")
 
 
 def _profile_wizard(env_path: Path):
